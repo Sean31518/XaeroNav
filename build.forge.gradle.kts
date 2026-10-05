@@ -7,7 +7,7 @@ plugins {
     id("xaeronav.common")
     id("net.minecraftforge.gradle") version "7.0.40"
     id("net.minecraftforge.renamer") version "1.1.5"
-    // FG7ではjar-in-jarが別プラグインに分離された（FG6までは組み込み）
+    // In FG7, jar-in-jar was split out into a separate plugin (built in up to FG6)
     id("net.minecraftforge.jarjar") version "0.2.3"
 }
 
@@ -18,14 +18,14 @@ fun dep(key: String) = stonecutter.properties.get<String>("deps.$key")
 val minecraftVersion = dep("minecraft")
 val needsRuntimeReobfuscation = stonecutter.eval(minecraftVersion, "<1.20.5")
 
-// xaeronav.common.gradle.ktsのtoolchain分岐と同じ境界線（このノードは今のところ常に1.21.1系なのでJAVA_21固定）
+// Same boundary as the toolchain branch in xaeronav.common.gradle.kts (this node is currently always 1.21.x, so fixed to JAVA_21)
 val mixinCompatibilityLevel = mixinCompatibilityLevelFor(minecraftVersion)
 val packFormat = packFormatFor(minecraftVersion)
 
 repositories {
-    // Minecraft 1.21.1のmacOS用LWJGLにはMaven Centralに無い
-    // `natives-macos-patch` classifierが含まれる。通常のMavenメタデータ解決でCentralへ
-    // 固定されないよう、Minecraft公式ライブラリ置き場をartifact patternでも登録する。
+    // Minecraft 1.21.1's macOS LWJGL includes a `natives-macos-patch` classifier that isn't on
+    // Maven Central. Register the official Minecraft library repository with an artifact pattern too,
+    // so normal Maven metadata resolution doesn't pin it to Central.
     exclusiveContent {
         forRepository {
             ivy {
@@ -42,86 +42,86 @@ repositories {
     }
     mavenCentral()
     maven("https://maven.minecraftforge.net") { name = "MinecraftForge" }
-    maven("https://libraries.minecraft.net") { name = "Mojang" } // com.mojang:text2speech 等がここにしか無い
-    minecraft.mavenizer(this) // FG7が作るローカルrepo
+    maven("https://libraries.minecraft.net") { name = "Mojang" } // com.mojang:text2speech etc. only exist here
+    minecraft.mavenizer(this) // local repo created by FG7
 }
 
-// annotation processorはmixinアノテーションの検証に使う。1.20.5以降は公式マッピングランタイムなので
-// refmapは生成されない（NeoForgeと同じ理由）が、コンパイル時チェックそのものは要る。
-// 1.20.4以前はSRGランタイムなので、下のenableMixinRefmapsが渡すマッピングでrefmapも作る
+// The annotation processor is used to validate mixin annotations. From 1.20.5 on the runtime uses official
+// mappings so no refmap is generated (same reason as NeoForge), but the compile-time check itself is needed.
+// 1.20.4 and earlier use an SRG runtime, so a refmap is also produced from the mappings passed by enableMixinRefmaps below
 dependencies {
     annotationProcessor("org.spongepowered:mixin:0.8.7:processor")
 }
 
-// クライアント専用MOD（@Mod単体、dist引数はForgeには無い）。専用サーバーの実行設定は用意しない
+// Client-only mod (@Mod alone; Forge has no dist argument). No run configuration is provided for dedicated servers
 minecraft {
-    // NeoForge本体はRenderStateShardの定数群をワイルドカードATで開放しているが、Forge本体は
-    // インナークラスしか開放していない（NavRenderTypes.javaのコメント参照）。同じ開放を足す
-    // 26.1以降はATが開放していたRenderStateShard・RenderTypeの構造がもう無く（NavRenderTypes）、
-    // ATの処理（Java 8で動くツール）が26.xのクライアントjarで落ちるので、開放を要るノードにだけ当てる
+    // NeoForge itself opens the RenderStateShard constants with a wildcard AT, but Forge itself only opens
+    // the inner classes (see the comment in NavRenderTypes.java). Add the same opening.
+    // From 26.1 on, the RenderStateShard/RenderType structure the AT opened no longer exists (NavRenderTypes),
+    // and AT processing (a tool that runs on Java 8) crashes on the 26.x client jar, so apply it only to nodes that need it
     if (!stonecutter.eval(minecraftVersion, ">=26.1")) {
         accessTransformer = rootProject.files("src/main/resources/META-INF/accesstransformer.cfg")
     }
 
     runs {
         configureEach {
-            // MC版・ローダーの異なるXaero jarを同じmodsへ混在させない。
+            // Don't mix Xaero jars for different MC versions/loaders in the same mods folder.
             workingDir = rootProject.layout.projectDirectory.dir("run/${stonecutter.current.project}")
         }
 
-        // NeoForgeノード追加時に踏んだIDEモジュール束縛の不一致（xaeronav-multiloader-plan参照）と
-        // 同種の問題がFG7でも起きるかは未確認。まずは既定のまま作り、実機で崩れたらdisableIdeRun相当を探す
+        // Whether the IDE module binding mismatch hit when adding the NeoForge node (see xaeronav-multiloader-plan)
+        // also occurs with FG7 is unverified. Create it with defaults first; if it breaks in-game, look for a disableIdeRun equivalent
         register("client") {
             mods {
                 create(modProperty("mod_id")) {
                     sources(sourceSets["main"])
                 }
             }
-            // FG7のSlime LauncherはMinecraftのversion metadataにあるこのmacOS用引数を
-            // runClientへ引き継がない。無いとGLFWがfirst thread検査で起動直後に停止する。
+            // FG7's Slime Launcher doesn't carry this macOS argument from Minecraft's version metadata over to
+            // runClient. Without it, GLFW stops right after launch on the first-thread check.
             if (System.getProperty("os.name").startsWith("Mac")) {
                 jvmArgs("-XstartOnFirstThread")
             }
-            // `-Pxaeronav.quickPlay=<ワールド名>`でタイトル画面を飛ばして既存のワールドへ入る（手元の確認用）
+            // `-Pxaeronav.quickPlay=<world name>` skips the title screen and enters an existing world (for local checks)
             providers.gradleProperty("xaeronav.quickPlay").orNull?.let { args("--quickPlaySingleplayer", it) }
-            // NeoForgeノードと同じ口（CIのruntime hook probeを手元で走らせるときなど）
+            // Same hook as the NeoForge node (e.g. for running CI's runtime hook probe locally)
             providers.gradleProperty("xaeronav.clientJvmArgs").orNull?.split(" ")?.filter { it.isNotBlank() }
                 ?.forEach { jvmArgs(it) }
             if (!needsRuntimeReobfuscation) {
-                // 開発実行はMODをクラスディレクトリから読むのでMANIFESTのMixinConfigsが存在しない
-                // （Renamerを使うノードは、下のenableMixinRefmapsが同じ引数を足す）
+                // Dev runs load the mod from the classes directory, so the MANIFEST's MixinConfigs doesn't exist
+                // (for nodes using Renamer, enableMixinRefmaps below adds the same argument)
                 args("--mixin.config", "${modProperty("mod_id")}-xaero.mixins.json")
             }
         }
     }
 }
 
-// 本番がSRG名の版は、注入先の文字列をSRGへ引くrefmapが要る。開発環境でもXaero同梱refmapのSRG名を
-// namedへ読み替える必要がある。RenamerのMixin連携はrunClientへrefMapRemappingFileを設定し、
-// XaeroNav自身のrefmap生成・開発実行へのconfig登録も担う。
+// Versions whose production uses SRG names need a refmap mapping injection target strings to SRG. In the dev
+// environment, the SRG names in Xaero's bundled refmap also have to be read as named. Renamer's Mixin integration
+// sets refMapRemappingFile on runClient, and also handles XaeroNav's own refmap generation and config registration for dev runs.
 if (needsRuntimeReobfuscation) {
     renamer.enableMixinRefmaps {
         config("${modProperty("mod_id")}-xaero.mixins.json")
-        // mixins.jsonの"refmap"が指す名前に揃える。既定の`main.refmap.json`だと配布jarでrefmapが見つからず、
-        // SRGへ引く注入先が1本も当たらない
+        // Match the name that "refmap" in mixins.json points to. With the default `main.refmap.json`, the refmap
+        // isn't found in the distributed jar and not a single SRG-mapped injection target hits
         refMap.set("${modProperty("mod_id")}.refmap.json")
-        // dependency変換はRenamer側がreverse=trueにする一方、Mixin実行時に必要なのは
-        // SRG（Xaeroのrefmap）→named（開発Minecraft）なので、出力mappingも反転する。
+        // Renamer sets reverse=true for dependency conversion, but what Mixin needs at runtime is
+        // SRG (Xaero's refmap) → named (dev Minecraft), so the output mapping is reversed too.
         generatedMappings {
             reverse.set(true)
         }
     }
 
-    // Renamerはrefmapとmappingをコンパイルの一時ディレクトリへ書かせるが、出力として宣言しない。宣言しないと
-    // ビルドキャッシュからクラスだけが戻ってrefmapが欠け、jarのGuiMap等への注入が本番で1本も当たらない（CIで実測）
+    // Renamer has the refmap and mapping written into compile's temp directory but doesn't declare them as outputs. Without
+    // declaring them, only the classes come back from the build cache, the refmap is missing, and not one injection into the jar's GuiMap etc. hits in production (measured in CI)
     tasks.named("compileJava") {
         outputs.file(layout.buildDirectory.file("tmp/compileJava/compileJava-refmap.json")).withPropertyName("mixinRefmap")
         outputs.file(layout.buildDirectory.file("tmp/compileJava/compileJava-mappings.tsrg")).withPropertyName("mixinMappings")
     }
 
-    // Mixin 0.8.5のrefMapRemappingFileはSRG形式（MD:/FD:行）しか読めず、Renamerが渡すtsrgは行ごと
-    // 黙って無視される。すると開発実行でXaero自身のmixinが落ちる。同じ内容をSRG形式へ変換し、
-    // Renamerの設定が済んだ後にsystem propertyを差し替える。
+    // Mixin 0.8.5's refMapRemappingFile only reads SRG format (MD:/FD: lines), and the tsrg passed by Renamer is
+    // silently ignored line by line. Xaero's own mixins then fail in dev runs. Convert the same content to SRG
+    // format, and replace the system property after Renamer's configuration is done.
     val mixinRefmapRemapSrg = renamer.convert("mixinRefmapRemapSrg", renamer.mixin.generatedMappings, "srg")
     tasks.matching { it.name == "runClient" }.configureEach { dependsOn(mixinRefmapRemapSrg) }
     afterEvaluate {
@@ -135,16 +135,16 @@ dependencies {
     implementation(minecraft.dependency("net.minecraftforge:forge:$minecraftVersion-${dep("forge")}"))
 }
 
-// jarJarタスクの出力（classifier無し）をそのまま配布物にする。元のjarタスクは"slim"（mixinextrasを
-// 含まない）へ回し、collectJars（ルートのbuildAll成果物集約）が誤って拾わないようにする
+// Use the jarJar task's output (no classifier) as the distributable. The original jar task is moved to "slim"
+// (without mixinextras) so collectJars (the root buildAll artifact aggregation) doesn't pick it up by mistake
 jarJar.register {
-    // 1.20.4以前は本番がSRG名なので、統合後のjarをさらにrenameしてから配布する。
+    // 1.20.4 and earlier use SRG names in production, so the merged jar is renamed again before distribution.
     archiveClassifier = if (needsRuntimeReobfuscation) "mapped" else null
 }
 
 val distributionJar = if (needsRuntimeReobfuscation) {
     renamer.classes("renameJarJar", tasks.named<Jar>("jarJar")) {
-        // mapは下のrenamer.mappings(...)が既定値として入る。ここで足すと2ファイルになりRenamerが拒否する
+        // The map comes in as the default from renamer.mappings(...) below. Adding it here makes two files and Renamer rejects it
         archiveClassifier = null
     }
 } else {
@@ -157,8 +157,8 @@ if (needsRuntimeReobfuscation) {
     }
 }
 
-// ForgeのFMLはmods.tomlの[[mixins]]を読まない（NeoForgeとの違い）。configを拾うのはMixin本体で、
-// 見るのはMANIFESTのMixinConfigsだけ。無いとXaero連携のmixinが本番で1本も当たらない
+// Forge's FML doesn't read [[mixins]] from mods.toml (unlike NeoForge). Configs are picked up by Mixin itself,
+// which only looks at the MANIFEST's MixinConfigs. Without it, not one Xaero integration mixin hits in production
 tasks.named<Jar>("jar") {
     archiveClassifier = "slim"
     manifest.attributes("MixinConfigs" to "${modProperty("mod_id")}-xaero.mixins.json")
@@ -167,29 +167,29 @@ tasks.named<Jar>("jar") {
 val xaeroModules = xaeroModuleCoordinates(
     "forge", minecraftVersion, dep("xaerolib"), dep("xaero_worldmap"), dep("xaero_minimap"))
 
-// Xaeroを開発実行（runClient）へ載せるか。`./gradlew runClient -Pwith_xaero=false` で外せる。
+// Whether to load Xaero into dev runs (runClient). Can be removed with `./gradlew runClient -Pwith_xaero=false`.
 val withXaero = withXaeroProperty()
 
-// XaeroはMODとして読み込ませる必要があるので、実行時クラスパスではなくrun/modsへ置く
-// （他の2ノードと同じ理由。NeoForgeEntry.javaのコメント参照）。
+// Xaero must be loaded as a mod, so it goes into run/mods rather than the runtime classpath
+// (same reason as the other two nodes; see the comment in NeoForgeEntry.java).
 val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
 
-// Forge 1.20.4以前の公開Xaero jarはMinecraft参照がSRG名（f_... / m_...）のままなので、
-// named開発環境へそのまま載せるとXaero自身のMixin @Shadowが解決できない。
-// Renamerのdependency経路はFGのmappingを逆向きに適用し、開発実行・コンパイル用だけnamedへ直す。
-// 配布時のruntime smoke testには下のxaeroRuntimeModsから未変換jarを渡す。
+// Published Forge Xaero jars for 1.20.4 and earlier still reference Minecraft by SRG names (f_... / m_...),
+// so loaded as-is into the named dev environment, Xaero's own Mixin @Shadow can't resolve.
+// Renamer's dependency path applies FG's mapping in reverse, converting to named only for dev runs and compilation.
+// The runtime smoke test at distribution gets the unconverted jars from xaeroRuntimeMods below.
 val xaeroDevelopmentModules = if (needsRuntimeReobfuscation) {
     renamer.mappings(minecraft.dependency.toSrg)
     xaeroModules.map { renamer.dependency(it) }
 } else {
-    // FG7はMinecraft依存と同じ解決構成上の外部modをmavenizerでnamedへ変換する。
-    // 公開jarをrun/modsへ直接コピーすると変換を迂回し、Xaero自身の@Shadow f_... が落ちる。
+    // FG7 converts external mods on the same resolution configuration as the Minecraft dependency to named via mavenizer.
+    // Copying the published jars directly into run/mods bypasses the conversion, and Xaero's own @Shadow f_... fails.
     xaeroModules
 }
 
-// 26.1以降のXaero（Forge）のMaven上のjarは、META-INF/jarjar/metadata.jsonだけが残って入れ子のxaerolib本体が無い
-// （配布jarには入っている）。FMLのjar-in-jar解決が「入れ子のjarが見つからない」で起動前に落ちるので、
-// 開発実行へ載せるものだけmetadataを外す。xaerolibは別のjarとして同じく載せているので解決は足りる
+// For 26.1+, the Maven jars of Xaero (Forge) keep only META-INF/jarjar/metadata.json, without the nested xaerolib itself
+// (the distributed jar does include it). FML's jar-in-jar resolution fails before launch with "nested jar not found",
+// so strip the metadata only from what goes into dev runs. xaerolib is loaded as a separate jar too, so resolution is satisfied
 val stripsXaeroJarJar = stonecutter.eval(minecraftVersion, ">=26.1")
 val xaeroStrippedDir = layout.buildDirectory.dir("xaero-without-jarjar")
 val stripXaeroJarJar = tasks.register("stripXaeroJarJar") {
@@ -221,33 +221,33 @@ dependencies {
         runtimeOnly(fileTree(xaeroStrippedDir) { builtBy(stripXaeroJarJar) })
     } else if (withXaero) {
         xaeroDevelopmentModules.forEach { runtimeOnly(it) }
-        // stageRuntimeTestModsには配布時と同じ未変換jarを渡す。
+        // stageRuntimeTestMods gets the same unconverted jars as at distribution.
         xaeroModules.forEach { xaeroRuntimeMods(it) }
     }
 
-    // Forgeは本体にMixinExtrasを同梱していない（NeoForge/Fabricとの違い）。jar-in-jarで同梱する
-    // （"jarJar"はnet.minecraftforge.jarjarプラグインが作るConfiguration名。関数ではない）。
-    // compileOnlyでmixinextras-commonをコンパイル時クラスパスに足す（@Local/@WrapOperation等の
-    // アノテーション自体の解決に要る）。annotationProcessorには足さない——足すと
-    // mixinextras-common自身がMixin APへ独自のobfuscation解決経路を割り込ませ、公式マッピング
-    // ランタイム(1.21.1)では常に「マッピング無し」を検知してビルドを止める。annotationProcessorは
-    // Mixin本体（0.8.7）だけで足り、@ModifyReturnValue/@WrapOperationの展開自体はそちらで進む
+    // Forge doesn't bundle MixinExtras (unlike NeoForge/Fabric). Bundle it via jar-in-jar
+    // ("jarJar" is a Configuration name created by the net.minecraftforge.jarjar plugin, not a function).
+    // Add mixinextras-common to the compile classpath with compileOnly (needed to resolve the annotations
+    // themselves, such as @Local/@WrapOperation). Don't add it to annotationProcessor: doing so makes
+    // mixinextras-common inject its own obfuscation resolution path into the Mixin AP, which on the official
+    // mapping runtime (1.21.1) always detects "no mappings" and stops the build. The annotationProcessor only
+    // needs Mixin itself (0.8.7), and @ModifyReturnValue/@WrapOperation expansion proceeds there
     compileOnly("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
     if (needsRuntimeReobfuscation) {
-        // @WrapOperation・@ModifyReturnValueはMixin本体のAPが知らない注入なので、SRGのrefmapを作る
-        // 1.20.4以前ではAPにも載せる。無いとrefmapが空になる（forge-legacyと同じ）
+        // @WrapOperation/@ModifyReturnValue are injections unknown to Mixin's own AP, so on 1.20.4 and earlier,
+        // where an SRG refmap is produced, add it to the AP too. Without it the refmap is empty (same as forge-legacy)
         annotationProcessor("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
     }
     implementation("io.github.llamalad7:mixinextras-forge:${dep("mixinextras")}")
     "jarJar"("io.github.llamalad7:mixinextras-forge:${dep("mixinextras")}")
 }
 
-// CIの起動スモークテスト（mc-runtime-test）へ渡す一式。配布jarとXaeroを1箇所へ集める。
-// mixinextrasを同梱した統合jar（jarJarタスクの出力）を使う——素のjarタスクは"slim"で
-// mixinextrasを含まないため、それだけを配布・実行すると起動時にMixinExtrasが見つからず落ちる
+// The set passed to CI's launch smoke test (mc-runtime-test). Gathers the distribution jar and Xaero in one place.
+// Uses the merged jar bundling mixinextras (the jarJar task's output); the plain jar task is "slim" and
+// doesn't include mixinextras, so distributing/running it alone crashes at launch because MixinExtras isn't found
 val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     if (stripsXaeroJarJar) {
-        // 26.1以降はMaven版をそのまま置くとjar-in-jar解決で落ちるので、開発実行と同じmetadataを外したjarを置く
+        // For 26.1+, placing the Maven version as-is fails in jar-in-jar resolution, so place the metadata-stripped jars, same as dev runs
         from(stripXaeroJarJar)
     } else {
         from(xaeroRuntimeMods)
@@ -256,8 +256,8 @@ val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     into(rootProject.layout.buildDirectory.dir("runtime-test/${stonecutter.current.project}/mods"))
 }
 
-// 専用サーバーのproduction smoke testにはXaeroを入れず、利用者へ配る統合jarだけを渡す。
-// client runtimeと同じstage先を共有すると、任意依存のXaeroがサーバーへ混ざって検査にならない。
+// The dedicated server production smoke test gets no Xaero, only the merged jar distributed to users.
+// Sharing the same stage directory as the client runtime would mix the optional Xaero dependency into the server and defeat the check.
 tasks.register<Sync>("stageServerTestMod") {
     from(distributionJar)
     into(rootProject.layout.buildDirectory.dir("server-test/${stonecutter.current.project}/mods"))
@@ -278,12 +278,12 @@ tasks.named<ProcessResources>("processResources").configure {
     if (stonecutter.eval(minecraftVersion, ">=26.1")) {
         exclude("META-INF/accesstransformer.cfg")
     }
-    // 他の2ローダーのMOD定義はForgeのjarには要らない
+    // The other two loaders' mod definitions aren't needed in the Forge jar
     exclude("fabric.mod.json")
     exclude("xaeronav.accesswidener")
     exclude("META-INF/neoforge.mods.toml")
-    // accesstransformer.cfgは逆に含める（Forge本体が実行時にも同じ変換を配布先の環境へ
-    // 適用するため）。除外するのはNeoForge/Fabric側（build.neoforge/fabric.gradle.kts）
+    // accesstransformer.cfg, conversely, is included (Forge itself applies the same transformation at runtime
+    // in the user's environment). It is excluded on the NeoForge/Fabric side (build.neoforge/fabric.gradle.kts)
 
     filesMatching("META-INF/mods.toml") {
         expand(replaceProperties)

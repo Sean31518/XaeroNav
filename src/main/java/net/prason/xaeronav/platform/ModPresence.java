@@ -9,12 +9,12 @@ import net.neoforged.fml.ModList;
 *///?}
 
 /**
- * 「そのMODが読み込まれているか」をローダーの違いを跨いで答える。
+ * Answers "is that mod loaded?" across loaders.
  *
- * <p>クラスの存在（{@code Class.forName}）で代用してはいけない。開発実行のようにjarがクラスパスにだけ
- * 載っている状況では、クラスは見つかるのにそのMOD自身は初期化されておらず、しかもそのクラスは
- * Minecraftのクラスを解決できない別のレイヤーに置かれる。触った瞬間に
- * {@link NoClassDefFoundError}でゲームごと落ちる。
+ * <p>Don't substitute a class-existence check ({@code Class.forName}). When the jar is only on the
+ * classpath, as in a dev run, the class is found but the mod itself isn't initialized, and the class
+ * sits in a separate layer that can't resolve Minecraft classes. Touching it takes the whole game down
+ * with a {@link NoClassDefFoundError}.
  */
 public final class ModPresence {
 
@@ -35,7 +35,7 @@ public final class ModPresence {
         *///?}
     }
 
-    /** 読み込まれているMODのバージョン文字列。未導入なら {@code "unknown"}。 */
+    /** Version string of the loaded mod, or {@code "unknown"} if it isn't installed. */
     public static String version(String modId) {
         //? neoforge {
         return ModList.get().getModContainerById(modId)

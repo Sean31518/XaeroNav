@@ -3,15 +3,15 @@ package net.prason.xaeronav.xaero;
 import net.prason.xaeronav.platform.ModPresence;
 
 /**
- * Xaero's World Mapが「MODとして読み込まれているか」。
+ * Whether Xaero's World Map is "loaded as a mod".
  *
- * <p>クラスの存在（{@code Class.forName}）で判定してはいけない。開発実行のようにjarがクラスパスにだけ
- * 載っている状況では、クラスは見つかるのにXaero自身は初期化されておらず、しかもXaeroのクラスは
- * Minecraftのクラスを解決できない別のレイヤーに置かれる。その状態で触ると
- * {@code NoClassDefFoundError: net/minecraft/client/Minecraft}でゲームごと落ちる。
+ * <p>Don't judge by class presence ({@code Class.forName}). When the jar is only on the classpath, as in dev runs,
+ * the classes are found but Xaero itself isn't initialized, and Xaero's classes are placed in a separate layer that
+ * can't resolve Minecraft's classes. Touching them in that state crashes the whole game with
+ * {@code NoClassDefFoundError: net/minecraft/client/Minecraft}.
  *
- * <p>このクラス自体は{@code xaero.*}を参照しない。参照すると、Xaero未導入の環境ではこの判定を
- * 読むだけで{@link NoClassDefFoundError}になる。{@link XaeroMapReader}を呼ぶ前に必ずここを通すこと。
+ * <p>This class itself doesn't reference {@code xaero.*}. If it did, in environments without Xaero just reading this
+ * check would throw {@link NoClassDefFoundError}. Always go through here before calling {@link XaeroMapReader}.
  */
 public final class XaeroPresence {
 
@@ -25,7 +25,7 @@ public final class XaeroPresence {
         return ModPresence.isLoaded(WORLD_MAP_MOD_ID);
     }
 
-    /** ミニマップ側。地図データは世界地図が持つので、こちらはウェイポイントを置けるかの判定にだけ使う。 */
+    /** The minimap side. Map data is held by the world map, so this is used only to decide whether waypoints can be placed. */
     public static boolean minimapPresent() {
         return ModPresence.isLoaded(MINIMAP_MOD_ID);
     }

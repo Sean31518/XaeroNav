@@ -11,13 +11,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * {@link CellData}のビット詰め。
+ * Bit packing of {@link CellData}.
  *
- * <p>1セルを{@code long}1個に詰めているので、フィールドの位置がずれると「掘削コストが速度倍率として
- * 読まれる」といった、例外も出さずに経路だけが静かに壊れる事故になる。
+ * <p>A cell is packed into a single {@code long}, so if a field's position shifts, you get accidents like "the dig cost
+ * is read as a speed factor", where only the path silently breaks without any exception.
  *
- * <p>{@code flagsOf(BlockState)}はMinecraftのレジストリ起動を要求するのでここでは触らない。
- * 検証するのは、そこから先の詰め方・取り出し方だけ。
+ * <p>{@code flagsOf(BlockState)} requires bootstrapping Minecraft's registries, so it isn't touched here.
+ * Only the packing and unpacking downstream of it is verified.
  */
 class CellDataPackingTest {
 
@@ -26,15 +26,15 @@ class CellDataPackingTest {
     void digTicksSurviveTheRoundTrip(double ticks) {
         long cell = CellData.withDigTicks(CellData.PRESENT, ticks);
 
-        // 値はtick数（数十〜数千）なのでfloatの有効桁で足りる
+        // Values are tick counts (tens to thousands), so float precision is enough
         assertEquals(ticks, CellData.digTicks(cell), 1.0e-3);
-        assertTrue(CellData.present(cell), "掘削コストを詰めてもフラグ側は壊れない");
+        assertTrue(CellData.present(cell), "packing the dig cost doesn't break the flags");
     }
 
     @Test
     void infeasibleIsPreservedExactly() {
-        // 掘れないセルは正の無限大で表す。floatとの往復で有限値に化けると、
-        // 岩盤や掘削禁止ブロックを掘る経路が生まれてしまう
+        // Undiggable cells are represented by positive infinity. If a float round-trip turned it into a finite value,
+        // paths that dig through bedrock or dig-forbidden blocks would appear
         long cell = CellData.withDigTicks(CellData.PRESENT, ActionCosts.INFEASIBLE);
 
         assertEquals(Double.POSITIVE_INFINITY, CellData.digTicks(cell));
@@ -43,7 +43,7 @@ class CellDataPackingTest {
 
     @Test
     void flagsAndDigTicksDoNotOverlap() {
-        // 全フラグを立てた状態でも掘削コストが読み出せる＝上位32bitと下位32bitが独立している
+        // The dig cost can be read even with every flag set = the upper 32 bits and lower 32 bits are independent
         long allFlags = CellData.PRESENT | CellData.PASSABLE_EMPTY | CellData.WATER | CellData.LAVA
                 | CellData.STANDABLE | CellData.FALLING_BLOCK | CellData.UNRESOLVED_SHAPE
                 | CellData.CLIMBABLE | CellData.OPENABLE | CellData.COBWEB | CellData.HAZARD;
@@ -65,8 +65,8 @@ class CellDataPackingTest {
 
     @Test
     void absentCellAnswersNoToEveryQuestion() {
-        // 探索範囲外・未ロードチャンクは「触れない・立てない・掘れない」＝経路が伸びない、
-        // という安全側の扱いになっていなければならない
+        // Out-of-range and unloaded chunks must be treated on the safe side as "can't touch, can't stand, can't dig",
+        // i.e. the path doesn't extend
         long absent = CellData.ABSENT;
 
         assertFalse(CellData.present(absent));
@@ -78,7 +78,7 @@ class CellDataPackingTest {
         assertFalse(CellData.occupiableWithoutDigging(absent));
         assertFalse(CellData.openable(absent));
         assertFalse(CellData.hazard(absent));
-        assertEquals(1.0, CellData.speedFactor(absent), "未設定は等速として読む");
+        assertEquals(1.0, CellData.speedFactor(absent), "unset reads as normal speed");
     }
 
     @Test
@@ -86,9 +86,9 @@ class CellDataPackingTest {
         assertTrue(CellData.occupiableWithoutDigging(CellData.PRESENT | CellData.PASSABLE_EMPTY));
         assertTrue(CellData.occupiableWithoutDigging(CellData.PRESENT | CellData.WATER));
         assertTrue(CellData.occupiableWithoutDigging(CellData.PRESENT | CellData.CLIMBABLE));
-        // 固体は掘らないと体を置けない
+        // Solids must be dug before the body can occupy them
         assertFalse(CellData.occupiableWithoutDigging(CellData.PRESENT | CellData.STANDABLE));
-        // 閉じたドアは「開けて通る」ので占有可ではない（openableとして別に扱う）
+        // A closed door is "opened and passed through", so it isn't occupiable (handled separately as openable)
         assertFalse(CellData.occupiableWithoutDigging(CellData.PRESENT | CellData.OPENABLE));
     }
 }

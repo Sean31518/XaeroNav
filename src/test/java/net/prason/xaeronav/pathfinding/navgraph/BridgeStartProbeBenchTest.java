@@ -15,7 +15,7 @@ import net.prason.xaeronav.pathfinding.world.WindowedCells;
 import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
-/** 調査用: 自分の橋・小島の端から始まるとき、殻と橋の通り道に何が入っているか。 */
+/** Investigation: when starting from the edge of your own bridge or a small island, what lies in the shell and the bridge passage. */
 @Tag("bench")
 class BridgeStartProbeBenchTest {
 
@@ -39,7 +39,7 @@ class BridgeStartProbeBenchTest {
             }
             System.out.printf(Locale.ROOT, "z1505 y%d x1860..1872:%s%n", y, row);
         }
-        // 始点のセクションから出る辺
+        // Edges leaving the start section
         NaturalColumns naturals = new NaturalColumns(cells.bounds().minY(), cells.bounds().maxY());
         SectionShell shell = SectionShell.of(naturals, window, Math.floorDiv(1865, 16), Math.floorDiv(1505, 16),
                 goal.getX(), goal.getZ());
@@ -47,7 +47,7 @@ class BridgeStartProbeBenchTest {
         SectionMoves.build(window, Math.floorDiv(1865, 16), Math.floorDiv(66, 16), Math.floorDiv(1505, 16), shell,
                 goal.getX(), goal.getZ(), (from, to, cost) -> {
                     if (from == start) {
-                        System.out.printf(Locale.ROOT, "  辺 %s→%s %.1f%n", player.toShortString(),
+                        System.out.printf(Locale.ROOT, "  edge %s→%s %.1f%n", player.toShortString(),
                                 BlockPos.of(to).toShortString(), cost);
                     }
                 }, () -> false);
@@ -91,7 +91,7 @@ class BridgeStartProbeBenchTest {
             for (int y = 64; y <= 74; y++) {
                 in.append(shell.contains(c[0], y, c[1]) ? 'o' : '-');
             }
-            System.out.printf(Locale.ROOT, "%d,%d 自然=%s 橋の通り道=%s 列y58..68=%s 殻y58..68=%s%n", c[0], c[1], nat,
+            System.out.printf(Locale.ROOT, "%d,%d natural=%s bridgePassage=%s column y58..68=%s shell y58..68=%s%n", c[0], c[1], nat,
                     cor, col, in);
         }
     }

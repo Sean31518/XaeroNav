@@ -13,21 +13,21 @@ import java.util.zip.GZIPInputStream;
 import net.minecraft.core.BlockPos;
 
 /**
- * 実機のワールド保存データから書き出した地形を{@link FakeCells}へ読み込む。
- * 書き出しは{@code tools/dump_terrain_columns.py}。
+ * Loads terrain exported from real world save data into {@link FakeCells}.
+ * Exported by {@code tools/dump_terrain_columns.py}.
  *
- * <p>形式は1行目が探索範囲({@code minX minY minZ maxX maxY maxZ})、以降が
- * {@code x z <種別>fromY,toY <種別>fromY,toY …}。種別は{@link FakeCells}の記号1文字で、
- * <b>数字（または負のYの{@code -}）で始まるランは種別なし＝{@link FakeCells#STONE}</b>——
- * 種別を持たなかった頃に書き出したフィクスチャをそのまま読めるようにしてある。
- * 地上・ネザーは水と溶岩が経路そのものを決めるので、あちらのフィクスチャには種別が要る。
+ * <p>The format is the search bounds on line 1 ({@code minX minY minZ maxX maxY maxZ}), followed by
+ * {@code x z <kind>fromY,toY <kind>fromY,toY ...}. The kind is a single {@link FakeCells} symbol character, and
+ * <b>a run starting with a digit (or {@code -} for negative Y) has no kind, i.e. {@link FakeCells#STONE}</b>,
+ * so fixtures exported before kinds existed still load as-is.
+ * On the surface and in the Nether, water and lava determine the path itself, so those fixtures need kinds.
  *
- * <p>設定（設置の可否・橋の上限・落下の許容など）は再現したい実機の条件ごとに違うので、
- * 空の{@link FakeCells}を組む所だけ呼び出し側へ渡す。
+ * <p>Settings (whether placing is allowed, bridge limit, fall tolerance, etc.) differ per real-game condition being reproduced,
+ * so only building the empty {@link FakeCells} is handed to the caller.
  */
 public final class TerrainFixture {
 
-    /** 読み取った探索範囲から、設定を載せた空の{@link FakeCells}を組む。 */
+    /** Builds an empty {@link FakeCells} with the settings applied from the search bounds read. */
     @FunctionalInterface
     public interface Configure {
         FakeCells apply(SearchBounds bounds);
@@ -39,7 +39,7 @@ public final class TerrainFixture {
     public static FakeCells load(String resource, Configure configure) throws IOException {
         try (InputStream in = TerrainFixture.class.getResourceAsStream(resource)) {
             if (in == null) {
-                throw new IllegalStateException("地形データが見つからない: " + resource);
+                throw new IllegalStateException("Terrain data not found: " + resource);
             }
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(new GZIPInputStream(in), StandardCharsets.UTF_8));
@@ -77,7 +77,7 @@ public final class TerrainFixture {
         }
     }
 
-    /** {@code x,z}の列で立てるいちばん高いY。立てる場所が無ければ{@link Integer#MIN_VALUE}。 */
+    /** The highest standable Y in column {@code x,z}. {@link Integer#MIN_VALUE} if there is nowhere to stand. */
     public static int standableY(CellSource cells, SearchBounds bounds, int x, int z) {
         for (int y = bounds.maxY() - 1; y > bounds.minY(); y--) {
             if (CellData.standable(cells.cell(x, y - 1, z))
@@ -90,26 +90,26 @@ public final class TerrainFixture {
     }
 
     /**
-     * {@code p}のX/Zで立てる高さへ下ろす。
+     * Lowers {@code p} to the standable height at its X/Z.
      *
-     * @throws IllegalStateException 立てる場所が無いとき。地形データと座標がずれている
+     * @throws IllegalStateException when there is nowhere to stand; the terrain data and coordinates are out of sync
      */
     public static BlockPos onGround(CellSource cells, SearchBounds bounds, BlockPos p) {
         int y = standableY(cells, bounds, p.getX(), p.getZ());
         if (y == Integer.MIN_VALUE) {
-            throw new IllegalStateException(p.toShortString() + " に立てない＝地形データがずれている");
+            throw new IllegalStateException(p.toShortString() + " is not standable, so the terrain data is out of sync");
         }
         return new BlockPos(p.getX(), y, p.getZ());
     }
 
     /**
-     * 箱の中から立てる点を種固定の乱数で拾い、{@code minBlocks}〜{@code maxBlocks}離れた組を作る。
+     * Picks standable points inside the box with a fixed-seed RNG and builds pairs {@code minBlocks}-{@code maxBlocks} apart.
      *
-     * <p><b>中心から放射状に振るのではなく散らす</b>のは、1つの中心の周りだけを見るとその地点の
-     * 地形の癖しか測れないため。始点も終点も箱の縁から16ブロック内側に収める。
+     * <p><b>Scattered rather than radiating from a center</b> because looking only around one center measures just that
+     * spot's terrain quirks. Both start and end are kept 16 blocks inside the box edges.
      *
-     * <p><b>種を固定するのが要点</b>——毎回違う経路を測ると、落ちたときに再現できないうえ、
-     * たまたま厳しい組が引かれただけなのか本当に悪化したのかを区別できない。
+     * <p><b>Fixing the seed is the point</b>: measuring different paths each run means a failure can't be reproduced, and
+     * there's no telling whether a hard pair was drawn by chance or things really got worse.
      */
     public static List<BlockPos[]> randomRoutes(CellSource cells, SearchBounds bounds, long seed,
                                                 int count, int minBlocks, int maxBlocks) {
@@ -142,9 +142,9 @@ public final class TerrainFixture {
     }
 
     /**
-     * 各列のいちばん下のブロックより下を石で埋める。書き出し（{@code tools/dump_terrain_columns.py}）は箱の底を最下ブロックの
-     * 8段下に取り、ネザーは帯で切って書き出しているので、そのままだと全列の底が空いている。航法グラフは底の空いた列を奈落として扱い、
-     * 溶岩の海の上にノードを置かない（実機のネザーは底が岩盤）。エンドの奈落は本物なので埋めない。
+     * Fills below the lowest block of each column with stone. The exporter ({@code tools/dump_terrain_columns.py}) puts the box floor
+     * 8 below the lowest block and exports the Nether in bands, so as-is every column has an open bottom. The nav graph treats open-bottom
+     * columns as void and places no nodes over lava seas (the real Nether has a bedrock floor). The End's void is real, so it is not filled.
      */
     private static void fillBelowLowestBlock(FakeCells cells) {
         SearchBounds b = cells.bounds();

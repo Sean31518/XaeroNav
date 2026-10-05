@@ -9,8 +9,8 @@ import net.prason.xaeronav.pathfinding.astar.SearchLimits;
 import net.prason.xaeronav.pathfinding.world.MovementOptions;
 
 /**
- * TOML設定ファイル（{@code config/xaeronav-client.toml}）としてクライアント側に生成される。
- * 設定GUI画面（{@link net.prason.xaeronav.client.gui.XaeroNavConfigScreen}）からも編集される。
+ * Generated on the client as a TOML config file ({@code config/xaeronav-client.toml}).
+ * Also edited from the config GUI screen ({@link net.prason.xaeronav.client.gui.XaeroNavConfigScreen}).
  */
 public final class XaeroNavConfig {
 
@@ -36,12 +36,12 @@ public final class XaeroNavConfig {
         *///?}
     }
 
-    /** 設定画面のように、まとめて変更した後で1度だけ書き出す場所から呼ぶ。 */
+    /** Called from places that write out once after a batch of changes, such as the config screen. */
     public static void save() {
         STORE.save();
     }
 
-    /** ローダー側の登録処理（NeoForgeの{@code ModContainer#registerConfig}）が保存先の実体を要るため。 */
+    /** Because the loader-side registration ({@code ModContainer#registerConfig} on NeoForge) needs the actual storage. */
     public static NavConfigStore store() {
         return STORE;
     }
@@ -78,7 +78,7 @@ public final class XaeroNavConfig {
     private static final int FLIGHT_CLEARANCE_DETOUR_DEFAULT = 12;
 
     private final NavConfigSpec.IntValue flightClearanceDetourBlocks;
-    /** GUIで一時的に無効化している間も、利用者が調整した非0値を失わない。 */
+    /** Keeps the user's tuned non-zero value even while it's temporarily disabled in the GUI. */
     private int lastFlightClearanceDetourBlocks = FLIGHT_CLEARANCE_DETOUR_DEFAULT;
     private final NavConfigSpec.IntValue flightMaxExpandedNodes;
     private final NavConfigSpec.IntValue flightExtendMaxExpandedNodes;
@@ -90,301 +90,301 @@ public final class XaeroNavConfig {
     private final NavConfigSpec.BoolValue goalMarkerEnabled;
     private final NavConfigSpec.BoolValue dangerDashedEnabled;
 
-    // package-private: 2つの保存先が同じ定義から同じ設定ファイルを作ることをテストが確かめる
+    // package-private: tests check that both storage backends produce the same config file from the same definition
     XaeroNavConfig(NavConfigSpec spec) {
-        spec.comment("XaeroNav 経路探索設定").push("pathfinding");
+        spec.comment("XaeroNav pathfinding settings").push("pathfinding");
 
         diggingEnabled = spec
-                .comment("掘削を経路に含めることを許可するか（falseなら徒歩のみで到達可能な経路だけ探索する）")
+                .comment("Allow routes to include digging (false searches only for routes reachable on foot)")
                 .define("diggingEnabled", true);
 
         bridgingEnabled = spec
-                .comment("空洞を渡る・断崖を登るためのブロック設置を経路に含めることを許可するか",
-                        "trueでも、ホットバーに置けるブロックが無い場合と、水に接する場所には設置を提示しない")
+                .comment("Allow routes to include placing blocks to cross gaps and climb cliffs",
+                        "Even when true, no placement is suggested when the hotbar has no placeable blocks, or next to water")
                 .define("bridgingEnabled", true);
 
         lavaBridgingEnabled = spec
-                .comment("溶岩に足場を置いて渡る移動を経路に含めることを許可するか（bridgingEnabledも必要）",
-                        "溶岩を避けた道が一切見つからない場合の最後の手段。非常に高いコストを付けてあるので、",
-                        "遠回りでも溶岩を避けられるならそちらが選ばれる",
-                        "falseなら、溶岩に阻まれた目的地へは経路が出ないまま詰む")
+                .comment("Allow routes to cross lava by placing blocks on it (also requires bridgingEnabled)",
+                        "A last resort for when no route avoiding lava exists at all. It carries a very high cost, so",
+                        "a detour that avoids lava is chosen whenever one exists, even a long one",
+                        "If false, destinations cut off by lava get no route and you are stuck")
                 .define("lavaBridgingEnabled", true);
 
         blockBudgetEnabled = spec
-                .comment("持ち物にあるブロックの数を、経路が置ける足場の総数の上限にするか",
-                        "橋の長さの上限(maxBridgeRunBlocks)は「1本が何マス続いてよいか」なので、",
-                        "短い橋を何度も架ける経路は止められない——途中で持ち物が尽きると、そこから先の",
-                        "案内は実行できず結局掘ることになる",
-                        "trueなら、持っている数で渡り切れる経路を優先する。数が足りる道が一本も",
-                        "無い場合だけ上限を外して探し直し、その経路には不足を知らせる表示が付く",
-                        "クリエイティブでは置いても減らないのでこの設定に関わらず数えない",
-                        "falseなら従来どおり数を見ない（1個でも持っていれば何マスでも橋を架ける）")
+                .comment("Cap the total number of blocks a route may place at the number of blocks in your inventory",
+                        "The bridge length limit (maxBridgeRunBlocks) only caps how far a single bridge may run, so",
+                        "it cannot stop a route that builds many short bridges. If you run out of blocks partway, the",
+                        "guidance past that point cannot be followed and you end up digging anyway",
+                        "If true, routes you can finish with the blocks you carry are preferred. Only when no route",
+                        "fits does the search retry without the cap, and that route is marked with a shortage warning",
+                        "Never counted in creative mode regardless of this setting, since placing blocks does not use them up",
+                        "If false, block counts are ignored as before (a single block in your inventory allows bridges of any length)")
                 .define("blockBudgetEnabled", true);
 
         blockBudgetReserve = spec
-                .comment("上の予算から差し引いて手元に残す枚数",
-                        "経路がぴったり使い切る設計だと、置き損ないや寄り道で1個でも減ると足りなくなる",
-                        "増やすほど余裕を持った経路になるが、そのぶん橋を架けられる場面が減る")
+                .comment("Number of blocks to hold back from the budget above",
+                        "If a route uses up exactly what you carry, a single missed placement or side trip leaves you short",
+                        "Higher values give routes more margin, but leave fewer situations where a bridge can be built")
                 .defineInRange("blockBudgetReserve", 0, 0, 512);
 
         jumpGapEnabled = spec
-                .comment("隙間を飛び越える移動を経路に含めることを許可するか（最大3マスの隙間まで）",
-                        "falseにすると、跳べば渡れる隙間でも迂回かブロック設置(bridgingEnabled)で越える経路になる",
-                        "着地を外すと落ちるので、跳躍に自信が無い場合や落ちると危険な地形ではオフにする")
+                .comment("Allow routes to include jumping over gaps (up to 3 blocks wide)",
+                        "If false, gaps that could be jumped are instead crossed by detouring or by placing blocks (bridgingEnabled)",
+                        "A missed landing means a fall, so turn this off if you are unsure of your jumps or falling would be dangerous")
                 .define("jumpGapEnabled", true);
 
         avoidRiskyJumps = spec
-                .comment("底の無い空虚（ジ・エンドの奈落）の上と、外したら今の体力で死ぬ落差の上での",
-                        "跳躍を避けるか。隙間の下が溶岩の場合はこの設定に関わらず常に跳ばない",
-                        "trueでも「絶対に跳ばない」ではない——回り込める道が一本も無いと分かったときだけ、",
-                        "詰み回避として跳躍を解禁する。同じ島の中なら外周を回る方が安全だが、",
-                        "島と島の間では跳ぶしかない、という使い分けをこれ一つで表す",
-                        "跳ぶことになった区間には警告色が付く（strictLimitsがtrueなら解禁しない）",
-                        "fallDamageToleranceEnabledとは意図的に扱いが違う。あちらはoffなら詰み回避でも",
-                        "開けない（痛い落下を望まないという好みで、断られた以上は代案が要らない）が、",
-                        "こちらの代案は「経路が出ない」しかない",
-                        "falseにすると従来どおり、奈落や高所の隙間も普通に跳ぶ経路が出る")
+                .comment("Avoid jumps over the bottomless void (the End's abyss) and over drops that would kill you at your",
+                        "current health if missed. Gaps with lava below are never jumped, regardless of this setting",
+                        "Even when true, this is not \"never jump\": jumping is unlocked to escape a dead end only once",
+                        "it is known that no way around exists at all. Within one island, going around the edge is safer,",
+                        "but between islands jumping is the only way; this one setting covers both cases",
+                        "Sections that require such a jump are shown in a warning color (never unlocked if strictLimits is true)",
+                        "This deliberately differs from fallDamageToleranceEnabled. When that one is off, it is not unlocked even",
+                        "to escape a dead end (it is a preference against painful falls, so once declined no fallback is needed),",
+                        "whereas here the only fallback would be \"no route\"",
+                        "If false, routes jump over the void and high gaps normally, as before")
                 .define("avoidRiskyJumps", true);
 
         strictLimits = spec
-                .comment("橋の長さ・潜水の長さ・落下ダメージ・危険な跳躍・持ち物のブロック数の上限を、",
-                        "経路が一本も引けないときにも緩めないか",
-                        "falseなら、上限の内側に道が無いときだけ上限を緩めて探し直し、警告付きの経路を出す",
-                        "（詰むよりは長い橋・息継ぎの要る潜水・奈落の跳躍の方がマシ、という優先順）",
-                        "trueなら上限を超える経路は出さず、HUDが「上限の内側には道が無い」と知らせる")
+                .comment("Never loosen the limits on bridge length, time underwater, fall damage, risky jumps and carried blocks,",
+                        "even when no route can be found at all",
+                        "If false, the limits are loosened only when no route exists within them, and a route with warnings is shown",
+                        "(a long bridge, a dive that needs a breath, or a jump over the void is better than being stuck)",
+                        "If true, routes beyond the limits are never shown, and the HUD reports that no way exists within the limits")
                 .define("strictLimits", false);
 
         fallDamageToleranceEnabled = spec
-                .comment("落下ダメージを受ける降下を経路に含めることを許可するか",
-                        "許容するダメージは経路を計算した時点の体力の1/3まで（満タンなら3ハート＝9マスの落下まで）",
-                        "水バケツを持っている場合は、着地寸前に水を置いてダメージを消す降下（MLG）も候補に入る",
-                        "falseなら安全に降りられる高さ(3マス)までしか降下しない")
+                .comment("Allow routes to include descents that deal fall damage",
+                        "Tolerated damage is up to 1/3 of your health when the route is computed (at full health, 3 hearts = a 9-block fall)",
+                        "With a water bucket, descents that cancel the damage by placing water just before landing (MLG) are also considered",
+                        "If false, routes only descend as far as is safe (3 blocks)")
                 .define("fallDamageToleranceEnabled", false);
 
         deepLookAheadEnabled = spec
-                .comment("歩いている間、経路の先を読み込み済みチャンクの限界まで伸ばし続けるか",
-                        "trueなら進むほど先の経路が長く描かれ、次の区間を待つ間の途切れが無くなる",
-                        "falseなら常に「今の区間＋次の1区間」だけを保つ（描かれる経路は短いが探索は軽い）",
-                        "どちらでも、すでに歩いている手前側の経路が引き直されることはない")
+                .comment("While walking, keep extending the route ahead up to the edge of the loaded chunks",
+                        "If true, the route drawn ahead grows longer as you go, with no gaps while waiting for the next section",
+                        "If false, only the current section plus the next one are kept (a shorter drawn route, but a lighter search)",
+                        "Either way, the part of the route you are already walking on is never redrawn")
                 .define("deepLookAheadEnabled", true);
 
         costToGoGuideEnabled = spec
-                .comment("詳細探索のヒューリスティックに、目的地までの残りコストの見積もりを併用するか",
-                        "読み込み済みの範囲を探索と同じ移動で組んだ航法グラフから見積もり、",
-                        "中間目標へ寄らずに目的地をそのまま狙う（組むのに空いているCPUコアと最大約270MBのメモリを使う。Javaのヒープ上限が2.5GB未満なら範囲を狭めて約150MB）",
-                        "航法グラフが組み上がるまでは層1・3D粗層（粗い地図）の見積もりを使う",
-                        "falseにすると航法グラフと層1の見積もりを使わず、幾何学的な直線距離だけに戻る（比較用・負荷を下げたいとき）")
+                .comment("Also guide the detailed search with an estimate of the remaining cost to the destination",
+                        "The estimate comes from a navigation graph of the loaded area, built with the same moves as the search,",
+                        "and lets the search aim straight at the destination without intermediate waypoints (building it uses spare CPU cores and up to about 270 MB of memory; if the Java heap limit is below 2.5 GB, a smaller area is used, about 150 MB)",
+                        "Until the navigation graph is ready, the estimate from layer 1, the 3D coarse layer (coarse map), is used",
+                        "If false, neither the navigation graph nor the layer 1 estimate is used, falling back to plain straight-line distance (for comparison, or to reduce load)")
                 .define("costToGoGuideEnabled", true);
 
         detailHorizonBlocks = spec
-                .comment("詳細探索が一度に狙う最大の水平距離（ブロック）。これより遠い目的地には",
-                        "長距離ルートの中間目標を挟み、経路は末端から継ぎ足して伸ばしていく",
-                        "地形によらない固定値。かつては直近の探索が実際に引けた距離を測って使っていたが、",
-                        "プレイヤー周辺の既踏地形で測った値を末端から未踏地形へ伸ばす探索にも使うため、",
-                        "成功と失敗が交互に出て収束せず、そのたびに目標が動いて経路が引き直されていた",
-                        "既定96はネザーの実測（10万ノードで70〜90ブロック）に合わせてある。地上は",
-                        "もっと解けるので、探索を減らしたければ上げてよい")
+                .comment("Maximum horizontal distance (blocks) the detailed search targets at once. Destinations farther than this",
+                        "get intermediate waypoints from the long-distance route, and the path is extended from its end",
+                        "A fixed value independent of terrain. It used to be measured from how far recent searches actually reached,",
+                        "but a value measured on explored terrain around the player was also applied to searches extending from the end into unexplored terrain,",
+                        "so successes and failures alternated without converging, and each time the target moved and the route was redrawn",
+                        "The default 96 matches measurements in the Nether (70-90 blocks with 100,000 nodes). The overworld",
+                        "is easier to solve, so raise it if you want fewer searches")
                 .defineInRange("detailHorizonBlocks", 96, 24, 512);
 
         maxBridgeRunBlocks = spec
-                .comment("空中に足場を置いて渡る橋を、何マス連続させたら諦めて迂回するか（0で無制限）",
-                        "ネザーの溶岩の海のように迂回路が長い地形では、コストの重みだけでは橋が",
-                        "選ばれ続ける。ここを超える橋は移動そのものを生成しないので、探索は最初から",
-                        "迂回路だけを見る——重いコストで抑え込む形と違い、展開ノード数を一切使わない",
-                        "（連続長は陸地を1マスでも踏めば数え直しになる）",
-                        "範囲内に迂回路が無く経路が一本も引けなかった場合に限り、上限を外して探し直す",
-                        "（詰むよりは長い橋の方がマシ、という優先順）",
-                        "既定96は、ジ・エンドの島間の実測（保存データから測った奈落の幅47〜81ブロック）が",
-                        "収まる値。溶岩の上はmaxLavaBridgeRunBlocksが別に30で抑えるので影響しない")
+                .comment("How many consecutive blocks a bridge placed in midair may run before it is abandoned for a detour (0 = unlimited)",
+                        "In terrain where detours are long, like the Nether's lava seas, cost weighting alone keeps bridges",
+                        "being chosen. Bridges beyond this limit are never generated as moves, so the search only considers",
+                        "detours from the start. Unlike holding them back with a heavy cost, this uses no expanded nodes at all",
+                        "(the run length resets as soon as you step on a single block of land)",
+                        "Only when no detour exists within range and no route can be found at all does the search retry without the limit",
+                        "(a long bridge is better than being stuck)",
+                        "The default 96 covers the gaps measured between End islands (47-81 blocks of void, measured from saved data).",
+                        "Over lava, maxLavaBridgeRunBlocks separately holds bridges to 30, so this has no effect there")
                 .defineInRange("maxBridgeRunBlocks", 96, 0, 256);
 
         maxLavaBridgeRunBlocks = spec
-                .comment("そのうち溶岩の上に架ける橋を、何マスまで許すか（0で無制限）",
-                        "空洞に架ける橋と分けて持つのは、足場を外したときの結末が違うから——",
-                        "空洞なら落ちるだけだが、溶岩の上では即死する",
-                        "橋の連続長そのものはmaxBridgeRunBlocksと共通なので、実際に効くのは小さい方",
-                        "既定は30で、下げるとネザーの溶岩の海を渡る距離が縮む",
-                        "（渡れる道が無くなれば層1が溶岩を避ける大回りのルートを選び直す）")
+                .comment("Of those, how many blocks a bridge over lava may run (0 = unlimited)",
+                        "This is kept separate from bridges over open air because a missed placement ends differently:",
+                        "over open air you just fall, but over lava you die instantly",
+                        "The bridge run length itself is shared with maxBridgeRunBlocks, so the smaller of the two applies",
+                        "The default is 30; lowering it shortens how far routes cross the Nether's lava seas",
+                        "(if no crossing remains, layer 1 re-plans a wide detour around the lava)")
                 .defineInRange("maxLavaBridgeRunBlocks", 30, 0, 256);
 
         maxVoidBridgeRunBlocks = spec
-                .comment("そのうち底の無い空虚（ジ・エンドの奈落、探索範囲より深い大空洞）の上に架ける橋を、",
-                        "何マスまで許すか（0で無制限）",
-                        "溶岩と分けて持つのは、地形として出会う頻度がまるで違うから——ジ・エンドでは",
-                        "ほぼ全ての橋がこれに当たるので、ここを締めると島間の移動が丸ごと消える",
-                        "橋の連続長そのものはmaxBridgeRunBlocksと共通なので、実際に効くのは小さい方",
-                        "上限で道が無くなった場合は段階的に緩めて探し直す仕組みがあるが、それが働くのは",
-                        "「範囲内に道が一本も無い」と証明できたときだけで、エンドの島間では先に展開ノード数の",
-                        "上限に当たるため当てにできない。だからここは最初から実測に足りる値にしておく",
-                        "既定96の根拠: 保存データ(DIM1)から測ったジ・エンドの島間の奈落は47〜81ブロック。",
-                        "30でも緩和の梯子が開けば渡れる経路自体は見つかる（RealEndTerrainTest）")
+                .comment("Of those, how many blocks a bridge over the bottomless void (the End's abyss, or huge caverns deeper than the search range)",
+                        "may run (0 = unlimited)",
+                        "This is kept separate from lava because the two are met at very different rates: in the End",
+                        "nearly every bridge falls under this, so tightening it removes travel between islands entirely",
+                        "The bridge run length itself is shared with maxBridgeRunBlocks, so the smaller of the two applies",
+                        "If the limit leaves no route, a mechanism loosens it step by step and retries, but that only kicks in",
+                        "once it can prove that no route exists within range at all. Between End islands the expanded node",
+                        "cap is hit first, so it cannot be relied on. That is why this starts at a value that covers the measured gaps",
+                        "Basis for the default 96: the void between End islands, measured from saved data (DIM1), is 47-81 blocks.",
+                        "Even at 30, a crossing route is still found once the relaxation ladder opens (RealEndTerrainTest)")
                 .defineInRange("maxVoidBridgeRunBlocks", 96, 0, 256);
 
         maxSubmergedTicks = spec
-                .comment("頭を水に浸けたまま何tickまで進む経路を許すか（0で無制限）",
-                        "空気は300tickで尽き、そこからは1秒ごとにダメージが入る。既定の250はその5/6で、",
-                        "潜り始めに空気が満タンとは限らないぶんと、案内どおりの速さで泳げないぶんの余裕",
-                        "単位がマス数ではなくtickなのは、水中の移動が種類ごとに速さが違うから——泳ぎ(5.6)、",
-                        "浮上(7.4)、潜降(5.4)、採掘(1マスに数十)。マス数で数えると、浮上や採掘にかかる時間が",
-                        "実際より短く見積もられ、息が続かない経路を許してしまう",
-                        "ここは物理的な限界を表す線で、「なるべく潜らない」という好みはコスト側",
-                        "(SUBMERGED_TRAVEL_PENALTY)が受け持つ",
-                        "潜らずには経路が一本も引けなかった場合に限り、上限を外して探し直す",
-                        "（詰むよりは息継ぎの要る潜水の方がマシ、という優先順）。その区間は警告色になる")
+                .comment("How many ticks a route may keep your head underwater (0 = unlimited)",
+                        "Air runs out after 300 ticks, after which you take damage every second. The default 250 is 5/6 of that,",
+                        "leaving margin for not starting the dive with full air and for not swimming as fast as the guidance assumes",
+                        "The unit is ticks rather than blocks because each kind of underwater movement has its own speed: swimming (5.6),",
+                        "rising (7.4), sinking (5.4), mining (dozens per block). Counting blocks would underestimate the time spent rising or mining",
+                        "and allow routes you cannot hold your breath for",
+                        "This is the physical limit; the preference to \"stay out of the water where possible\" is handled on the cost side",
+                        "(SUBMERGED_TRAVEL_PENALTY)",
+                        "Only when no route at all can be found without diving does the search retry without the limit",
+                        "(a dive that needs a breath is better than being stuck). Such sections are shown in a warning color")
                 .defineInRange("maxSubmergedTicks", 250, 0, 1200);
 
         searchHorizontalMargin = spec
-                .comment("探索範囲の水平方向マージン（ブロック数）")
+                .comment("Horizontal margin of the search area (blocks)")
                 .defineInRange("searchHorizontalMargin", 64, 8, 256);
 
         searchVerticalMargin = spec
-                .comment("探索範囲の垂直方向マージン（ブロック数）")
+                .comment("Vertical margin of the search area (blocks)")
                 .defineInRange("searchVerticalMargin", 32, 4, 128);
 
         deviationThresholdBlocks = spec
-                .comment("プレイヤーが経路からこの距離(ブロック)以上離れたら再計算する",
-                        "この距離の中を歩いている限り経路は引き直さないので、大きいほど線が落ち着く",
-                        "既定値は線の横2〜3マスのずれを許す値")
+                .comment("Recalculate once the player is this far (blocks) or more from the route",
+                        "The route is not redrawn as long as you walk within this distance, so higher values keep the line steadier",
+                        "The default tolerates drifting 2-3 blocks to the side of the line")
                 .defineInRange("deviationThresholdBlocks", 4.0, 1.0, 16.0);
 
         arrivalRadiusBlocks = spec
-                .comment("目的地からこの距離(ブロック)以内に来たら到着とみなす（水平・垂直とも）",
-                        "掘っても辿り着けない目的地では、実際に辿り着けた地点を基準にする")
+                .comment("Count as arrived once within this distance (blocks) of the destination (both horizontally and vertically)",
+                        "For destinations that cannot be reached even by digging, the closest point actually reached is used instead")
                 .defineInRange("arrivalRadiusBlocks", 3.0, 1.0, 16.0);
 
         groundLevelY = spec
-                .comment("この高さ(Y座標)以上で、かつ頭上が開けている場所を地上とみなす",
-                        "屋根の下(空が見えない場所)から地上の目的地へ向かうとき、目的地の真下を一直線に掘るのではなく、",
-                        "まず最寄りの地上（この高さ以上で空の下）へ出る経路を探してから、改めて目的地へ向かう",
-                        "そのとき掘らずに行ける道を先に探すので、洞窟や坑道があればそちらを通る",
-                        "空が見えている場所ではこの高さより下にいても地上として扱う（川底・谷底・海岸）",
-                        "空の無い次元・天井のある次元（ネザー、ジ・エンド）では働かない",
-                        "既定値60は海面の少し下")
+                .comment("Places at this height (Y) or above with open sky overhead count as the surface",
+                        "When heading from under a roof (where the sky is not visible) to a destination on the surface, instead of digging straight toward the destination,",
+                        "the route first finds a way out to the nearest surface (at or above this height, under open sky) and then heads to the destination",
+                        "Paths that need no digging are searched first, so caves and mine tunnels are used if there are any",
+                        "Places with a view of the sky count as the surface even below this height (riverbeds, valley floors, coasts)",
+                        "Inactive in dimensions without sky or with a ceiling (the Nether, the End)",
+                        "The default 60 is slightly below sea level")
                 .defineInRange("groundLevelY", 60, -64, 320);
 
         recalcIntervalTicks = spec
-                .comment("経路の再確認間隔（tick）。プレイヤーが動いていない間はこの間隔で経路上のブロック変化だけを調べる")
+                .comment("Route recheck interval (ticks). While the player is not moving, only block changes along the route are checked at this interval")
                 .defineInRange("recalcIntervalTicks", 40, 20, 1200);
 
         maxExpandedNodes = spec
-                .comment("1回の探索で展開するノード数の上限。届かなかったときに探索を打ち切る天井で、",
-                        "経路が見つかった時点で探索は終わるため、上げても届く経路の計算時間は変わらない",
-                        "探索はワーカースレッドで走るのでフレームレートには直接影響しない",
-                        "下げると、届くはずの経路が手前で切れるようになる")
+                .comment("Maximum number of nodes expanded per search. This is the ceiling at which a search that cannot reach the goal gives up;",
+                        "the search ends as soon as a route is found, so raising it does not change the time taken for routes that do reach",
+                        "Searches run on a worker thread, so they do not directly affect the frame rate",
+                        "Lowering it makes routes that should reach get cut off short")
                 .defineInRange("maxExpandedNodes", AStarPathfinder.DEFAULT_MAX_EXPANDED_NODES, 1_000, 500_000);
 
         heuristicWeight = spec
-                .comment("経路探索の「ゴールへの近さ」を重視する度合い",
-                        "1.0は最短経路を保証するが、掘削や遊泳のように実際のコストが見積もりを大きく上回る場所では",
-                        "探索が四方に広がり、上限が数十マス先で尽きて経路が届かなくなる",
-                        "上げるほど遠くまで届くかわりに、遠回りな経路が混じりうる（海を渡る・長距離では上げると効く）")
+                .comment("How strongly the search favors getting closer to the goal",
+                        "1.0 guarantees the shortest path, but where the real cost far exceeds the estimate, such as digging or swimming,",
+                        "the search spreads out in all directions and the cap runs out a few dozen blocks ahead, so the route never reaches",
+                        "Higher values reach farther but may include roundabout routes (raising it helps when crossing oceans or over long distances)")
                 .defineInRange("heuristicWeight", AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT, 1.0, 3.0);
 
         flightRoutingEnabled = spec
-                .comment("滑空・飛行中に空中の経路を計算するか",
-                        "falseにすると目的地への直線（点線）だけになる（以前の挙動）",
-                        "スペクテイターはブロックをすり抜けるので、この設定に関わらず常に直線")
+                .comment("Compute an aerial route while gliding or flying",
+                        "If false, only a straight (dotted) line to the destination is shown (the old behavior)",
+                        "Spectators pass through blocks, so they always get a straight line regardless of this setting")
                 .define("flightRoutingEnabled", true);
 
         elytraFlyingMinGroundClearanceBlocks = spec
-                .comment("エリトラの滑空を「飛んでいる」とみなす、足元から地面までの最小の高さ（ブロック）",
-                        "エリトラを装備したまま連続ジャンプしていると1tickだけ滑空判定が立つことがあり、",
-                        "その瞬間に地上の経路を捨てて空中の経路へ切り替わる——着地した次のtickで元へ戻るので、",
-                        "跳ねるたびに経路が丸ごと作り直される。ここに高さを課すと、跳ねている間は地上のまま保たれる",
-                        "高さに加えて0.5秒の継続も要求する（跳ねただけの滑空判定はこれより短い）",
-                        "いったん飛行とみなした後はこの半分まで下がるのを許す（境界で往復すると、",
-                        "そのたびに経路が作り直されるため）",
-                        "0にすると高さを見ない（継続0.5秒の条件だけが残る）",
-                        "クリエイティブ・スペクテイターの飛行はこの設定に関わらず即座に飛行とみなす",
-                        "（本当に立てないので猶予を置く意味が無い）")
+                .comment("Minimum height (blocks) from your feet to the ground for an elytra glide to count as flying",
+                        "Jumping repeatedly while wearing an elytra can register a glide for a single tick,",
+                        "which at that moment drops the ground route for an aerial one, then switches back on the tick after landing,",
+                        "so the route is rebuilt from scratch on every bounce. Requiring a height keeps the ground route while bouncing",
+                        "In addition to the height, the glide must last 0.5 seconds (a glide registered by a bounce is shorter than that)",
+                        "Once counted as flying, you may drop to half this height (otherwise going back and forth across the threshold",
+                        "would rebuild the route each time)",
+                        "0 ignores the height (only the 0.5-second duration condition remains)",
+                        "Creative and spectator flight count as flying immediately regardless of this setting",
+                        "(you are genuinely airborne, so there is no point in a grace period)")
                 .defineInRange("elytraFlyingMinGroundClearanceBlocks", 4, 0, 32);
 
         flightCellBlocks = spec
-                .comment("空中経路を解く格子の一辺（ブロック）。含むブロックが全て空のセルだけを通る",
-                        "この粗さがそのままクリアランスになる——秒速30マスで飛ぶエリトラに1マスの隙間を",
-                        "狙わせても意味が無いので、余裕を持って抜けられる空間だけを経路の候補にする",
-                        "その粗さでは抜けられる隙間が無いと判明した場合に限り、半分の粒度で解き直す",
-                        "遠くまで届かせたいときに一番効くのがここ——セル数は一辺の3乗に反比例するので、",
-                        "4→6にするだけで同じ予算が覆う体積が3.4倍になる。代わりに狭い通路は通れなくなる")
+                .comment("Side length (blocks) of the grid cells used to solve the aerial route. Only cells whose blocks are all empty are used",
+                        "This coarseness doubles as clearance: there is no point asking an elytra flying 30 blocks per second to thread",
+                        "a 1-block gap, so only space you can pass through with room to spare is considered for the route",
+                        "Only when it turns out no passable gap exists at this coarseness is the route solved again at half the cell size",
+                        "This is the most effective setting for reaching farther: the cell count is inversely proportional to the cube of the side length, so",
+                        "going from 4 to 6 alone makes the same budget cover 3.4 times the volume. In exchange, narrow passages become impassable")
                 .defineInRange("flightCellBlocks", 6, 2, 16);
 
         flightDeviationThresholdBlocks = spec
-                .comment("滑空中に経路からこの距離(ブロック)以上離れたら引き直す",
-                        "歩行のdeviationThresholdBlocksとは別に持つ。エリトラは常時ずれるので、",
-                        "歩行と同じ幅にすると飛んでいる間ずっと経路が引き直される",
-                        "垂直方向はこの1.5倍まで許す（上下のぶれは水平より大きい）")
+                .comment("Redraw the route once you are this far (blocks) or more from it while gliding",
+                        "Kept separate from deviationThresholdBlocks for walking. An elytra drifts constantly, so",
+                        "using the same width as walking would redraw the route the whole time you fly",
+                        "Vertically, up to 1.5 times this is tolerated (vertical wobble is larger than horizontal)")
                 .defineInRange("flightDeviationThresholdBlocks", 24.0, 4.0, 64.0);
 
         flightRecalcIntervalTicks = spec
-                .comment("滑空中に経路を引き直す間隔（tick）",
-                        "エリトラは1.5ブロック/tickで飛ぶので、歩行のrecalcIntervalTicks(40)では",
-                        "引き直しの合間に60ブロック進んでしまう")
+                .comment("Interval (ticks) at which the route is redrawn while gliding",
+                        "An elytra flies at 1.5 blocks/tick, so with the walking recalcIntervalTicks (40)",
+                        "you would travel 60 blocks between redraws")
                 .defineInRange("flightRecalcIntervalTicks", 20, 5, 200);
 
         flightClearanceDetourBlocks = spec
-                .comment("周囲が完全に塞がったセルを通ることを、水平何ブロックぶんの遠回りと釣り合わせるか",
-                        "「最短でも狭い所は案内しないでほしい」をこれで表す。大きいほど広い空間を選ぶ",
-                        "禁止ではなく割増なのは、そこしか道が無い地形で経路ごと消えないようにするため",
-                        "0で無効（純粋な最短）",
-                        "平面1枚ぶん（26近傍のうち9個）が塞がっている程度は狭いとみなさない——",
-                        "地表や天井の上を余裕を持って飛んでいるだけの状態なので、ここを狭いと数えると",
-                        "開けた場所でも理由なく高い所を通るようになる")
+                .comment("How many blocks of horizontal detour passing through a fully enclosed cell is weighed against",
+                        "This expresses \"do not guide me through tight spots, even if shorter\". Higher values prefer more open space",
+                        "It is a surcharge rather than a ban so that routes do not vanish entirely in terrain where that is the only way",
+                        "0 disables it (purely shortest)",
+                        "Having one plane blocked (9 of the 26 neighbors) does not count as tight:",
+                        "that is just flying with room to spare over the ground or over a ceiling, and counting it as tight",
+                        "would make routes fly high for no reason even in open areas")
                 .defineInRange("flightClearanceDetourBlocks", FLIGHT_CLEARANCE_DETOUR_DEFAULT, 0, 128);
 
         flightMaxExpandedNodes = spec
-                .comment("空中経路の1回の探索で展開するセル数の上限",
-                        "歩行のmaxExpandedNodesとは別に持つ。空中は3D格子で1セルあたりの隣接が26あり、",
-                        "同じ数字でも意味する探索の広さがまるで違う",
-                        "上げると遠くまで届くが1回の計算が比例して長くなる（実機: ネザーで10万・約2秒）",
-                        "計算中は投げ直さないので、長くなるぶん経路の更新間隔が伸びる")
+                .comment("Maximum number of cells expanded per aerial route search",
+                        "Kept separate from maxExpandedNodes for walking. The air uses a 3D grid with 26 neighbors per cell,",
+                        "so the same number means a very different search extent",
+                        "Raising it reaches farther, but each computation takes proportionally longer (measured: 100,000 in the Nether takes about 2 seconds)",
+                        "No new search is issued while one is running, so longer computations mean longer intervals between route updates")
                 .defineInRange("flightMaxExpandedNodes", 150_000, 1_000, 1_000_000);
 
         flightExtendMaxExpandedNodes = spec
-                .comment("末端から先を継ぎ足すときの展開セル数の上限",
-                        "継ぎ足しは短い区間を何度も繋ぐので、1回にflightMaxExpandedNodesを許すと",
-                        "地形が詰まったときに毎回2秒かけて少ししか伸びず、飛ぶ速度に追いつかなくなる",
-                        "小さくすると1回の伸びは短くなるが、そのぶん頻繁に繋げる")
+                .comment("Maximum number of cells expanded when extending the route further from its end",
+                        "Extensions join many short sections, so allowing flightMaxExpandedNodes for each one",
+                        "would spend 2 seconds every time in cluttered terrain for little progress, falling behind your flight speed",
+                        "Smaller values extend less per step, but extend more often")
                 .defineInRange("flightExtendMaxExpandedNodes", 60_000, 1_000, 1_000_000);
 
         flightHeuristicWeight = spec
-                .comment("空中経路の「ゴールへの近さ」を重視する度合い",
-                        "上げるほど探索は速くなるが、遠回りが混じる。1.0で最短",
-                        "探索は読み込み済みの範囲の縁で打ち切るので、上げても遠くまで届くようにはならない")
+                .comment("How strongly the aerial route search favors getting closer to the goal",
+                        "Higher values make the search faster but may include detours. 1.0 is shortest",
+                        "The search stops at the edge of the loaded area, so raising this does not make it reach farther")
                 .defineInRange("flightHeuristicWeight", 1.5, 1.0, 5.0);
 
         diggableBlocks = spec
-                .comment("掘って通ってよいブロックの追加リスト（例: \"minecraft:cobblestone\"）",
-                        "既定で掘れるのは自然生成の地形（石・土・砂・鉱石・葉・ネザーラック等）だけで、",
-                        "加工されたブロック（丸石・石レンガ・板材…）や中身を持つブロック（チェスト・かまど・",
-                        "modの機械）は誰かが置いたものとみなして掘らない。知らないブロックも掘らない側に倒す",
-                        "modが追加した石や土で経路が塞がる場合、そのブロックIDをここへ足す")
+                .comment("Additional blocks that may be dug through (e.g. \"minecraft:cobblestone\")",
+                        "By default, only naturally generated terrain can be dug (stone, dirt, sand, ores, leaves, netherrack, etc.);",
+                        "processed blocks (cobblestone, stone bricks, planks...) and blocks with contents (chests, furnaces,",
+                        "modded machines) are assumed to be placed by someone and are not dug. Unknown blocks are not dug either",
+                        "If modded stone or dirt blocks a route, add its block ID here")
                 .defineStringList("additionalDiggableBlocks", Collections.emptyList(),
                         () -> "minecraft:cobblestone", o -> o instanceof String);
 
         forbiddenBlocks = spec
-                .comment("掘削禁止ブロックのリスト（例: \"minecraft:diamond_ore\"）。上のリストより優先される",
-                        "既定で掘れる自然地形のうち、壊したくないものを個別に外すために使う")
+                .comment("Blocks that must never be dug (e.g. \"minecraft:diamond_ore\"). Takes priority over the list above",
+                        "Use it to exclude individual naturally generated terrain blocks you do not want broken")
                 .defineStringList("additionalForbiddenBlocks", Collections.emptyList(),
                         () -> "minecraft:diamond_ore", o -> o instanceof String);
 
         spec.pop();
-        spec.comment("XaeroNav 表示設定").push("display");
+        spec.comment("XaeroNav display settings").push("display");
 
         hudEnabled = spec
-                .comment("画面上部に案内（次の曲がり角・残りの道のり・所要時間）を表示するか")
+                .comment("Show guidance at the top of the screen (next turn, remaining distance, estimated time)")
                 .define("hudEnabled", true);
 
         straightLineEnabled = spec
-                .comment("経路が分からない区間（未読み込みチャンクの先など）を目的地までの点線で示すか")
+                .comment("Show a dotted line to the destination for sections with no known route (such as beyond unloaded chunks)")
                 .define("straightLineEnabled", true);
 
         goalMarkerEnabled = spec
-                .comment("Xaeroの世界地図・ミニマップの目的地にピンを立てるか")
+                .comment("Place a pin on the destination in Xaero's world map and minimap")
                 .define("goalMarkerEnabled", true);
 
         dangerDashedEnabled = spec
-                .comment("危険区間（溶岩・奈落・溺水・落下ダメージ等）の線を破線で強調するか",
-                        "色だけでは色覚特性や画面の色調補正で判別しづらい場面があるための、色以外の識別手段")
+                .comment("Draw dangerous sections (lava, void, drowning, fall damage, etc.) as dashed lines",
+                        "A cue besides color, for cases where color alone is hard to tell apart due to color vision differences or screen color adjustments")
                 .define("dangerDashedEnabled", true);
 
         spec.pop();
@@ -542,7 +542,7 @@ public final class XaeroNavConfig {
         return flightClearanceDetourBlocks.get();
     }
 
-    /** 設定画面のトグル用。無効化前の調整値を保持して復元する。 */
+    /** For config screen toggles. Keeps and restores the tuned value from before disabling. */
     public void setFlightClearanceEnabled(boolean value) {
         int current = flightClearanceDetourBlocks.get();
         if (!value) {
@@ -576,8 +576,8 @@ public final class XaeroNavConfig {
     }
 
     /**
-     * 探索へ渡す「何をしてよいか」一式。項目ごとに読んで呼び出し側で組み立てると、
-     * 探索を投げる箇所が増えるたびに同じ並びを写すことになる。
+     * The full set of "what is allowed" passed to the search. Reading each item and assembling it at the call site would mean
+     * copying the same sequence every time another place submits a search.
      */
     public MovementOptions movementOptions() {
         return new MovementOptions(diggingEnabled(), bridgingEnabled(), jumpGapEnabled(), lavaBridgingEnabled(),
@@ -598,14 +598,14 @@ public final class XaeroNavConfig {
         return blockBudgetReserve.get();
     }
 
-    /** 歩行の探索の打ち切り条件。時間の上限だけは設定に出していない。 */
+    /** Termination conditions for walking searches. Only the time limit isn't exposed in the config. */
     public SearchLimits searchLimits() {
         return new SearchLimits(maxExpandedNodes(), AStarPathfinder.DEFAULT_TIME_LIMIT_MILLIS, heuristicWeight());
     }
 
     /**
-     * 探索を投げる直前にまとめて読む値一式。{@link #movementOptions}・{@link #searchLimits}と
-     * 同じ理由（呼び出し箇所を増やすたびに同じ並びを写すことになる）でまとめている。
+     * The full set of values read together right before a search is submitted. Bundled for the same reason as {@link #movementOptions} and {@link #searchLimits}
+     * (otherwise the same sequence gets copied every time a call site is added).
      */
     public NavigationTuning navigationTuning() {
         return new NavigationTuning(searchHorizontalMargin(), movementOptions(), searchLimits(),
@@ -617,8 +617,8 @@ public final class XaeroNavConfig {
     }
 
     /**
-     * ここではsaveしない（GUI・キーバインド双方から呼ばれ、GUIは複数項目を一括保存したいため）。
-     * 呼び出し側が責任を持って{@link #SPEC}をsaveする。
+     * Doesn't save here (it's called from both the GUI and keybindings, and the GUI wants to save multiple items at once).
+     * The caller is responsible for saving {@link #SPEC}.
      */
     public void setHudEnabled(boolean value) {
         hudEnabled.set(value);

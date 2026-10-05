@@ -15,7 +15,7 @@ import net.minecraft.world.level.LevelHeightAccessor;
 *///?}
 import net.minecraft.world.phys.Vec3;
 
-/** Minecraft 1.16と新しい版とで呼び方だけが違うvanilla API。クライアント専用のものは{@code client.ClientCompat}にある。 */
+/** Vanilla APIs that differ only in how they are called between Minecraft 1.16 and newer versions. Client-only ones live in {@code client.ClientCompat}. */
 public final class GameCompat {
     private GameCompat() {
     }
@@ -28,7 +28,7 @@ public final class GameCompat {
         *///?}
     }
 
-    /** {@code overlay}ならアクションバー、そうでなければチャット欄へ出す。 */
+    /** Shows on the action bar if {@code overlay}, otherwise in chat. */
     public static void tell(Player player, Component message, boolean overlay) {
         //? if >=26.1 {
         /*if (overlay) {
@@ -65,7 +65,7 @@ public final class GameCompat {
         *///?}
     }
 
-    // 高さはどれも「下端を含み、上端を含まない」旧来の意味で返す（1.21.2以降のgetMaxY()は上端を含む）
+    // All heights are returned in the old sense of "includes the bottom, excludes the top" (getMaxY() in 1.21.2+ includes the top)
     //? if >=1.17 {
     public static int minBuildHeight(LevelHeightAccessor level) {
         //? if >=1.21.2 {
@@ -104,11 +104,11 @@ public final class GameCompat {
     }
     *///?}
 
-    /** 水を置いても蒸発する場所か（ネザー）。 */
+    /** Whether placed water evaporates here (the Nether). */
     public static boolean waterEvaporates(Level level, BlockPos pos) {
         //? if >=1.21.11 {
-        /*// バイオームごとに変えられる属性なので位置を渡して読む。getDimensionValueは開発環境
-        // （NeoForgeの開発実行など）でだけ例外を投げ、本番では黙ってバイオームの上書きを無視する
+        /*// It is an attribute that can vary per biome, so read it with a position. getDimensionValue throws only in
+        // development environments (such as NeoForge dev runs), and in production silently ignores biome overrides
         return level.environmentAttributes().getValue(EnvironmentAttributes.WATER_EVAPORATES, pos);
         *///?} else {
         return level.dimensionType().ultraWarm();

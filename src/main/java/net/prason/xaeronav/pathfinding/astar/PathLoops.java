@@ -13,23 +13,23 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 
 /**
- * <b>経路が同じ位置を2度通っている区間を畳む。</b>
+ * <b>Folds stretches where the path passes the same position twice.</b>
  *
- * <p>1回の{@link AStarPathfinder}では起きない（同じセルを二度閉じない）。生まれるのは
- * <b>継ぎ足しと合流の繋ぎ目</b>で、後ろの区間は前の区間がどこを通ったかを知らないまま解かれるため。
- * ユーザー報告「同じブロックに2つのルートが重なる」がこれ。
+ * <p>This doesn't happen within a single {@link AStarPathfinder} run (it never closes the same cell twice). It arises
+ * <b>at extend and splice seams</b>, because the later leg is solved without knowing where the earlier leg went.
+ * This is the user report "two routes overlap on the same block".
  *
- * <p><b>掘削・設置を含む区間は畳まない。</b>置いたブロックの上を後の手が歩いていることがあり、
- * 消すと足場ごと消える。掘った跡も同じで、後の手はその穴を通る前提で繋がっている。
+ * <p><b>Stretches containing digging or placement aren't folded.</b> Later moves may be walking on placed blocks,
+ * and removing them removes the footing too. The same goes for dug holes: later moves are connected on the assumption of passing through them.
  *
- * <p>始点そのものへ戻る折り返しは畳まない（始点はステップではないので、この列に現れない）。
+ * <p>Turnarounds back to the start itself aren't folded (the start isn't a step, so it doesn't appear in this list).
  */
 public final class PathLoops {
 
     /**
-     * @param steps    畳んだ後の列
-     * @param newIndex 畳む前の添字に対応する畳んだ後の添字。消えたステップは<b>その位置に残った方</b>の
-     *                 添字を指す（区間の境目を張り直すのに使う）
+     * @param steps    the list after folding
+     * @param newIndex the post-fold index for each pre-fold index. Removed steps point to the index of <b>the one that remained at that position</b>
+     *                 (used to re-establish leg boundaries)
      */
     public record Folded(List<PathStep> steps, int[] newIndex) {
 
@@ -63,7 +63,7 @@ public final class PathLoops {
                     seen.remove(out.get(drop).pos());
                     out.remove(drop);
                 }
-                // 消えた区間を指していた添字は、畳んだ先＝残った方のステップへ寄せる
+                // Indices that pointed into the removed stretch are moved to the fold target = the remaining step
                 for (int old = 0; old < i; old++) {
                     newIndex[old] = Math.min(newIndex[old], previous);
                 }
@@ -77,7 +77,7 @@ public final class PathLoops {
         return new Folded(out, newIndex);
     }
 
-    /** {@code from}より後ろに掘削・設置が1つも無いか。 */
+    /** Whether there's no digging or placement after {@code from}. */
     private static boolean foldable(List<PathStep> out, int from) {
         for (int i = from + 1; i < out.size(); i++) {
             if (edits(out.get(i))) {
@@ -92,25 +92,25 @@ public final class PathLoops {
     }
 
     /**
-     * 継ぎ足した区間が、既存の経路の近くへ戻ってきた輪。{@code route[entry]}から{@code tail[rejoin]}までが輪で、
-     * 両端を結び直せば輪ごと要らなくなる。
+     * A loop where an extended leg came back near the existing path. The loop runs from {@code route[entry]} to {@code tail[rejoin]},
+     * and reconnecting the two ends makes the whole loop unnecessary.
      *
-     * @param gap 経路に沿った輪のステップ数
+     * @param gap number of steps in the loop along the path
      */
     public record Return(int entry, int rejoin, int gap) {
     }
 
     /**
-     * 継ぎ足しの区間{@code tail}が、経路{@code route}の{@code fromIndex}以降の近くへ戻ってくる所のうち、経路に沿って最も遠回りな組。
+     * Among the places where the extension leg {@code tail} comes back near path {@code route} at or after {@code fromIndex}, the pair with the biggest detour along the path.
      *
-     * <p>窓の縁の先の行き止まりで出口が切り替わると、継ぎ足しは末端から引き返して戻る。戻る線は来た線と数ブロック〜十数ブロック
-     * 離れて並ぶ（実機のエンド・ネザーのV字）ので、同じセルへ戻る輪（{@link #fold}）だけでは拾えない。離れているほど、両端の間を
-     * 普通に歩いた長さも長いので、輪とみなすには離れている分だけ長い遠回りを要求する。
+     * <p>When the exit switches at a dead end beyond the window's edge, the extension turns back from its end. The returning line runs a few to a dozen-odd blocks
+     * apart from the incoming line (the V shapes in the in-game End and Nether), so loops back to the same cell ({@link #fold}) alone don't catch it. The farther apart they are, the longer
+     * the normal walking length between the two ends, so to count as a loop a detour longer in proportion to the separation is required.
      *
-     * @param nearBlocks 近いとみなす水平の距離（各軸）
-     * @param nearY      近いとみなす高さの差
-     * @param minGap     輪とみなす、経路に沿った最小のステップ数
-     * @param gapPerBlock 両端が1ブロック離れるごとに要求する、経路に沿ったステップ数
+     * @param nearBlocks horizontal distance considered near (per axis)
+     * @param nearY      height difference considered near
+     * @param minGap     minimum number of steps along the path to count as a loop
+     * @param gapPerBlock steps along the path required per block of separation between the two ends
      */
     public static @Nullable Return widestReturn(List<PathStep> route, List<PathStep> tail, int fromIndex,
                                                 int nearBlocks, int nearY, int minGap, int gapPerBlock) {
@@ -135,10 +135,10 @@ public final class PathLoops {
     }
 
     /**
-     * {@code steps[from..to]}を取り除いたとき、{@code to}より後ろの手が足場や通り道を失うか。
+     * Whether removing {@code steps[from..to]} makes the moves after {@code to} lose their footing or passage.
      *
-     * <p>取り除く区間で置いたブロックの上に立つ・そのブロックに当てて次を置く手や、そこで掘った穴を通る手があれば失う。
-     * 無ければ、区間に掘削・設置があっても結び直してよい。
+     * <p>They lose it if any move stands on a block placed in the removed stretch, places the next block against it, or passes through a hole dug there.
+     * If none do, it may be reconnected even if the stretch has digging or placement.
      */
     public static boolean laterStepsDependOn(List<PathStep> steps, int from, int to) {
         Set<BlockPos> placed = new HashSet<>();

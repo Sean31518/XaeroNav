@@ -26,105 +26,105 @@ import net.prason.xaeronav.xaero.XaeroMapReader;
 import net.prason.xaeronav.xaero.XaeroPresence;
 
 /**
- * 天井のある次元で使う3D粗層の作りかけ・出来上がりを持つ。
+ * Holds the in-progress and finished 3D coarse layer used in dimensions with a ceiling.
  *
- * <p>役割は<b>2つのスレッドの境目を1か所に閉じ込めること</b>。Xaeroの地図はメインスレッドから
- * しか読めず（{@link XaeroMapReader}のスレッド契約）、逆に逆向きDijkstraは数百ミリ秒かかるので
- * メインスレッドで回すとゲームが固まる。そこで<b>地図読み＝メインスレッド、Dijkstra＝ワーカー</b>で
- * 割る。組み上がるまでの数百ミリ秒は従来どおりガイド無しで探索する（線が出ないよりはよい）。
+ * <p>Its job is <b>to confine the boundary between two threads to one place</b>. Xaero's map can only be read from the
+ * main thread ({@link XaeroMapReader}'s thread contract), while the reverse Dijkstra takes hundreds of milliseconds and
+ * would freeze the game on the main thread. So the work is split as <b>map reading = main thread, Dijkstra = worker</b>.
+ * For the few hundred milliseconds until it is built, the search runs without a guide as before (better than no line).
  *
- * <p>組み直すのは目的地・次元が変わったとき、プレイヤーが箱から出かかったとき、
- * {@link #REBUILD_MOVE_BLOCKS}歩いたとき、そして<b>探索が前進できなかったとき</b>。
- * <b>探索のたびに組むのは論外</b>——面積に比例した確保とDijkstraを毎回払うことになるので、
- * どの引き金も{@link #MIN_REBUILD_INTERVAL_MILLIS}で間引く。
+ * <p>It is rebuilt when the goal or dimension changes, when the player is about to leave the box,
+ * after walking {@link #REBUILD_MOVE_BLOCKS}, and <b>when the search failed to make progress</b>.
+ * <b>Building on every search is out of the question</b>: it would pay for area-proportional allocation and Dijkstra every time,
+ * so every trigger is throttled by {@link #MIN_REBUILD_INTERVAL_MILLIS}.
  */
 final class NetherVoxelGuide {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
     /**
-     * 地図を何ブロックおきに読むか。格子のセル辺の半分——1セルにつき数点入る粒度で見ないと、
-     * 幅の狭い通路が抜け落ちる。
+     * How many blocks apart to read the map. Half a grid cell side: unless sampled finely enough for several points per cell,
+     * narrow passages drop out.
      */
     private static final int SAMPLE_STEP = VoxelTerrain.DEFAULT_CELL_BLOCKS / 2;
 
-    /** 箱の縁からこれだけ内側にいる限りは組み直さない（{@code FLIGHT_COARSE_RECALC}と同じ考え方）。 */
+    /** Don't rebuild while at least this far inside the box edge (same idea as {@code FLIGHT_COARSE_RECALC}). */
     private static final int REBUILD_INSET_BLOCKS = 32;
 
     /**
-     * 組んだ場所からこれだけ歩いたら組み直す。<b>時間ではなく距離で計る</b>のが要点——
-     * 地図が育つのは歩いたぶんだけで、その場に立っている間に組み直しても同じ表しかできない。
+     * Rebuild after walking this far from where it was built. The key is <b>measuring by distance, not time</b>:
+     * the map only grows as far as you walk, and rebuilding while standing still produces the same table.
      *
-     * <p><b>これだけでは詰まったときに組み直せない</b>（{@link #noteStalled}）。詰まっている
-     * ときこそ「箱を出た」も「歩いた」も立たないので、前進できなかったことを別の引き金にする。
+     * <p><b>This alone can't rebuild when stuck</b> ({@link #noteStalled}). Precisely when stuck,
+     * neither "left the box" nor "walked" happens, so failing to make progress is a separate trigger.
      */
     private static final double REBUILD_MOVE_BLOCKS = 128.0;
 
     /**
-     * 組み直しの下限間隔。地図読みはメインスレッドなので、条件が何度も立っても
-     * これより短い間隔では払わない。
+     * Minimum interval between rebuilds. Map reading is on the main thread, so even if the conditions fire repeatedly
+     * it isn't paid more often than this.
      */
     private static final long MIN_REBUILD_INTERVAL_MILLIS = 15_000L;
 
-    /** Dijkstra専用の1本。探索用のワーカーを塞がないよう分ける。 */
+    /** A single thread just for Dijkstra. Kept separate so it doesn't block the search workers. */
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "XaeroNav 3D粗層");
+        Thread thread = new Thread(runnable, "XaeroNav 3D coarse layer");
         thread.setDaemon(true);
         return thread;
     });
 
-    /** 世代。組み上がった結果が今も求められているものかを見る。 */
+    /** Generation. Checks whether a finished result is still the one wanted. */
     private final AtomicLong generation = new AtomicLong();
 
     private volatile Built built;
     private volatile boolean building;
-    // 直近の探索が前進できなかった。ワーカースレッド（whenComplete）が立て、forGoalが落とす
+    // The last search failed to make progress. Set by the worker thread (whenComplete), cleared by forGoal
     private volatile boolean stalled;
-    /** 直前に組もうとした条件。同じ条件で失敗し続けても、地図読みを毎回払わないため。 */
+    /** The conditions of the last build attempt. Avoids paying for map reading every time it keeps failing under the same conditions. */
     private Key attempted;
     private long nextAttemptMillis;
 
     /**
-     * この目的地について<b>これまでに地図から見えた</b>床のYの範囲。箱の高さはここから決める
-     * （{@link FloorRange}の1回ぶんではなく、積み上げたもの）。
+     * The range of floor Y <b>seen on the map so far</b> for this goal. The box height is decided from this
+     * (the accumulated range, not a single {@link FloorRange}).
      *
-     * <p><b>1回の読みで決めてはいけない。</b>{@code forEachCaveFloor}が見るのは
-     * 「そのときXaeroがメモリに載せているレイヤー」で、その集合は歩いている間に入れ替わる——
-     * 実機（2026-09-18 15:07〜15:10、プレイヤーは60ブロックしか動いていない）では
-     * 床の報告数が3.4万→13.3万→3.4万→8.9万と4倍で往復し、深いレイヤーが載った回では
-     * 箱が{@code Y=19..98}から{@code Y=0..89}へ<b>ずり下がって</b>、y90台の歩ける回廊が
-     * まるごと箱の外へ出た（格子の歩けるセルが8801→4310）。ガイドはそのたびに丸ごと
-     * 差し替わるので、東西どちらの回廊を選ぶかが約20秒ごとに振り直される＝実機の「ぐるぐる」。
+     * <p><b>Don't decide from a single read.</b> What {@code forEachCaveFloor} sees is
+     * "the layers Xaero has in memory at the time", and that set changes while walking.
+     * In-game (2026-09-18 15:07-15:10, the player moved only 60 blocks)
+     * the reported floor count swung 4x back and forth, 34k -> 133k -> 34k -> 89k, and on reads where deep layers were loaded
+     * the box <b>slid down</b> from {@code Y=19..98} to {@code Y=0..89}, pushing the walkable corridor in the y90s
+     * entirely out of the box (walkable grid cells 8801 -> 4310). The guide was replaced wholesale each time,
+     * so the choice between the east and west corridors was redone about every 20 seconds, i.e. the "going in circles" seen in-game.
      *
-     * <p>地図から分かることは歩くほど増えるだけなので、<b>範囲は広がる一方にする</b>。
-     * 落下・崖登りでプレイヤーのYが跳んでも{@link VoxelTerrain#boxFor}が広げる側にしか
-     * 効かないため、箱は縮まない。
+     * <p>What the map reveals only grows as you walk, so <b>the range only ever widens</b>.
+     * Even if the player's Y jumps from falling or climbing a cliff, {@link VoxelTerrain#boxFor} only widens,
+     * so the box doesn't shrink.
      */
     private Key floorRangeKey;
     private int floorLowest = Integer.MAX_VALUE;
     private int floorHighest = Integer.MIN_VALUE;
 
     /**
-     * これまでに地図から読めた床そのもの（{@link #packFloor}で1本のlongに詰めたもの）。
-     * 格子へ流すのはこれで、その回の読みだけではない。
+     * The floors read from the map so far (each packed into one long by {@link #packFloor}).
+     * This is what feeds the grid, not just that read's floors.
      *
-     * <p><b>箱を固定しただけでは足りない。</b>読むレイヤーが振れるのは変わらないので、箱の中身が
-     * 入れ替わる——実機（2026-09-18 22:38〜22:39）では溶岩が6,464→602→477、歩けるセルが
-     * 6,054→11,614、膨らみが2.22→3.16→1.4で振れ、その直後に経路が64ステップ（目的地まで229）から
-     * 259ステップ（目的地まで252）へ<b>遠回りに切り替わっている</b>。
+     * <p><b>Fixing the box isn't enough.</b> The layers read still fluctuate, so the box's contents
+     * change. In-game (2026-09-18 22:38-22:39) lava swung 6,464 -> 602 -> 477, walkable cells
+     * 6,054 -> 11,614, and inflation 2.22 -> 3.16 -> 1.4, and right after that the path <b>switched to a detour</b>, from 64 steps (229 to the goal)
+     * to 259 steps (252 to the goal).
      *
-     * <p>模型で測った差（レイヤーの集合を歩きながら振らせた3本）:
-     * そのつど組むと最適の1.700/1.286/1.331倍、覚えておくと<b>1.060/1.127/1.205倍</b>で、
-     * 地図が完全なときの歩き通しとほぼ一致する＝<b>揺れで失っていた質はほぼ全部戻る</b>。
+     * <p>Difference measured on the model (3 runs with the layer set fluctuating while walking):
+     * building each time gives 1.700/1.286/1.331x optimal, remembering gives <b>1.060/1.127/1.205x</b>,
+     * nearly matching a full walk with a complete map, i.e. <b>almost all the quality lost to fluctuation comes back</b>.
      *
-     * <p>箱の外へ出たものは捨てる（{@link #forgetOutside}）。箱は目的地へ近づくほど縮むので、
-     * 覚えている量は歩いても際限なく増えない。
+     * <p>Anything that leaves the box is discarded ({@link #forgetOutside}). The box shrinks as the goal gets closer,
+     * so the amount remembered doesn't grow without bound as you walk.
      */
     private final LongOpenHashSet rememberedFloors = new LongOpenHashSet();
 
     /**
-     * 1回の読みで見えた床を全部覚えつつ、Yの範囲も測る。範囲は{@link #rememberFloors}で
-     * 積み上げてから箱に使い、床そのものは{@link #rememberedFloors}へ入れて格子へ流す。
+     * Remembers every floor seen in one read while also measuring the Y range. The range is accumulated by {@link #rememberFloors}
+     * before being used for the box, and the floors themselves go into {@link #rememberedFloors} to feed the grid.
      */
     private static final class FloorRange implements XaeroMapReader.FloorVisitor {
         private final LongOpenHashSet into;
@@ -144,8 +144,8 @@ final class NetherVoxelGuide {
     }
 
     /**
-     * 床1つを1本のlongに詰める。X・Zは26ビット（ネザーの座標上限±3.75Mに足りる）、Yは10ビット
-     * （{@code -64..959}）、最後の1ビットが溶岩。
+     * Packs one floor into a single long. X and Z get 26 bits (enough for the Nether's coordinate limit of ±3.75M), Y gets 10 bits
+     * ({@code -64..959}), and the last bit is lava.
      */
     static long packFloor(int x, int z, int floorTopY, boolean lava) {
         return ((long) (x & 0x3FF_FFFF) << 37) | ((long) (z & 0x3FF_FFFF) << 11)
@@ -168,20 +168,20 @@ final class NetherVoxelGuide {
         return (floor & 1L) != 0L;
     }
 
-    /** どの条件に対する表か。ここが変われば、間隔を待たずに組み直す。 */
+    /** Which conditions the table is for. If this changes, rebuild without waiting for the interval. */
     private record Key(ResourceKey<Level> dimension, BlockPos goal, boolean lavaPassable) {
     }
 
-    /** 組み上がった表と、それを組んだときの箱・立っていた場所。 */
+    /** The built table, plus the box and the player position when it was built. */
     private record Built(Key key, SearchBounds box, BlockPos from, CostToGo costToGo) {
     }
 
     /**
-     * 今の目的地のガイド。無ければ組み始めて{@code null}を返す（呼び出し側は従来どおり進む）。
-     * <b>メインスレッドから呼ぶこと。</b>
+     * The guide for the current goal. If there is none, starts building and returns {@code null} (the caller proceeds as before).
+     * <b>Call from the main thread.</b>
      *
-     * @param goal <b>最終目的地</b>。中間目標を渡してはいけない——ガイドの起点が動くと、
-     *             区間ごとに別方向を指す表になる
+     * @param goal the <b>final goal</b>. Don't pass an intermediate target: if the guide's origin moves,
+     *             each leg gets a table pointing a different way
      */
     CostToGo forGoal(
             //? if >=1.17 {
@@ -196,26 +196,26 @@ final class NetherVoxelGuide {
         boolean usable = current != null && current.key().equals(key);
         boolean stale = !usable || stalled || !insideBox(current.box(), player)
                 || horizontal(current.from(), player) >= REBUILD_MOVE_BLOCKS;
-        // 条件が変わったときだけ間隔を飛ばす。同じ条件のまま失敗し続けるとき、間隔が無いと
-        // 探索のたびにメインスレッドで地図を読み直すことになる
+        // Skip the interval only when the conditions change. When it keeps failing under the same conditions, without an interval
+        // the map would be re-read on the main thread for every search
         boolean mayAttempt = !key.equals(attempted) || MonotonicTime.millis() >= nextAttemptMillis;
         if (stale && !building && mayAttempt) {
             start(level, key, player);
         }
-        // 組み直し中でも、同じ目的地の古い表は使い続ける（無ガイドへ落とすより良い）
+        // Even while rebuilding, keep using the old table for the same goal (better than falling back to no guide)
         return usable ? current.costToGo() : null;
     }
 
     /**
-     * 直近の探索が前進できなかったことを伝える。次の{@link #forGoal}で組み直しの引き金になる
-     * （{@link #MIN_REBUILD_INTERVAL_MILLIS}の間引きは掛かったまま）。
+     * Reports that the last search failed to make progress. Triggers a rebuild on the next {@link #forGoal}
+     * (still throttled by {@link #MIN_REBUILD_INTERVAL_MILLIS}).
      *
-     * <p><b>詰まっているときこそ組み直したい。</b>{@link #start}が撃つ{@code requestLoad}は
-     * 非同期でその回には効かないので、薄い地図で組んだ表は「読み込みが済んだ」だけでは
-     * 更新されない。実機（2026-09-09）では未読み込みリージョン33本が3秒後に届いていたのに、
-     * その場で詰まっているせいで距離の引き金が立たず、43秒後まで薄い表を使い続けていた。
+     * <p><b>Being stuck is exactly when a rebuild is wanted.</b> The {@code requestLoad} fired by {@link #start} is
+     * async and doesn't take effect that round, so a table built from a sparse map isn't updated merely because
+     * "loading finished". In-game (2026-09-09), 33 unloaded regions arrived 3 seconds later, but
+     * because the player was stuck in place the distance trigger never fired, and the sparse table was used for 43 more seconds.
      *
-     * <p><b>ワーカースレッドから呼ばれる</b>（探索の{@code whenComplete}）。
+     * <p><b>Called from a worker thread</b> (the search's {@code whenComplete}).
      */
     void noteStalled() {
         stalled = true;
@@ -235,13 +235,13 @@ final class NetherVoxelGuide {
     }
 
     /**
-     * 地図をメインスレッドで格子へ写し、Dijkstraだけワーカーへ投げる。
+     * Copies the map into the grid on the main thread and hands only Dijkstra to the worker.
      *
-     * <p>地図は<b>2回読む</b>。1回目は床のあるYの範囲を測るだけで、箱の高さをそこから決める
-     * （{@link VoxelTerrain#boxFor}）。実機の地図読みは13msなので、2回でも安い。
+     * <p>The map is <b>read twice</b>. The first read only measures the Y range that has floors, from which the box height is decided
+     * ({@link VoxelTerrain#boxFor}). An in-game map read takes 13ms, so two are still cheap.
      *
-     * <p>目的地は{@code StanceFinder}へ通していない生の座標。ガイドの起点は上下24・左右16まで
-     * 探して決める（{@code VoxelCostToGo}）ので、数ブロックのずれは吸収される。
+     * <p>The goal is the raw coordinate, not passed through {@code StanceFinder}. The guide's origin is decided by searching up to
+     * 24 up/down and 16 sideways ({@code VoxelCostToGo}), so an offset of a few blocks is absorbed.
      */
     private void start(
             //? if >=1.17 {
@@ -263,39 +263,39 @@ final class NetherVoxelGuide {
         int sizeX = Math.max(player.getX(), goal.getX()) + VoxelTerrain.MARGIN_BLOCKS - minX + 1;
         int sizeZ = Math.max(player.getZ(), goal.getZ()) + VoxelTerrain.MARGIN_BLOCKS - minZ + 1;
         int referenceY = (player.getY() + goal.getY()) / 2;
-        // 実際の床範囲で作る箱は、少なくとも始点・目的地とその余白を含む。この最小の箱でさえ
-        // 上限へ収まらないなら、地図を何百万セル走査しても最後に必ず捨てることになる。
+        // The box built from the actual floor range includes at least the start, the goal and their margins. If even this minimal box
+        // doesn't fit within the cap, scanning millions of map cells would always end up discarded.
         SearchBounds minimumBox = VoxelTerrain.boxFor(level, player, goal,
                 Math.min(player.getY(), goal.getY()), Math.max(player.getY(), goal.getY()));
         if (VoxelTerrain.cellBlocksFor(minimumBox) == 0) {
-            LOGGER.debug("XaeroNav: 3D粗層の範囲が大きすぎるため地図読みを省略します ({})", minimumBox);
+            LOGGER.debug("XaeroNav: Skipping map read because the 3D coarse layer range is too large ({})", minimumBox);
             return;
         }
-        // 要求しないと、Xaeroが既にメモリへ載せているリージョンしか読めない。要求は非同期なので
-        // この回には間に合わないが、次の組み直しで効く
+        // Without a request, only regions Xaero already has in memory can be read. The request is async, so
+        // it won't make it in time for this round, but it takes effect on the next rebuild
         XaeroMapReader.requestLoad(minX >> 4, minZ >> 4,
                 ((minX + sizeX - 1) >> 4) - (minX >> 4) + 1,
                 ((minZ + sizeZ - 1) >> 4) - (minZ >> 4) + 1, referenceY);
 
-        // 地図は<b>1回だけ</b>読む。見えた床はそのまま覚えておき、箱が決まってから覚えている
-        // ぶんを格子へ流す。箱のYを次元の全高に取ると、天井より上の空きが格子の半分を占めて
-        // 「天井の上を橋で走る」ガイドになる（VoxelTerrain#boxFor）ので、高さは床から決める
+        // The map is read <b>only once</b>. Floors seen are remembered as-is, and once the box is decided the remembered
+        // ones feed the grid. Taking the box's Y as the dimension's full height makes the space above the ceiling fill half the grid,
+        // giving a guide that "runs on a bridge above the ceiling" (VoxelTerrain#boxFor), so the height is decided from the floors
         forgetOutside(key, minX, minZ, sizeX, sizeZ);
         FloorRange range = new FloorRange(rememberedFloors);
         int floors = XaeroMapReader.forEachCaveFloor(minX, minZ, sizeX, sizeZ, referenceY,
                 SAMPLE_STEP, range);
         if (floors == 0 && rememberedFloors.isEmpty()) {
-            // この範囲の地図をXaeroがまだ持っていない。床が1枚も無い格子から作る表は
-            // 直線距離を一定倍しただけのもので、幾何ヒューリスティックと同じことしか言わない
-            LOGGER.debug("XaeroNav: 3D粗層のもとになる地図がありません ({}, {})", minX, minZ);
+            // Xaero doesn't have the map for this range yet. A table built from a grid with no floors at all is
+            // just a constant multiple of straight-line distance, saying nothing the geometric heuristic doesn't
+            LOGGER.debug("XaeroNav: No map to build the 3D coarse layer from ({}, {})", minX, minZ);
             return;
         }
         rememberFloors(key, range);
         SearchBounds box = VoxelTerrain.boxFor(level, player, goal, floorLowest, floorHighest);
         VoxelTerrain terrain = VoxelTerrain.of(box, key.lavaPassable());
         if (terrain == null) {
-            // 目的地が遠すぎて、いちばん粗い格子でも収まらない
-            LOGGER.debug("XaeroNav: 3D粗層の箱が大きすぎます ({})", box);
+            // The goal is too far to fit even in the coarsest grid
+            LOGGER.debug("XaeroNav: 3D coarse layer box is too large ({})", box);
             return;
         }
         LongIterator remembered = rememberedFloors.iterator();
@@ -316,32 +316,32 @@ final class NetherVoxelGuide {
                         return;
                     }
                     if (error != null) {
-                        LOGGER.error("XaeroNav: 3D粗層の作成に失敗しました", error);
+                        LOGGER.error("XaeroNav: Failed to build the 3D coarse layer", error);
                         return;
                     }
                     if (guide == null) {
-                        // 黙ってガイド無しへ落とさない。遠距離ネザーで線が出ないのはまさにこれ
-                        LOGGER.debug("XaeroNav: 3D粗層の起点を決められませんでした (目的地={}, 箱={})",
+                        // Don't silently fall back to no guide. This is exactly why no line appears for long-distance Nether routes
+                        LOGGER.debug("XaeroNav: Could not determine the 3D coarse layer origin (goal={}, box={})",
                                 goal.toShortString(), box);
                         return;
                     }
                     built = new Built(key, box, player, guide);
-                    // 膨らみ＝始点の見積もり÷直線距離。<b>この層が効いているかはここだけで分かる</b>
-                    // ——1倍付近なら幾何ヒューリスティックと同じことしか言っていない。
-                    // 箱も出す: Yの範囲が歩ける高さより広いと、格子の大半が天井の上の空きになる
-                    LOGGER.debug("XaeroNav: 3D粗層 (床={}, {}, セル={}, 辺={}, 膨らみ{}倍, 箱={}, "
-                                    + "今回の床Y={}, 覚えている床={}, 地図{}ms, Dijkstra{}ms)",
+                    // Inflation = start estimate / straight-line distance. <b>Only this shows whether the layer is effective</b>:
+                    // near 1x it says nothing the geometric heuristic doesn't.
+                    // Also log the box: if the Y range is wider than walkable heights, most of the grid is empty space above the ceiling
+                    LOGGER.debug("XaeroNav: 3D coarse layer (floors={}, {}, cells={}, side={}, inflation {}x, box={}, "
+                                    + "floor Y this read={}, remembered floors={}, map {}ms, Dijkstra {}ms)",
                             floors, terrain.breakdown(), terrain.cellCount(), terrain.cellBlocks(),
                             round(inflation(guide, player, goal)), box,
-                            floors == 0 ? "読めず" : range.lowest + ".." + range.highest, rememberedCount,
+                            floors == 0 ? "unreadable" : range.lowest + ".." + range.highest, rememberedCount,
                             read, MonotonicTime.millis() - began - read);
                 });
     }
 
     /**
-     * 目的地が変わったら覚えている床を捨て、そうでなければ今度の走査範囲の外にあるものを捨てる。
+     * If the goal changed, discards remembered floors; otherwise discards those outside the current scan range.
      *
-     * <p>走査範囲は目的地へ近づくほど縮むので、これだけで覚えている量は頭打ちになる。
+     * <p>The scan range shrinks as the goal gets closer, so this alone caps the amount remembered.
      */
     private void forgetOutside(Key key, int minX, int minZ, int sizeX, int sizeZ) {
         if (!key.equals(floorRangeKey)) {
@@ -360,9 +360,9 @@ final class NetherVoxelGuide {
     }
 
     /**
-     * 今回見えた床のYを、この目的地についての範囲へ足す。目的地が変われば数え直す。
+     * Adds the floor Y seen this time to the range for this goal. Recounts if the goal changes.
      *
-     * <p>広げる側にしか動かさないのが要点（{@link #floorRangeKey}）。
+     * <p>The key is that it only ever widens ({@link #floorRangeKey}).
      */
     private void rememberFloors(Key key, FloorRange range) {
         if (!key.equals(floorRangeKey)) {
@@ -374,7 +374,7 @@ final class NetherVoxelGuide {
         floorHighest = Math.max(floorHighest, range.highest);
     }
 
-    /** 始点での見積もりが直線距離の何倍か。1倍付近なら、この層は何も足していない。 */
+    /** How many times the straight-line distance the estimate at the start is. Near 1x, this layer adds nothing. */
     private static double inflation(VoxelCostToGo guide, BlockPos player, BlockPos goal) {
         double straight = Heuristic.estimate(player.getX(), player.getY(), player.getZ(),
                 goal.getX(), goal.getY(), goal.getZ());
@@ -386,7 +386,7 @@ final class NetherVoxelGuide {
         return Math.round(value * 100.0) / 100.0;
     }
 
-    /** 目的地が変わった・案内を止めた。次に要求されたら組み直す。 */
+    /** The goal changed or guidance stopped. Rebuild on the next request. */
     void clear() {
         generation.incrementAndGet();
         built = null;

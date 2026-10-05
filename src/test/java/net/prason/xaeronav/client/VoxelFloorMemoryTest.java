@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link NetherVoxelGuide}が覚えている床の詰め方。座標が負でもYの端でも往復できないと、
- * 覚えた床が別の場所へ化けて格子が壊れる。
+ * How {@link NetherVoxelGuide} packs the floors it remembers. If it can't round-trip with negative coordinates or at the Y extremes,
+ * remembered floors turn into other locations and the grid breaks.
  */
 class VoxelFloorMemoryTest {
 
@@ -17,7 +17,7 @@ class VoxelFloorMemoryTest {
         assertEquals(x, NetherVoxelGuide.unpackX(packed), "X");
         assertEquals(z, NetherVoxelGuide.unpackZ(packed), "Z");
         assertEquals(y, NetherVoxelGuide.unpackY(packed), "Y");
-        assertEquals(lava, NetherVoxelGuide.unpackLava(packed), "溶岩");
+        assertEquals(lava, NetherVoxelGuide.unpackLava(packed), "lava");
     }
 
     @Test
@@ -29,7 +29,7 @@ class VoxelFloorMemoryTest {
 
     @Test
     void roundTripsTheEdgesOfEveryField() {
-        // ネザーのワールド境界（±29,999,984 ÷ 8）と、現世の高さの端
+        // The Nether's world border (±29,999,984 ÷ 8) and the Overworld's height extremes
         roundTrips(-3_749_998, 3_749_998, -64, false);
         roundTrips(3_749_998, -3_749_998, 319, true);
     }
@@ -38,8 +38,8 @@ class VoxelFloorMemoryTest {
     void differentFloorsStayDifferent() {
         long lava = NetherVoxelGuide.packFloor(10, 20, 30, true);
         long solid = NetherVoxelGuide.packFloor(10, 20, 30, false);
-        assertFalse(lava == solid, "溶岩かどうかで別の値になること");
+        assertFalse(lava == solid, "lava or not must give different values");
         assertTrue(NetherVoxelGuide.packFloor(10, 20, 30, true)
-                == NetherVoxelGuide.packFloor(10, 20, 30, true), "同じ床は同じ値になること");
+                == NetherVoxelGuide.packFloor(10, 20, 30, true), "the same floor must give the same value");
     }
 }

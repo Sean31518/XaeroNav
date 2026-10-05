@@ -21,7 +21,7 @@ class FarScaleCalibrationTest {
     private static final int RADIUS = 64;
     private static final LoadedArea EVERYTHING = (minX, maxX, minZ, maxZ) -> (maxX - minX + 1) * (maxZ - minZ + 1);
 
-    /** 東西に長い平らな床。まっすぐ歩けるので、真の残りは幾何下限にほぼ等しい。 */
+    /** A long east-west flat floor. You can walk straight, so the true remainder is nearly equal to the geometric lower bound. */
     private static FakeCells corridor() {
         FakeCells cells = FakeCells.empty(new SearchBounds(0, 56, 0, 511, 80, 31));
         for (int x = 0; x < 512; x++) {
@@ -47,7 +47,7 @@ class FarScaleCalibrationTest {
     void learnsHowMuchTheFarEstimateFallsShort() {
         FakeCells cells = corridor();
         BlockPos goal = new BlockPos(500, FLOOR_Y + 1, 16);
-        // ネザーの3D粗層と同じくらい、真値の半分しか出ない外の推定
+        // An outside estimate that yields only half the true value, like the Nether's 3D coarse layer
         FarField halved = (x, y, z) -> 0.5 * Heuristic.estimate(x, y, z, goal.getX(), goal.getY(), goal.getZ());
         FarScaleCalibration calibration = new FarScaleCalibration();
 

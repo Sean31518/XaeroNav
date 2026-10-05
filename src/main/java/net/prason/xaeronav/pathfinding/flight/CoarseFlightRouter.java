@@ -11,38 +11,38 @@ import net.prason.xaeronav.pathfinding.coarse.CoarseRouter;
 import net.prason.xaeronav.pathfinding.cost.FlightCosts;
 
 /**
- * {@link CoarseAirMap}の上を解く、空中の長距離ルート（層1相当）。描画距離の外まで届く。
+ * Long-distance aerial route (layer 1 equivalent) solved over {@link CoarseAirMap}. Reaches beyond the render distance.
  *
- * <p><b>歩行の{@code CoarseRouter}は流用しない。</b>あれは溶岩を通行不能〜高コストに、水をボート
- * 倍率で扱う歩行専用のコストモデルで、飛行では<b>溶岩の海の上を飛ぶのが完全に正解</b>——
- * 符号ごと間違っている。地形の読み方（{@code CoarseMap}）だけを共有して、コストは別に持つ。
+ * <p><b>Walking's {@code CoarseRouter} isn't reused.</b> It's a walking-only cost model that treats lava as impassable-to-expensive and water
+ * with the boat multiplier, whereas in flight <b>flying over a lava sea is perfectly correct</b>;
+ * the sign itself is wrong. Only the terrain reading ({@code CoarseMap}) is shared; costs are kept separately.
  *
- * <p>状態は{@code (チャンクX, チャンクZ, 高度帯)}。<b>同じセルの中で帯をまたぐ移動は作らない</b>——
- * 帯と帯のあいだにあるのは床（岩）なので、そこを縦に抜ける道があるかどうかはチャンク解像度では
- * 分からない。層をまたぐのは、隣のセルで帯どうしが重なっている所を通ることで自然に起きる。
- * 分からないものを繋がっていることにするより、層3（{@link AirGrid}）へ委ねる方が安全側。
- * これは歩行の層1/層2がレイヤーまたぎを表現しないのと同じ割り切り。
+ * <p>The state is {@code (chunkX, chunkZ, altitude band)}. <b>No moves are created that cross bands within the same cell</b>:
+ * between bands lies a floor (rock), and whether there's a way to pass through it vertically can't be told at
+ * chunk resolution. Crossing layers happens naturally by passing where bands overlap in a neighboring cell.
+ * Rather than treating the unknown as connected, it's safer to defer to layer 3 ({@link AirGrid}).
+ * This is the same trade-off as walking's layers 1/2 not representing layer crossings.
  */
 public final class CoarseFlightRouter {
 
     private static final int CELL_BLOCKS = 16;
 
-    /** 中間目標を落とす間隔（セル）。歩行の層1に揃える。 */
+    /** Interval (cells) at which intermediate goals are dropped. Matched to walking's layer 1. */
     private static final int WAYPOINT_SPACING_CELLS = 4;
 
-    /** 高さがこれだけ変わったら、間隔を待たずに中間目標を落とす（ブロック）。 */
+    /** If the height changes by this much, drop an intermediate goal without waiting for the interval (blocks). */
     private static final int WAYPOINT_VERTICAL_SPACING_BLOCKS = 24;
 
     /**
-     * 隣のセルの帯へ移るときに許す高さの隙間（ブロック）。重なっていなくても、これ以内なら
-     * 地形なりの緩い昇降とみなす。大きくすると、実際には岩で隔てられた別の階層どうしが
-     * 繋がっているように見えはじめる。
+     * Height gap allowed when moving to a band in a neighboring cell (blocks). Even without overlap, a gap within this
+     * is treated as a gentle climb or descent following the terrain. Making it larger starts to make separate levels that
+     * are actually divided by rock look connected.
      */
     private static final int BAND_LINK_GAP_BLOCKS = 8;
 
     /**
-     * データが無いセルを通る倍率。歩行の{@code UNKNOWN_MULTIPLIER}と同じ役割だが、飛行では
-     * 未訪問であることの不利が小さい（溶岩も水も関係なく、要るのは開けた空間だけ）ので控えめ。
+     * Multiplier for passing through cells with no data. Same role as walking's {@code UNKNOWN_MULTIPLIER}, but in flight
+     * the disadvantage of being unvisited is small (lava and water don't matter; all that's needed is open space), so it's modest.
      */
     private static final double UNKNOWN_MULTIPLIER = 1.3;
 
@@ -50,8 +50,8 @@ public final class CoarseFlightRouter {
     }
 
     /**
-     * {@code start}から{@code goal}への中間目標列。届かなければ、その時点で最もゴールに
-     * 近づけた地点までを返す（{@link CoarseRouter.Route#reachedGoal()}がfalse）。
+     * Intermediate-goal sequence from {@code start} to {@code goal}. If unreachable, returns up to the point that got
+     * closest to the goal at that time ({@link CoarseRouter.Route#reachedGoal()} is false).
      */
     public static CoarseRouter.Route findRoute(CoarseAirMap map, BlockPos start, BlockPos goal,
                                                 boolean rockets) {
@@ -71,8 +71,8 @@ public final class CoarseFlightRouter {
         Arrays.fill(previous, -1);
 
         if (map.blocked(startX, startZ) || map.blocked(goalX, goalZ)) {
-            // 出発点か目的地の列が粗い地図では壁。ここで無理に経路を作っても意味が無いので、
-            // 粗い層は諦めて層3（読み込み済みチャンクを見る側）へ委ねる
+            // The start or goal column is a wall on the coarse map. Forcing a route here is pointless, so
+            // give up on the coarse layer and defer to layer 3 (the side that looks at loaded chunks)
             return new CoarseRouter.Route(List.of(), false);
         }
         int startState = stateIndex(map, startX, startZ, map.bandAt(startX, startZ, start.getY()));
@@ -131,8 +131,8 @@ public final class CoarseFlightRouter {
                 for (int nextBand = 0; nextBand < map.stateBands(nextX, nextZ); nextBand++) {
                     int nextBottom = map.bandBottom(nextX, nextZ, nextBand);
                     int nextTop = map.bandTop(nextX, nextZ, nextBand);
-                    // 帯どうしが重なっていれば高さを変えずに移れる。離れていれば、その隙間ぶんの
-                    // 昇降が要る——離れすぎているものは繋がっている根拠が無いので辺を作らない
+                    // If the bands overlap, the move needs no height change. If they're apart, it needs a climb or descent
+                    // of that gap; bands too far apart have no evidence of being connected, so no edge is created
                     int vertical = verticalGap(bottom, top, nextBottom, nextTop);
                     if (Math.abs(vertical) > BAND_LINK_GAP_BLOCKS) {
                         continue;
@@ -159,8 +159,8 @@ public final class CoarseFlightRouter {
     }
 
     /**
-     * 2つの高度帯のあいだの符号付き最小移動量。重なっていれば0（高さを変えずに移れる）。
-     * 正なら登り、負なら下り。
+     * Signed minimum movement between two altitude bands. 0 if they overlap (move without changing height).
+     * Positive means climbing, negative means descending.
      */
     private static int verticalGap(int bottom, int top, int nextBottom, int nextTop) {
         if (nextBottom > top) {
@@ -177,7 +177,7 @@ public final class CoarseFlightRouter {
         int chunkZ = stateChunkZ(map, state);
         double dx = goal.getX() - (chunkX * CELL_BLOCKS + CELL_BLOCKS / 2.0);
         double dz = goal.getZ() - (chunkZ * CELL_BLOCKS + CELL_BLOCKS / 2.0);
-        // 帯の中でゴールのYに最も近い高さから測る。帯は幅を持つので、中心から測ると過大になる
+        // Measure from the height within the band closest to the goal's Y. Bands have thickness, so measuring from the center overestimates
         int from = map.clampToBand(chunkX, chunkZ, stateBand(state), goal.getY());
         return FlightCosts.heuristicTicks(Math.sqrt(dx * dx + dz * dz), goal.getY() - from, rockets);
     }
@@ -199,8 +199,8 @@ public final class CoarseFlightRouter {
         List<BlockPos> waypoints = new ArrayList<>();
         int lastX = stateChunkX(map, states.get(0));
         int lastZ = stateChunkZ(map, states.get(0));
-        // 高さは「1つ前の中間目標の高さを帯へ寄せた値」で決める。帯の中心を使うと、厚い帯で
-        // 高度が理由もなく跳ね、案内が上下に振れて見える
+        // The height is the previous intermediate goal's height clamped into the band. Using the band's center makes the altitude
+        // jump for no reason in thick bands, and the guidance appears to swing up and down
         int lastY = startY;
         for (int i = 1; i < states.size(); i++) {
             int state = states.get(i);

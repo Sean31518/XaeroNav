@@ -38,73 +38,73 @@ import net.prason.xaeronav.pathfinding.cost.DigCost;
 import java.util.function.Predicate;
 
 /**
- * 探索範囲のブロックを読むためのビュー。
+ * A view for reading blocks in the search range.
  *
- * <p>ブロックデータ自体は<b>コピーしない</b>。{@link #capture}がメインスレッドで集めるのは
- * 「読み込み済みチャンクへの参照」だけで、実際の{@link BlockState}はワーカースレッドが
- * チャンクから直接読む。
+ * <p>Block data itself is <b>not copied</b>. What {@link #capture} collects on the main thread is only
+ * "references to loaded chunks"; the actual {@link BlockState}s are read by the worker thread directly
+ * from the chunks.
  *
- * <p>形状・硬度の問い合わせ（{@code getCollisionShape}/{@code isFaceSturdy}/{@code getDestroySpeed}）は
- * {@code BlockState}側のキャッシュを読むだけでlevelを参照しないため、これもワーカースレッドから呼べる。
- * 唯一の例外が{@code Block#hasDynamicShape()}がtrueのブロックで、これらは形状の解決に実際のlevelを
- * 要求するため、安全側に倒して「進入も設置もできない障害物」として扱う。
+ * <p>Shape and hardness queries ({@code getCollisionShape}/{@code isFaceSturdy}/{@code getDestroySpeed}) just read
+ * {@code BlockState}'s cache and do not touch the level, so these too can be called from a worker thread.
+ * The only exception is blocks whose {@code Block#hasDynamicShape()} is true: they need the real level to resolve
+ * their shape, so we err on the safe side and treat them as "obstacles that can be neither entered nor placed into".
  *
- * <p><b>メインスレッドの書き込みとの競合について（裏取り済み、2026-09-13）:</b>
- * ワーカーはメインスレッドが同時に更新しうる{@code LevelChunk}を無同期で読む。実ソース
- * （{@code LevelChunk}/{@code LevelChunkSection}/{@code PalettedContainer}/{@code SimpleBitStorage}）を
- * 確認した結果は次の通り。
+ * <p><b>On races with main-thread writes (verified, 2026-09-13):</b>
+ * Workers read, without synchronization, {@code LevelChunk}s the main thread may update concurrently. Checking the
+ * actual sources ({@code LevelChunk}/{@code LevelChunkSection}/{@code PalettedContainer}/{@code SimpleBitStorage})
+ * found the following.
  * <ul>
- *   <li>参照の安定性は保証されている——{@code ChunkAccess.sections}は{@code final}配列、
- *       {@code LevelChunkSection.states}も{@code final}な{@code PalettedContainer}。チャンクの
- *       生存中にこれらの参照が別のチャンク/セクションへ化けることは無い。</li>
- *   <li>{@code PalettedContainer.data}は{@code volatile}で、読み取りは1回のvolatile読みで
- *       {@code palette}と{@code storage}を同じ世代へ固定してから読む。パレット拡張（bit幅が
- *       足りず配列を丸ごと差し替える）と同時に起きても、palette/storageが別世代で混ざることは無い。</li>
- *   <li><b>本当の競合点は{@code SimpleBitStorage}が持つ非{@code volatile}な{@code long[]}</b>。
- *       ブロック更新はここへ同期無しでread-modify-writeする。1つの{@code long}に複数ブロック分の
- *       状態が詰まっているため、メインスレッドの書き換えと同じ{@code long}内の別座標への
- *       ワーカーの読み取りは、可視性保証の無いデータ競合になる。{@code PalettedContainer}自身が
- *       持つ{@code ThreadingDetector}（{@code acquire}/{@code release}）も書き込み同士の多重アクセスしか
- *       検知せず、読み取りはそもそも素通りする——Mojang側も単一スレッド前提で設計している。</li>
- *   <li>ただし現代のJVM/ハードウェア（HotSpot、x86-64/ARM64）では整列された{@code long}配列要素の
- *       書き込みはアトミックなので、値が壊れて範囲外のパレットindexになりクラッシュする、という
- *       事態は実運用上ほぼ起きない。実際に起こりうるのは「メインスレッドの書き換え直前・直後の
- *       ごく短い間、ワーカーが更新前のブロックを読む」という軽微なstale readどまり。</li>
- *   <li>この残存リスクは{@code PathValidator.firstFailureFrom}が毎tickメインスレッドで最新の
- *       {@code level.getBlockState}を読み直して経路を検証する既存の仕組みで自己修復される。
- *       恒久的な破綻や見えたままの不整合にはならない。</li>
+ *   <li>Reference stability is guaranteed: {@code ChunkAccess.sections} is a {@code final} array, and
+ *       {@code LevelChunkSection.states} is also a {@code final} {@code PalettedContainer}. While a chunk is alive,
+ *       these references never turn into another chunk/section.</li>
+ *   <li>{@code PalettedContainer.data} is {@code volatile}, and a read pins {@code palette} and {@code storage} to the
+ *       same generation with a single volatile read. Even if it coincides with a palette resize (replacing the whole
+ *       array when the bit width runs out), palette and storage from different generations never mix.</li>
+ *   <li><b>The real race point is the non-{@code volatile} {@code long[]} held by {@code SimpleBitStorage}</b>.
+ *       Block updates read-modify-write it without synchronization. One {@code long} packs the states of several
+ *       blocks, so a worker reading another coordinate within the same {@code long} the main thread is rewriting is
+ *       a data race with no visibility guarantee. The {@code ThreadingDetector} ({@code acquire}/{@code release})
+ *       that {@code PalettedContainer} itself holds only detects concurrent writes, and reads pass straight through:
+ *       Mojang also designed it assuming a single thread.</li>
+ *   <li>However, on modern JVMs/hardware (HotSpot, x86-64/ARM64), writes to aligned {@code long} array elements are
+ *       atomic, so a corrupted value becoming an out-of-range palette index and crashing practically never happens.
+ *       What can actually happen is at most a minor stale read: "for a very brief moment right before or after the
+ *       main thread's rewrite, the worker reads the block from before the update".</li>
+ *   <li>This residual risk self-heals via the existing mechanism where {@code PathValidator.firstFailureFrom} re-reads
+ *       the latest {@code level.getBlockState} on the main thread every tick to validate the route.
+ *       It never becomes a permanent failure or a lingering inconsistency.</li>
  * </ul>
- * 上記の判断により、section単位のコピーやrevision照合といった構造変更は見送っている
- * （実害の乏しさに対してホットパスの性能コストが見合わない）。実機で本節の想定を超える
- * 症状（stale readでは説明が付かない恒久的な経路破綻等）が確認された場合のみ再検討する。
+ * Based on the above, structural changes such as per-section copies or revision checks are deferred
+ * (the hot-path performance cost is not worth it given how little real harm there is). Reconsider only if symptoms
+ * beyond what this section assumes are confirmed in-game (permanent route failures that stale reads cannot explain, etc.).
  *
- * <p><b>スレッド契約:</b> {@link #capture}はメインスレッドから呼ぶこと。生成後のインスタンスは
- * 単一のワーカースレッドが占有する（直前チャンクとセルのキャッシュを可変フィールドに持つため、
- * 複数スレッドで共有してはならない）。<b>探索を並列に走らせるときは{@link #forParallelSearch}で
- * ビューを分ける</b>——共有すると壊れ方が例外とは限らず、別のチャンクのブロックを読んだまま
- * 経路が出る。
+ * <p><b>Thread contract:</b> call {@link #capture} from the main thread. Once created, an instance is owned by a
+ * single worker thread (it keeps the previous chunk and cell caches in mutable fields, so it must not be shared
+ * across threads). <b>When running searches in parallel, split views with {@link #forParallelSearch}</b>: sharing
+ * does not necessarily fail with an exception, and a route can come out having read blocks from a different
+ * chunk.
  */
 public final class ChunkView implements CellSource {
 
-    // セルキャッシュの「未計算」を表す番兵。上位32bitは掘削tick数のfloatビット列で、
-    // 全ビットが立つ＝NaNになる値は生成されないため、この値と衝突しない。
+    // Sentinel for "not computed" in the cell cache. The upper 32 bits are the float bits of the dig tick count,
+    // and all bits set = NaN is never produced, so it cannot collide with this value.
     private static final long NOT_CACHED = -1L;
 
-    /** 探索1回でセルは数万〜数十万件になる。伸ばしながら作るとその途中で毎回全件の詰め直しが起きる。 */
+    /** A single search touches tens to hundreds of thousands of cells. Growing the map as it fills would rehash everything each time along the way. */
     private static final int CELL_CACHE_CAPACITY = 1 << 15;
 
     /**
-     * 落下ダメージを許容する場合に受け入れる上限（ダメージ点＝0.5ハート単位）を体力から求める割合。
-     * 満タン(20)なら6点＝3ハート＝9マスの落下まで許すことになる。
+     * Fraction of health used to derive the accepted limit (damage points = half-heart units) when fall damage is allowed.
+     * At full health (20), that allows 6 points = 3 hearts = a 9-block fall.
      */
     private static final float FALL_DAMAGE_HEALTH_FRACTION = 3.0f;
 
     private final Long2ObjectMap<LevelChunk> chunks;
     private final int totalChunksInBounds;
     private final SearchBounds bounds;
-    /** メインスレッドで複製したホットバー。掘削コスト計算をワーカースレッドで行うために必要。 */
+    /** Hotbar copied on the main thread. Needed to compute dig costs on a worker thread. */
     private final ItemStack[] hotbar;
-    /** ホットバー各スロットの効率強化レベル。エンチャントの解決にはレジストリが要るのでメインスレッドで取る。 */
+    /** Efficiency level of each hotbar slot. Resolving enchantments needs the registry, so this is read on the main thread. */
     private final int[] hotbarEfficiency;
     private final MovementOptions options;
     private final boolean canPlaceBlocks;
@@ -117,26 +117,26 @@ public final class ChunkView implements CellSource {
     private final double minDescentTicksPerBlock;
 
     /**
-     * 落差に上限が無い落下がありうるか（水へ落ちる、または水バケツMLG）。落下ダメージの許容量を
-     * 変えたときに下降の下限を引き直すのに要る（{@link #minDescentTicksPerBlock(int)}）。
+     * Whether a fall with unlimited height is possible (falling into water, or a water bucket MLG). Needed to redo the
+     * lower bound of descent when the fall damage allowance changes ({@link #minDescentTicksPerBlock(int)}).
      */
     private final boolean deepFallPossible;
     private final int minBuildHeight;
     private final int maxBuildHeight;
     private final int minSection;
 
-    /** {@code null}ならセルを覚えない（{@link #forGraphBuild}）。 */
+    /** If {@code null}, cells are not remembered ({@link #forGraphBuild}). */
     private final Long2LongOpenHashMap cells;
 
     /**
-     * ブロック状態ごとの判定結果。{@link BlockState}は不変のグローバルシングルトンなので、
-     * 同じ状態のセルは座標が違っても結果が同じになる。洞窟1つに実際に現れる状態は数十種類しかないのに、
-     * 当たり判定の解決とホットバー全スロットの採掘速度比較はセルごとに走っていた。
+     * Check results per block state. {@link BlockState} is an immutable global singleton, so cells with the same state
+     * give the same result regardless of coordinates. Only a few dozen states actually appear in a cave, yet collision
+     * resolution and the mining speed comparison across every hotbar slot were running per cell.
      */
     private final Reference2LongOpenHashMap<BlockState> states = new Reference2LongOpenHashMap<>();
 
-    // 経路探索のブロック参照は同一チャンク内に強く局在するので、直前のチャンクを覚えておくだけで
-    // 大半のアクセスでハッシュ表引きを省略できる。null（未ロード）もそのまま覚えて再引きを防ぐ。
+    // Pathfinding block lookups are strongly localized within a single chunk, so just remembering the previous chunk
+    // skips the hash lookup for most accesses. null (unloaded) is remembered as-is too, to avoid looking it up again.
     private LevelChunk cachedChunk;
     private long cachedChunkKey = ChunkPos.INVALID_CHUNK_POS;
 
@@ -168,30 +168,31 @@ public final class ChunkView implements CellSource {
         if (cacheCells) {
             this.cells.defaultReturnValue(NOT_CACHED);
         }
-        // 実在するブロック状態はPRESENTが必ず立つので、0（＝ABSENT）を未計算の番兵に使える
+        // A real block state always has PRESENT set, so 0 (= ABSENT) can be used as the "not computed" sentinel
         this.states.defaultReturnValue(CellData.ABSENT);
     }
 
     /**
-     * ボートで水面を渡る移動を提示してよいか。持ち物にあるか、<b>いま乗っているか</b>のどちらか。
+     * Whether moves crossing water by boat may be offered: either a boat is in the inventory, or <b>you are riding one
+     * now</b>.
      *
-     * <p>乗っている間はボートがアイテムではなくエンティティになるので、持ち物だけを見ると
-     * 「岸でボートを出せ」と案内した直後、その通りにした瞬間に前提が消えて経路が組み替わる。
+     * <p>While riding, the boat is an entity rather than an item, so looking only at the inventory would mean that right
+     * after guiding "place a boat at the shore", the moment you do so the premise vanishes and the route gets rebuilt.
      */
     public static boolean boatAvailable(Player player) {
         return ridingBoat(player)
                 || hasItem(GameCompat.inventory(player), stack -> stack.getItem() instanceof BoatItem);
     }
 
-    /** いまボートに乗っているか。 */
+    /** Whether you are currently riding a boat. */
     public static boolean ridingBoat(Player player) {
         return player.getVehicle() instanceof Boat;
     }
 
     /**
-     * 持ち物に条件を満たすスタックがあるか。{@code Inventory#contains(Predicate)}は1.21.1にしか
-     * 無いオーバーロードなので、1.20.1でも同じ結果になる手書きの探索で代える
-     * （バージョンゲートを避けて済むJDK/vanilla API差はゲートしない方針）。
+     * Whether the inventory has a stack matching the condition. {@code Inventory#contains(Predicate)} is an overload
+     * that only exists in 1.21.1, so it is replaced with a hand-written search that gives the same result on 1.20.1
+     * (the policy is not to gate JDK/vanilla API differences that can be avoided without a version gate).
      */
     public static boolean hasItem(Inventory inventory, Predicate<ItemStack> predicate) {
         for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
@@ -202,7 +203,7 @@ public final class ChunkView implements CellSource {
         return false;
     }
 
-    /** メインスレッド専用。読み込み済みチャンクへの参照とホットバーの複製だけを集める。 */
+    /** Main thread only. Collects only references to loaded chunks and a copy of the hotbar. */
     public static ChunkView capture(Level level, Player player, SearchBounds bounds, MovementOptions options) {
         int minChunkX = bounds.minX() >> 4;
         int maxChunkX = bounds.maxX() >> 4;
@@ -213,8 +214,8 @@ public final class ChunkView implements CellSource {
                 new Long2ObjectOpenHashMap<>((maxChunkX - minChunkX + 1) * (maxChunkZ - minChunkZ + 1));
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
-                // 未ロードのチャンクはそもそも読めない。ここで拾わないことで、経路は自然に
-                // 読み込み済み範囲の縁で打ち切られる（進入不可のセルとして扱われるため）。
+                // Unloaded chunks cannot be read at all. By not picking them up here, routes are naturally
+                // cut off at the edge of the loaded area (they are treated as impassable cells).
                 LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
                 if (chunk != null) {
                     chunks.put(GameCompat.chunkKey(chunkX, chunkZ), chunk);
@@ -222,9 +223,9 @@ public final class ChunkView implements CellSource {
             }
         }
 
-        // 1.21より前はエンチャントがレジストリ経由のHolderではなく、Enchantments直下の静的フィールドを
-        // そのままEnchantmentHelperへ渡す旧モデル（フィールド名は1.20.5でBLOCK_EFFICIENCYからEFFICIENCYへ変わった）。
-        // vanilla APIの形そのものが違うので、ここだけはpathfinding/にゲートを置く例外にする
+        // Before 1.21, enchantments are not registry Holders but the old model that passes static fields directly
+        // under Enchantments to EnchantmentHelper (the field name changed from BLOCK_EFFICIENCY to EFFICIENCY in 1.20.5).
+        // The vanilla API shape itself differs, so this is the one exception where a gate is placed in pathfinding/
         //? if >=1.21.2 {
         /*Holder<Enchantment> efficiency = level.registryAccess()
                 .lookupOrThrow(Registries.ENCHANTMENT)
@@ -243,15 +244,15 @@ public final class ChunkView implements CellSource {
         for (int slot = 0; slot < hotbar.length; slot++) {
             ItemStack stack = GameCompat.inventory(player).getItem(slot);
             hotbar[slot] = stack.copy();
-            // NeoForge/Forgeが足す ItemStack#getEnchantmentLevel は使わない。この階層はローダーに
-            // 依存しない決まりで、他のMODがエンチャント値を動的に書き換える場合まで拾う必要も無い。
-            // 1.20.1-forge/1.21.1-neoforgeはgetItemEnchantmentLevelをその動的な値へ差し替えた
-            // (deprecated)ので、NBTの値をそのまま返すgetTagEnchantmentLevelを使う。Fabricは無改造の
-            // vanilla APIでgetItemEnchantmentLevelが最初からNBTの値を返し、1.21.1-forgeはそもそも
-            // getTagEnchantmentLevelを持たない（Forge/NeoForgeが1.21で別々にpatchしたため）ので、
-            // その2つはgetItemEnchantmentLevelのままでよい。1.20.5〜1.20.6はNBTがデータコンポーネントに
-            // 置き換わった直後でgetTagEnchantmentLevelがどのローダーにも無く、NeoForgeはgetItemEnchantmentLevelを
-            // 非推奨にしているので、保存された値をデータコンポーネントから直接読む
+            // ItemStack#getEnchantmentLevel added by NeoForge/Forge is not used. This layer must not depend on the
+            // loader, and there is no need to pick up other mods dynamically rewriting enchantment values.
+            // 1.20.1-forge/1.21.1-neoforge replaced getItemEnchantmentLevel with that dynamic value
+            // (deprecated), so use getTagEnchantmentLevel, which returns the NBT value as-is. On Fabric the unmodified
+            // vanilla API's getItemEnchantmentLevel returns the NBT value from the start, and 1.21.1-forge does not even
+            // have getTagEnchantmentLevel (Forge and NeoForge patched it separately in 1.21), so
+            // those two can keep getItemEnchantmentLevel. 1.20.5 to 1.20.6 came right after NBT was replaced by data
+            // components, so no loader has getTagEnchantmentLevel, and NeoForge deprecates getItemEnchantmentLevel,
+            // so the stored value is read directly from the data component
             //? if >=1.20.5 && <1.21 {
             /*hotbarEfficiency[slot] = stack.getOrDefault(DataComponents.ENCHANTMENTS, ItemEnchantments.EMPTY)
                     .getLevel(efficiency);
@@ -265,48 +266,48 @@ public final class ChunkView implements CellSource {
             /*hotbarEfficiency[slot] = EnchantmentHelper.getItemEnchantmentLevel(efficiency, stack);
             *///?}
         }
-        // 置ける枚数は持ち物<b>全体</b>で数える。ホットバーだけを見ていた頃は、インベントリに
-        // 1スタック持っていても橋の案内が出ず、逆にホットバーの1個だけで64マスの橋が出ていた。
-        // 採掘の道具（hotbar）をホットバーに限るのとは要求が違う——道具は持ち替えないと使えないが、
-        // 足場は置く前にホットバーへ移せる
+        // Placeable blocks are counted across the <b>whole</b> inventory. Back when only the hotbar was checked,
+        // carrying a stack in the inventory produced no bridge guidance, while a single block on the hotbar produced
+        // a 64-block bridge. The requirement differs from limiting mining tools (hotbar) to the hotbar: tools must be
+        // held to be used, but footing blocks can be moved to the hotbar before placing
         int placeableBlocks = countPlaceableBlocks(player);
 
         int maxFallDamagePoints = options.fallDamageToleranceEnabled()
                 ? (int) (player.getHealth() / FALL_DAMAGE_HEALTH_FRACTION) : 0;
-        // バニラの落下ダメージは ceil(落下距離 - SAFE_FALL_BLOCKS) 点（0.5ハート単位）で、
-        // それが体力以上なら死ぬ。落差は整数マスなので ceil は体力側に掛ければ足りる。
-        // 落下ダメージの許容設定とは無関係に求める——あちらは「意図して降りてよい高さ」、
-        // こちらは「跳んで外したときに死ぬか」で、跳躍は設定に関わらず生成されるため
+        // Vanilla fall damage is ceil(fall distance - SAFE_FALL_BLOCKS) points (half-heart units),
+        // and you die if that is at least your health. Drops are whole blocks, so applying ceil to the health side is enough.
+        // Computed independently of the fall damage setting: that one is "the height you may intentionally descend",
+        // this one is "do you die if a jump misses", and jumps are generated regardless of the setting
         int fatalFallBlocks = ActionCosts.SAFE_FALL_BLOCKS + (int) Math.ceil(player.getHealth());
-        // ultraWarmな次元（ネザー）は水を置いても即座に蒸発するので、着地寸前に水バケツを置く
-        // MLGは物理的に実行できない。次元を見ずに許可すると、実行不可能な落下を経路に載せてしまう
+        // In ultraWarm dimensions (the Nether), placed water evaporates instantly, so an MLG placing a water bucket just
+        // before landing is physically impossible. Allowing it without checking the dimension would put impossible falls on routes
         boolean waterEvaporates = GameCompat.waterEvaporates(level, player.blockPosition());
         boolean canMlgWaterBucket = options.fallDamageToleranceEnabled() && !waterEvaporates
                 && hasItem(GameCompat.inventory(player), stack -> stack.getItem() == Items.WATER_BUCKET);
         boolean boatAvailable = boatAvailable(player);
         boolean ridingBoat = ridingBoat(player);
 
-        // 下降のヒューリスティックの下限は、実際に生成されうる最大の落差で決まる。
-        // FALL_TO_WATERは着水先に水があるときだけ生成され、ultraWarmな次元（ネザー）には水が
-        // 存在しない（置いても蒸発する——BucketItemがそう書いてある）。水も水バケツMLGも無く、
-        // 落下ダメージも許容しないなら、落ちられるのは安全高さまでで打ち止めになる
+        // The lower bound of the descent heuristic is set by the largest drop that can actually be generated.
+        // FALL_TO_WATER is generated only when there is water at the landing spot, and ultraWarm dimensions (the Nether)
+        // have no water (placed water evaporates; BucketItem says so). With no water, no water bucket MLG, and
+        // no fall damage allowed, falls stop at the safe height
         boolean deepFallPossible = !waterEvaporates || canMlgWaterBucket;
         double minDescentTicksPerBlock = descentBound(deepFallPossible, maxFallDamagePoints);
 
-        // クリエイティブは置いても減らないので予算を掛けない（0＝無制限）。設定でも切れる。
+        // Creative does not consume placed blocks, so no budget applies (0 = unlimited). It can also be turned off in settings.
         //
-        // 下限が1なのは0が「無制限」を意味するから——予備の設定が手持ちを上回っても、そこで0にすると
-        // 制限が丸ごと外れて逆に緩くなる。1個だけ使える状態に倒しておけば、足りない経路は緩和の
-        // 梯子（予算を外す段）が受ける。canPlaceBlocksの方に予備を織り込まないのも同じ理由で、
-        // 詰むくらいなら予備を使ってよい
+        // The lower bound is 1 because 0 means "unlimited": if the reserve setting exceeds what you carry, setting 0
+        // there would remove the limit entirely and make it looser instead. Falling back to a state where just one can be
+        // used lets the relaxation ladder (the step that lifts the budget) take routes that need more. The reserve is not
+        // built into canPlaceBlocks for the same reason: rather than getting stuck, it is fine to use the reserve
         boolean creative = GameCompat.abilities(player).instabuild;
         int placedBlockBudget = options.blockBudgetEnabled() && !creative
                 ? Math.max(1, placeableBlocks - options.blockBudgetReserve())
                 : 0;
-        // クリエイティブは持ち物が空でも置ける（インベントリから好きなブロックを取れる）。
-        // 手持ちだけを見ていた頃は、ブロックを持たずにジ・エンドへ来ると橋が1本も生成されず、
-        // 島渡りの経路が原理的に出なかった——しかも案内には何も出ないので、
-        // 「島渡りだけできない」としか見えない
+        // Creative can place even with an empty inventory (any block can be taken from the inventory screen).
+        // Back when only carried blocks were checked, arriving in the End without blocks generated not a single bridge,
+        // so island-crossing routes could never come out in principle, and since the guidance showed nothing,
+        // it just looked like "only island crossing fails"
         boolean canPlaceBlocks = options.bridgingEnabled() && (placeableBlocks > 0 || creative);
 
         int totalChunksInBounds = (maxChunkX - minChunkX + 1) * (maxChunkZ - minChunkZ + 1);
@@ -318,12 +319,12 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * 持ち物にある足場に使えるブロックの総数。ホットバーに限らず<b>全スロット</b>を見る——
-     * 置く前にホットバーへ移せるので、あるのに数えないと予算が実態より厳しくなる。
+     * Total number of blocks in the inventory usable as footing. Looks at <b>every slot</b>, not just the hotbar:
+     * they can be moved to the hotbar before placing, so not counting them would make the budget stricter than reality.
      *
-     * <p>HUDが不足を知らせるのにも使う。<b>探索時の値を覚えておくのではなく、その場で数え直す</b>
-     * ——経路は目的地をキーにキャッシュされるので、途中でブロックを使っても拾っても引き直されない
-     * （ボート・ロケットと同じ既知の罠）。
+     * <p>Also used by the HUD to warn about shortages. <b>It recounts on the spot rather than remembering the value from
+     * search time</b>: routes are cached keyed by destination, so using or picking up blocks along the way does not
+     * re-plan (the same known trap as boats and rockets).
      */
     public static int countPlaceableBlocks(Player player) {
         Inventory inventory = GameCompat.inventory(player);
@@ -337,7 +338,7 @@ public final class ChunkView implements CellSource {
         return total;
     }
 
-    /** このビューがチャンクを掴んでいるか（読み込み済みで、範囲の中）。 */
+    /** Whether this view holds the chunk (loaded and within range). */
     public boolean chunkLoaded(int chunkX, int chunkZ) {
         return chunks.containsKey(GameCompat.chunkKey(chunkX, chunkZ));
     }
@@ -351,17 +352,17 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * 同じチャンク参照を使い、キャッシュだけを持ち直した独立のビュー。<b>2つの探索を同時に走らせる
-     * ときは、必ず片方にこれを渡すこと</b>（{@code PathfindingExecutor#submitWithDeepFallback}）。
+     * An independent view using the same chunk references with only the caches recreated. <b>When running two searches
+     * at once, always pass this to one of them</b> ({@code PathfindingExecutor#submitWithDeepFallback}).
      *
-     * <p>共有してよいのは{@code chunks}だけ——{@link #capture}が組み終えた後は読むだけなので、
-     * 複数スレッドから引いても壊れない。逆に{@code cells}・{@code states}・チャンクのメモは
-     * どれも探索中に書き換わるので、共有すると{@code Long2LongOpenHashMap}が内部で壊れて
-     * {@code ArrayIndexOutOfBoundsException}になるか、キーと値がねじれて<b>別のチャンクの
-     * ブロックを読む</b>（メモは{@code cachedChunkKey}と{@code cachedChunk}を別々に書くため）。
+     * <p>Only {@code chunks} may be shared: once {@link #capture} has built it, it is read-only, so lookups from
+     * multiple threads do not break it. On the other hand, {@code cells}, {@code states}, and the chunk memo are all
+     * rewritten during search, so sharing them corrupts the {@code Long2LongOpenHashMap} internally, causing an
+     * {@code ArrayIndexOutOfBoundsException}, or twists keys and values so it <b>reads blocks from a different
+     * chunk</b> (the memo writes {@code cachedChunkKey} and {@code cachedChunk} separately).
      *
-     * <p>ホットバーを複製するのは、{@link ItemStack}が採掘速度の解決で内部に遅延キャッシュを
-     * 持ちうるため。9スロットぶんなので実質ただ。
+     * <p>The hotbar is copied because {@link ItemStack} may hold an internal lazy cache when resolving mining speed.
+     * It is only 9 slots, so it is practically free.
      */
     public ChunkView forParallelSearch() {
         ItemStack[] copiedHotbar = new ItemStack[hotbar.length];
@@ -375,10 +376,12 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * 航法グラフを組むスレッドが占有するビュー。{@link #forParallelSearch}と違って<b>セルを覚えない</b>。
+     * A view owned by the thread building the navigation graph. Unlike {@link #forParallelSearch}, it <b>does not
+     * remember cells</b>.
      *
-     * <p>グラフは窓全体（数千セクション）を舐めるので、覚えると1本のビューが数十万〜数百万件の表を抱え、
-     * 並列の手の数だけ膨らむ。移動生成は探索の側（{@code MemoCells}）が区間ごとにセルを覚えるので、ここで覚えても速くならない。
+     * <p>The graph sweeps the whole window (thousands of sections), so remembering would make one view hold a table of
+     * hundreds of thousands to millions of entries, multiplied by the number of parallel workers. Move generation
+     * remembers cells per leg on the search side ({@code MemoCells}), so remembering here would not make it faster.
      */
     public ChunkView forGraphBuild() {
         ItemStack[] copiedHotbar = new ItemStack[hotbar.length];
@@ -392,11 +395,12 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * 同じチャンク参照を使い、掘削だけを禁じたビュー。{@link #capture}をもう一度呼ばずに済ませるための派生。
+     * A view using the same chunk references with only digging disabled. Derived so that {@link #capture} need not be
+     * called again.
      *
-     * <p>セルの判定結果は掘削の可否で変わるので、キャッシュは共有せず作り直す。チャンク参照とホットバーは
-     * 読むだけなので共有してよい。派生元と派生先を別スレッドで同時に使ってはならない（{@link CellSource}の
-     * スレッド契約は据え置き）。
+     * <p>Cell check results depend on whether digging is allowed, so the cache is not shared but recreated. Chunk
+     * references and the hotbar are read-only and may be shared. The source and derived views must not be used
+     * concurrently on different threads ({@link CellSource}'s thread contract still applies).
      */
     public ChunkView withoutDigging() {
         return new ChunkView(chunks, totalChunksInBounds, bounds, hotbar, hotbarEfficiency,
@@ -406,8 +410,8 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * 落下ダメージの許容量から下降1ブロックあたりの下限を出す。落差に上限が無いなら終端速度の
-     * 下限まで緩める以外にない。
+     * Derives the per-block lower bound of descent from the fall damage allowance. If drop height is unlimited, there
+     * is no choice but to relax it down to the terminal velocity lower bound.
      */
     private static double descentBound(boolean deepFallPossible, int maxFallDamagePoints) {
         return deepFallPossible ? ActionCosts.FALL_ASYMPTOTIC_MIN_PER_BLOCK
@@ -420,8 +424,8 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * 空洞を渡る足場として置けるか。上に立てる（{@code standable}）ことに加えて、置いた先が空中でも
-     * 留まることを求める — 砂・砂利は置いた瞬間に落ちるので足場にならない。
+     * Whether it can be placed as footing to cross a gap. Besides being standable ({@code standable}), it must stay put
+     * even when placed in mid-air — sand and gravel fall the moment they are placed, so they cannot be footing.
      */
     private static boolean isBuildingBlock(ItemStack stack) {
         if (!(stack.getItem() instanceof BlockItem blockItem)) {
@@ -516,7 +520,7 @@ public final class ChunkView implements CellSource {
         return ridingBoat;
     }
 
-    /** 初回アクセス時に計算してキャッシュする。 */
+    /** Computed and cached on first access. */
     @Override
     public long cell(int x, int y, int z) {
         if (cells == null) {
@@ -538,13 +542,12 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * {@code MOTION_BLOCKING}ハイトマップの1つ上。{@code canSeeSky}（スカイライト15）は
-     * ライトエンジンを引くのでワーカースレッドからは触れないが、ハイトマップはチャンクが持つ
-     * ビット列を読むだけなので、ブロック状態と同じ条件でここから読める。
+     * One above the {@code MOTION_BLOCKING} heightmap. {@code canSeeSky} (skylight 15) goes through the light engine,
+     * so it cannot be touched from a worker thread, but the heightmap is just a bit array the chunk holds, so it can be
+     * read from here under the same conditions as block states.
      *
-     * <p>{@code MOTION_BLOCKING}はクライアントへ配信されるハイトマップなので、
-     * 読み込み済みチャンクなら必ず埋まっている（未生成なら{@code getHeight}側が組み直してしまうが、
-     * そこへ至るのはサーバー側のチャンクだけ）。
+     * <p>{@code MOTION_BLOCKING} is a heightmap sent to the client, so it is always filled for loaded chunks
+     * (if ungenerated, {@code getHeight} would rebuild it, but only server-side chunks get there).
      */
     @Override
     public int openSkyY(int x, int z) {
@@ -556,11 +559,12 @@ public final class ChunkView implements CellSource {
     }
 
     /**
-     * {@link #openSkyY}と同じ値を、{@link ChunkView}を組む<b>前に</b>1列だけ知りたいときに。
-     * 読み込まれていない列は{@link Integer#MAX_VALUE}（空の下だと言い切れないなら地上として扱わない）。
+     * For when you want the same value as {@link #openSkyY} for a single column <b>before</b> building a
+     * {@link ChunkView}. Unloaded columns give {@link Integer#MAX_VALUE} (if it cannot be asserted to be under open sky,
+     * it is not treated as the surface).
      *
-     * <p>探索範囲を決める前に地表の高さが要る場面がある——どこを地上とみなすかで探索の箱そのものが
-     * 決まるので、箱から組み立てる{@link ChunkView}では間に合わない。メインスレッド専用。
+     * <p>Some situations need the surface height before deciding the search range: what counts as the surface decides
+     * the search box itself, so a {@link ChunkView} built from the box is too late. Main thread only.
      */
     public static int openSkyY(Level level, int x, int z) {
         LevelChunk chunk = level.getChunkSource().getChunkNow(x >> 4, z >> 4);
@@ -599,13 +603,13 @@ public final class ChunkView implements CellSource {
             digTicks = 0.0;
         } else if (CellData.lava(flags) || CellData.hazard(flags) || CellData.unresolvedShape(flags)
                 || !options.diggingEnabled()) {
-            // 液体は掘削対象ではないので、進入不可を素手のdigTicksとして表現する。
-            // 危険セル（炎・パウダースノー・ポータル等）も掘って通す対象にはしない。
-            // diggingEnabled=falseの場合も同様に「掘って進入」という選択肢自体を消す。
+            // Liquids are not dig targets, so impassability is expressed as bare-hand digTicks.
+            // Hazard cells (fire, powder snow, portals, etc.) are not dug through either.
+            // Likewise when diggingEnabled=false, the option to "dig in" itself is removed.
             digTicks = ActionCosts.INFEASIBLE;
         } else {
-            // 落下ブロック連鎖のコストはここでは足さない(AStarPathfinder側が必須セル群の最上部から
-            // 一度だけスキャンする。ここで各セル個別に連鎖加算すると隣接する必須セル同士で二重計上になる)。
+            // The falling-block chain cost is not added here (AStarPathfinder scans once from the top of the required cells.
+            // Adding the chain per cell here would double-count between adjacent required cells).
             digTicks = DigCost.compute(hotbar, hotbarEfficiency, state);
         }
         return CellData.withDigTicks(flags, digTicks);
@@ -620,7 +624,7 @@ public final class ChunkView implements CellSource {
             return null;
         }
         LevelChunkSection section = chunk.getSections()[(y >> 4) - minSection];
-        // 1.17以前は空のセクションをnullで持つ（1.18からは空でも必ずセクションが入る）
+        // Up to 1.17, empty sections are held as null (from 1.18 on, a section is always present even if empty)
         return section == null ? Blocks.AIR.defaultBlockState() : section.getBlockState(x & 15, y & 15, z & 15);
     }
 

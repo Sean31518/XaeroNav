@@ -21,7 +21,7 @@ class WindowFieldTest {
 
     private static final int FLOOR_Y = 64;
 
-    /** 64×64の平らな石の床。{@code wall}なら x=32 に岩盤の壁を立て、z=8..9 だけ通れる隙間を空ける。 */
+    /** A flat 64x64 stone floor. With {@code wall}, a bedrock wall stands at x=32 with a passable gap only at z=8..9. */
     private static FakeCells world(boolean wall) {
         FakeCells cells = FakeCells.empty(new SearchBounds(0, 48, 0, 63, 96, 63));
         for (int x = 0; x < 64; x++) {
@@ -43,7 +43,7 @@ class WindowFieldTest {
     private static double optimalCost(FakeCells cells, BlockPos start, BlockPos goal) {
         PathResult result = new AStarPathfinder(cells, new SearchLimits(2_000_000, 60_000, 1.0))
                 .search(start, goal, () -> false);
-        assertTrue(result.complete(), "基準の探索が届かない");
+        assertTrue(result.complete(), "the reference search doesn't reach");
         return result.steps().stream().mapToDouble(PathStep::cost).sum();
     }
 
@@ -65,7 +65,7 @@ class WindowFieldTest {
         assertNotNull(field);
 
         double optimal = optimalCost(cells, start, goal);
-        // 壁の隙間まで回り込むので、直線（幾何下限）よりずっと高い
+        // It goes around to the gap in the wall, so it's much higher than the straight line (geometric lower bound)
         assertTrue(optimal > 1.5 * Heuristic.estimate(start.getX(), start.getY(), start.getZ(), goal.getX(),
                 goal.getY(), goal.getZ()));
         assertEquals(optimal, field.estimate(start.getX(), start.getY(), start.getZ()), optimal * 0.01);
@@ -74,7 +74,7 @@ class WindowFieldTest {
 
     @Test
     void retargetingTheGoalHeightMatchesAFreshGraph() {
-        // 実機のネザー: 地図のYが岩の中に落ちた目的地を、列が読み込まれてから立てる高さへ寄せ直す
+        // Real-game Nether: a destination whose map Y fell inside rock is re-snapped to a standable height once the column is loaded
         FakeCells cells = world(true);
         BlockPos inRock = new BlockPos(54, FLOOR_Y - 8, 50);
         BlockPos standable = new BlockPos(54, FLOOR_Y + 1, 50);
@@ -104,13 +104,13 @@ class WindowFieldTest {
         BlockPos goal = new BlockPos(54, FLOOR_Y + 1, 50);
         WindowField field = built(cells, goal, 32, 32, 40).field(32, 32, 40, FarField.UNKNOWN, () -> false);
         assertNotNull(field);
-        // 殻（立てる高さの上下2）より高い空中。グラフのノードではない
+        // Midair, above the shell (2 above/below standable heights). Not a graph node
         double high = field.estimate(10, FLOOR_Y + 12, 50);
         assertTrue(high >= Heuristic.estimate(10, FLOOR_Y + 12, 50, goal.getX(), goal.getY(), goal.getZ()),
-                "グラフに無い点が幾何下限を下回った: " + high);
-        // 立ち位置の真上1マス（置いたブロックの上に立つ形）。近くのノードの値から延びて、壁の回り込みを知っている
+                "a point not in the graph went below the geometric lower bound: " + high);
+        // One block directly above a standing spot (standing on a placed block). Extends from a nearby node's value and knows about going around the wall
         double onPlacedBlock = field.estimate(10, FLOOR_Y + 2, 50);
-        assertTrue(onPlacedBlock > field.estimate(10, FLOOR_Y + 1, 50) * 0.9, "近くの値から延びていない: " + onPlacedBlock);
+        assertTrue(onPlacedBlock > field.estimate(10, FLOOR_Y + 1, 50) * 0.9, "doesn't extend from nearby values: " + onPlacedBlock);
     }
 
     @Test
@@ -137,8 +137,8 @@ class WindowFieldTest {
         WindowField.Descent descent = field.descend(start.getX(), start.getY(), start.getZ());
         assertNotNull(descent);
         assertFalse(descent.reachedGoal());
-        // 窓は x=-12..36。出どころは目的地の側の縁
-        assertTrue(descent.exit().getX() >= 12 + 24 - 3, "縁で止まっていない: " + descent.exit());
+        // The window is x=-12..36. The exit is the edge on the destination's side
+        assertTrue(descent.exit().getX() >= 12 + 24 - 3, "didn't stop at the edge: " + descent.exit());
         assertEquals(field.estimate(start.getX(), start.getY(), start.getZ()), descent.inside() + descent.outside(), 1e-6);
     }
 
@@ -147,9 +147,9 @@ class WindowFieldTest {
         FakeCells cells = world(false);
         BlockPos start = new BlockPos(8, FLOOR_Y + 1, 32);
         BlockPos goal = new BlockPos(60, FLOOR_Y + 1, 32);
-        // 窓は x=-16..40 付近まで。目的地は外
+        // The window extends to around x=-16..40. The destination is outside
         NavGraph graph = built(cells, goal, 12, 32, 24);
-        // 平らな床の上では直線（幾何下限）がそのまま最適なので、外の値として正確
+        // On a flat floor the straight line (geometric lower bound) is exactly optimal, so it's accurate as the outside value
         FarField far = (x, y, z) -> Heuristic.estimate(x, y, z, goal.getX(), goal.getY(), goal.getZ());
         WindowField field = graph.field(12, 32, 24, far, () -> false);
         assertNotNull(field);
@@ -159,7 +159,7 @@ class WindowFieldTest {
 
     @Test
     void tellsASealedPocketApart() {
-        // 地面の16ブロック下に、掘らないと出られない小部屋。殻は立てる点の上下2までなので、地表と繋がらない
+        // A small room 16 blocks below the ground that can't be left without digging. The shell only reaches 2 above/below standable points, so it doesn't connect to the surface
         FakeCells cells = FakeCells.empty(new SearchBounds(0, 40, 0, 63, 96, 63));
         for (int x = 0; x < 64; x++) {
             for (int z = 0; z < 64; z++) {
@@ -178,15 +178,15 @@ class WindowFieldTest {
         BlockPos goal = new BlockPos(54, FLOOR_Y + 1, 50);
         WindowField field = built(cells, goal, 32, 32, 40).field(32, 32, 40, FarField.UNKNOWN, () -> false);
         assertNotNull(field);
-        assertTrue(field.connects(10, FLOOR_Y + 1, 50), "地表の点が繋がっていない");
-        assertFalse(field.connects(10, pocketY, 50), "地表と繋がっていない小部屋を繋がっているとした");
-        // 殻の外の空中（置いたブロックの上など）は、近くの値を延ばせばよいので断らない
+        assertTrue(field.connects(10, FLOOR_Y + 1, 50), "a surface point isn't connected");
+        assertFalse(field.connects(10, pocketY, 50), "treated a small room not connected to the surface as connected");
+        // Midair outside the shell (e.g. on top of a placed block) isn't refused, since extending nearby values is enough
         assertTrue(field.connects(10, FLOOR_Y + 12, 50));
     }
 
     @Test
     void bridgesAVoidWiderThanTheShell() {
-        // ジ・エンドの外側の島。間の奈落（40ブロック）は殻の水平幅の2倍より広く、橋の途中が殻に入らない
+        // The End's outer islands. The void between them (40 blocks) is wider than twice the shell's horizontal width, so the middle of the bridge isn't in the shell
         FakeCells cells = FakeCells.empty(new SearchBounds(0, 40, 0, 79, 96, 31)).canPlaceBlocks(true)
                 .maxVoidBridgeRunBlocks(96);
         for (int x = 0; x < 80; x++) {
@@ -203,14 +203,14 @@ class WindowFieldTest {
         BlockPos goal = new BlockPos(72, FLOOR_Y + 1, 16);
         WindowField field = built(cells, goal, 40, 16, 40).field(40, 16, 40, FarField.UNKNOWN, () -> false);
         assertNotNull(field);
-        assertTrue(field.connects(start.getX(), start.getY(), start.getZ()), "向こう岸の島が目的地へ繋がっていない");
+        assertTrue(field.connects(start.getX(), start.getY(), start.getZ()), "the island on the far side isn't connected to the destination");
         double optimal = optimalCost(cells, start, goal);
         assertEquals(optimal, field.exact(start.getX(), start.getY(), start.getZ()), optimal * 0.01);
     }
 
     @Test
     void bridgesALavaSeaWiderThanTheShell() {
-        // ネザーの溶岩の海を挟んだ島。間の溶岩（20ブロック）は殻の水平幅の2倍より広く、橋の上限（30）より狭い
+        // Islands across a Nether lava sea. The lava between them (20 blocks) is wider than twice the shell's horizontal width and narrower than the bridge cap (30)
         FakeCells cells = FakeCells.empty(new SearchBounds(0, 40, 0, 63, 96, 31)).canPlaceBlocks(true)
                 .maxBridgeRunBlocks(96).maxLavaBridgeRunBlocks(30);
         for (int x = 0; x < 64; x++) {
@@ -226,13 +226,13 @@ class WindowFieldTest {
                 }
             }
         }
-        // 島の上面は溶岩の面より7ブロック高い
+        // The islands' top surface is 7 blocks above the lava surface
         BlockPos start = new BlockPos(4, FLOOR_Y + 7, 16);
         BlockPos goal = new BlockPos(58, FLOOR_Y + 7, 16);
         WindowField field = built(cells, goal, 32, 16, 40).field(32, 16, 40, FarField.UNKNOWN, () -> false);
         assertNotNull(field);
         assertTrue(Double.isFinite(field.exact(start.getX(), start.getY(), start.getZ())),
-                "溶岩の海の向こうの島が目的地へ繋がっていない");
+                "the island beyond the lava sea isn't connected to the destination");
         double optimal = optimalCost(cells, start, goal);
         assertEquals(optimal, field.exact(start.getX(), start.getY(), start.getZ()), optimal * 0.02);
     }
@@ -240,7 +240,7 @@ class WindowFieldTest {
     @Test
     void refusesToGuideWhenTheGoalIsCutOff() {
         FakeCells cells = world(false);
-        // 目的地は窓の中だが、岩盤に埋まっていて殻のどこからも入れない
+        // The destination is inside the window, but buried in bedrock and unreachable from anywhere in the shell
         BlockPos goal = new BlockPos(40, FLOOR_Y - 10, 32);
         WindowField field = built(cells, goal, 32, 32, 40).field(32, 32, 40, FarField.UNKNOWN, () -> false);
         assertNotNull(field);

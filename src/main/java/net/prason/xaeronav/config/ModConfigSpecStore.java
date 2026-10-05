@@ -8,8 +8,8 @@ import java.util.function.Supplier;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
- * NeoForge側の保存先。読み書き・ファイル監視・不正値の補正はすべてFMLが持つ
- * {@code ModConfigSpec}に任せる。
+ * NeoForge-side storage. Reading, writing, file watching and correcting invalid values are all left to
+ * FML's {@code ModConfigSpec}.
  */
 public final class ModConfigSpecStore implements NavConfigStore, NavConfigSpec {
 
@@ -31,7 +31,7 @@ public final class ModConfigSpecStore implements NavConfigStore, NavConfigSpec {
         built.save();
     }
 
-    /** {@code ModContainer#registerConfig}へ渡すためのもの。 */
+    /** For passing to {@code ModContainer#registerConfig}. */
     public ModConfigSpec modConfigSpec() {
         return built;
     }

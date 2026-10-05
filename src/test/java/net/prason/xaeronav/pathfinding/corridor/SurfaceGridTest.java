@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.coarse.CoarseMap;
 
-/** {@link SurfaceGrid#resolveStandable}の振る舞い。 */
+/** Behavior of {@link SurfaceGrid#resolveStandable}. */
 class SurfaceGridTest {
 
     @Test
@@ -28,8 +28,8 @@ class SurfaceGridTest {
     }
 
     /**
-     * 目的地の解決だけは水面と水底の2択になる。海底(55)を指した目的地を水面(64)へ丸めると、
-     * 海の上で「到着」になってしまう。
+     * Only destination resolution is a choice between surface and bottom. Rounding a destination pointing at the seabed (55)
+     * to the surface (64) would make it "arrive" on top of the sea.
      */
     @Test
     void resolvesAnUnderwaterGoalToTheSeabedRatherThanTheSurface() {
@@ -38,9 +38,9 @@ class SurfaceGridTest {
         SurfaceGrid grid = builder.build();
 
         assertEquals(new BlockPos(1, 56, 1), grid.resolveStandableNear(1, 1, 55),
-                "水底を指したなら水底の1つ上（足元が砂で体が水）");
+                "If the bottom was pointed at, one above the bottom (feet on sand, body in water)");
         assertEquals(new BlockPos(1, 64, 1), grid.resolveStandableNear(1, 1, 63),
-                "水面付近を指したなら水面のまま");
+                "If near the surface was pointed at, stay at the surface");
     }
 
     @Test

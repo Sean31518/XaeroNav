@@ -15,17 +15,17 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * <b>実験用。</b>層3の移動生成が箱の中で張る辺を全部持つグラフ。
+ * <b>Experimental.</b> A graph holding every edge that layer 3's move generation builds inside a box.
  *
- * <p>始点から重み0（素のDijkstra）で箱を回し切り、{@link EdgeSink}で辺を拾う。
- * 2026-09-16の上界の実測で踏んだ罠の対策を最初から入れてある:
+ * <p>Sweeps the box from the start with weight 0 (plain Dijkstra) and collects edges via {@link EdgeSink}.
+ * Countermeasures for the pitfalls hit in the 2026-09-16 upper-bound measurement are built in from the start:
  * <ul>
- * <li><b>箱のYは絞らない</b>（呼び出し側が世界の高さを渡す）。絞るとエンドで奈落の下を回る道を
- *     知らず、残コストを過大に見積もる</li>
- * <li><b>閉包のゴールは本当のゴールと同じ列に置く</b>。{@code BuildMoves#addBridge}は奈落の上で
- *     ゴールへのL1距離が減る向きにしか橋を張らないので、別の点を置くと本当のゴールへ向かう橋が
- *     グラフから落ちる。Yだけを世界の外へずらして、到達で打ち切られないようにする</li>
- * <li><b>水平マージンは探索窓より広く取る</b>。はみ出した所でガイドが0を返し、幾何下限へ落ちる</li>
+ * <li><b>Don't narrow the box's Y</b> (the caller passes the world height). Narrowed, it doesn't know about routes
+ *     that go under the void in the End and overestimates the remaining cost</li>
+ * <li><b>Put the closure's goal in the same column as the real goal</b>. {@code BuildMoves#addBridge} only builds bridges
+ *     over the void in the direction that reduces L1 distance to the goal, so placing a different point drops bridges
+ *     toward the real goal from the graph. Only Y is shifted outside the world so it isn't cut off on arrival</li>
+ * <li><b>Make the horizontal margin wider than the search window</b>. Where it overflows, the guide returns 0 and falls to the geometric lower bound</li>
  * </ul>
  */
 final class ClosureGraph {
@@ -38,15 +38,15 @@ final class ClosureGraph {
     final IntArrayList from = new IntArrayList();
     final IntArrayList to = new IntArrayList();
     final FloatArrayList cost = new FloatArrayList();
-    /** ノードの種類（{@link #NATURAL}・{@link #DIG}・{@link #AIR}）。 */
+    /** Node kinds ({@link #NATURAL}, {@link #DIG}, {@link #AIR}). */
     final it.unimi.dsi.fastutil.bytes.ByteArrayList category = new it.unimi.dsi.fastutil.bytes.ByteArrayList();
     long buildMillis;
 
-    /** 掘らずに立てる（足元が床・水・掴まれるもの）。 */
+    /** Standable without digging (floor, water, or something climbable underfoot). */
     static final byte NATURAL = 0;
-    /** 体の2セルのどちらかを掘らないと入れない。 */
+    /** Can't be entered without digging one of the body's two cells. */
     static final byte DIG = 1;
-    /** 掘らずに入れるが、足場が無い（置いた足場の上・橋の途中・落下中）。 */
+    /** Enterable without digging, but with no footing (on a placed block, mid-bridge, falling). */
     static final byte AIR = 2;
 
     private CellSource source;
@@ -64,7 +64,7 @@ final class ClosureGraph {
         return from.size();
     }
 
-    /** 始点・目的地の外接矩形を水平に{@code margin}だけ広げ、Yは{@code minY..maxY}の箱。 */
+    /** A box: the start/destination bounding rectangle widened horizontally by {@code margin}, with Y spanning {@code minY..maxY}. */
     static SearchBounds box(CellSource all, BlockPos start, BlockPos goal, int margin, int minY, int maxY) {
         SearchBounds world = all.bounds();
         return new SearchBounds(
@@ -75,14 +75,14 @@ final class ClosureGraph {
     }
 
     /**
-     * @param start 立てる座標へ寄せた始点
-     * @param goal  立てる座標へ寄せた目的地（橋の向きを本番と揃えるためだけに使う）
+     * @param start the start, snapped to a standable position
+     * @param goal  the destination, snapped to a standable position (used only to match bridge direction with production)
      */
     static ClosureGraph build(CellSource all, BlockPos start, BlockPos goal, SearchBounds box) {
         return build(all, start, goal, box, false);
     }
 
-    /** @param naturalOnly trueなら自然に立てる点だけを展開する（体積を回らない安い閉包） */
+    /** @param naturalOnly if true, expands only naturally standable points (a cheap closure that doesn't sweep the volume) */
     static ClosureGraph build(CellSource all, BlockPos start, BlockPos goal, SearchBounds box, boolean naturalOnly) {
         long began = System.currentTimeMillis();
         CellSource view = new WindowedCells(all, start, 1 << 28, box);
@@ -104,7 +104,7 @@ final class ClosureGraph {
         PathResult result = closure.search(start,
                 new BlockPos(goal.getX(), box.maxY() + 10_000, goal.getZ()), () -> false);
         if (result.termination() != PathResult.Termination.EXHAUSTED) {
-            throw new IllegalStateException("閉包が回り切っていない: " + result.termination());
+            throw new IllegalStateException("closure didn't finish sweeping: " + result.termination());
         }
         graph.buildMillis = System.currentTimeMillis() - began;
         return graph;
@@ -138,7 +138,7 @@ final class ClosureGraph {
         return AIR;
     }
 
-    /** 種類ごとのノード数。 */
+    /** Node count per kind. */
     int[] categoryCounts() {
         int[] counts = new int[3];
         for (int i = 0; i < category.size(); i++) {
@@ -147,7 +147,7 @@ final class ClosureGraph {
         return counts;
     }
 
-    /** 両端が{@code allowed}に含まれる種類の辺だけを残す。{@code allowed}は種類ごとのビット。 */
+    /** Keeps only edges whose both ends are kinds included in {@code allowed}. {@code allowed} is a bit per kind. */
     BitSet edgesBetween(int allowed) {
         BitSet kept = new BitSet(from.size());
         for (int e = 0; e < from.size(); e++) {
@@ -160,8 +160,8 @@ final class ClosureGraph {
     }
 
     /**
-     * 自然に立てる点から水平{@code r}・垂直{@code k}以内にあるノードだけを残した辺。辺を間引くだけなので
-     * 残りコストは本物以上（過大評価側）に留まる。
+     * Edges keeping only nodes within horizontal {@code r} and vertical {@code k} of a naturally standable point. Since
+     * this only thins out edges, the remaining cost stays at or above the real one (on the overestimating side).
      */
     BitSet shellEdges(int r, int k) {
         int minX = Integer.MAX_VALUE;
@@ -178,7 +178,7 @@ final class ClosureGraph {
         }
         int sizeX = maxX - minX + 1;
         int sizeZ = maxZ - minZ + 1;
-        // 列ごとに、残してよい高さのビット（Yは最小から数えて最大512まで）
+        // Per column, bits for the heights that may be kept (Y counted from the minimum, up to 512)
         long[] allowed = new long[sizeX * sizeZ * 8];
         for (int i = 0; i < nodes(); i++) {
             if (category.getByte(i) != NATURAL) {
@@ -243,15 +243,16 @@ final class ClosureGraph {
         reverseWeight = weight;
     }
 
-    /** 窓の外の点の値。 */
+    /** Value for points outside the window. */
     @FunctionalInterface
     interface OutsideValue {
         double at(int x, int y, int z);
     }
 
     /**
-     * 窓（プレイヤーから水平{@code radius}の正方形）の中だけ本物の辺で逆Dijkstraし、窓から出る辺の先には
-     * {@code outside}の値を置く。窓の外の点はそのまま{@code outside}を返すガイド。
+     * A guide that runs reverse Dijkstra with real edges only inside the window (a square of horizontal {@code radius}
+     * around the player), puts {@code outside}'s values at the far ends of edges leaving the window, and returns
+     * {@code outside} directly for points outside the window.
      */
     CostToGo windowGuide(BlockPos goal, BlockPos player, int radius, OutsideValue outside) {
         ensureReverse();
@@ -264,7 +265,7 @@ final class ClosureGraph {
             distance[goalId] = 0.0;
             heap.push(0.0, goalId);
         }
-        // 窓の外にある点のうち、窓の中の点から辺が入ってくるものを種にする
+        // Seed with points outside the window that have edges coming in from points inside the window
         for (int v = 0; v < n; v++) {
             if (inWindow(v, player, radius)) {
                 continue;
@@ -325,7 +326,7 @@ final class ClosureGraph {
         return Math.abs(xs.getInt(id) - player.getX()) <= radius && Math.abs(zs.getInt(id) - player.getZ()) <= radius;
     }
 
-    /** 歩いている状態を優先し、無ければボートの状態のid。無ければ-1。 */
+    /** The id of the walking state, preferred, or else the boat state. -1 if neither. */
     int idAt(int x, int y, int z) {
         long key = BlockPos.asLong(x, y, z);
         int id = walking.get(key);
@@ -333,14 +334,14 @@ final class ClosureGraph {
     }
 
     /**
-     * 目的地までの残りコストを全ノードについて出す。{@code kept}が{@code null}でなければ、
-     * そこに立っている辺だけを使う。
+     * Computes the remaining cost to the destination for every node. If {@code kept} isn't {@code null},
+     * only the edges set there are used.
      */
     double[] distancesTo(BlockPos goal, BitSet kept) {
         return distancesTo(goal, kept, new IntArrayList(), new IntArrayList(), new FloatArrayList());
     }
 
-    /** {@code kept}の辺に加えて、{@code extraFrom→extraTo}の辺（値段{@code extraCost}）も使う。 */
+    /** Uses the edge {@code extraFrom->extraTo} (cost {@code extraCost}) in addition to the edges in {@code kept}. */
     double[] distancesTo(BlockPos goal, BitSet kept, IntArrayList extraFrom, IntArrayList extraTo,
                          FloatArrayList extraCost) {
         int n = nodes();
@@ -383,7 +384,7 @@ final class ClosureGraph {
             }
         }
         if (heap.isEmpty()) {
-            throw new IllegalStateException("閉包が目的地に届いていない: " + goal.toShortString());
+            throw new IllegalStateException("closure doesn't reach the destination: " + goal.toShortString());
         }
         while (!heap.isEmpty()) {
             double d = heap.topKey();
@@ -403,28 +404,28 @@ final class ClosureGraph {
         return distance;
     }
 
-    /** 残りコストの表をガイドとして引く。 */
+    /** Looks up the remaining-cost table as a guide. */
     CostToGo guide(double[] distance) {
         return new Table(this, distance);
     }
 
     /**
-     * 別の世界（Xaeroの地図から組み直した世界など）で作った表を、本物の座標から引くガイド。
-     * 引いた座標がグラフに無ければ、{@code reach}ブロック以内のノードから幾何下限で延ばした値の最小。
+     * A guide that looks up, by real coordinates, a table built in another world (e.g. a world rebuilt from Xaero's map).
+     * If the looked-up coordinate isn't in the graph, the minimum of values extended by the geometric lower bound from nodes within {@code reach} blocks.
      */
     CostToGo nearestGuide(double[] distance, int reach) {
         return (x, y, z) -> {
             if (idAt(x, y, z) < 0 && !Double.isFinite(nearestValue(distance, reach, x, y, z))) {
-                // グラフの外（箱の外・閉包が届かない所）は幾何下限に任せる
+                // Outside the graph (outside the box, or where the closure doesn't reach) is left to the geometric lower bound
                 return 0.0;
             }
             double value = nearestValue(distance, reach, x, y, z);
-            // グラフの中にあるのに値が無い（間引いた種類・行き止まり）点は避ける。0にすると吸い寄せる
+            // Avoid points that are in the graph but have no value (thinned-out kinds, dead ends). Returning 0 would attract the search
             return Double.isFinite(value) ? value : 1.0e7;
         };
     }
 
-    /** {@link #nearestGuide}と同じ引き方で、見つからなければ{@link Double#POSITIVE_INFINITY}。窓の境界の種に使う。 */
+    /** Same lookup as {@link #nearestGuide}, but {@link Double#POSITIVE_INFINITY} if nothing is found. Used to seed the window boundary. */
     double nearestValue(double[] distance, int reach, int x, int y, int z) {
         double value = exact(this, distance, x, y, z);
         if (Double.isFinite(value)) {
@@ -445,7 +446,7 @@ final class ClosureGraph {
         return bestValue;
     }
 
-    /** 閉包の中でのこのセルの値。{@code NaN}なら閉包の外。 */
+    /** This cell's value within the closure. {@code NaN} if outside the closure. */
     static double exact(ClosureGraph graph, double[] distance, int x, int y, int z) {
         int id = graph.idAt(x, y, z);
         return id < 0 ? Double.NaN : distance[id];
@@ -453,12 +454,12 @@ final class ClosureGraph {
 
     private record Table(ClosureGraph graph, double[] distance) implements CostToGo {
 
-        /** 閉包に含まれない座標。幾何下限に任せる。 */
+        /** A coordinate not in the closure. Left to the geometric lower bound. */
         private static final double UNKNOWN = 0.0;
 
         /**
-         * 閉包に含まれるのに目的地へ着けない座標。無限大にすると{@code selectFallback}の採点が
-         * NaNになるので、どの経路よりも高い有限値にする。
+         * A coordinate in the closure that can't reach the destination. Infinity would make {@code selectFallback}'s scoring
+         * NaN, so it's a finite value higher than any path.
          */
         private static final double DEAD_END = 1.0e7;
 
@@ -466,8 +467,8 @@ final class ClosureGraph {
         public double estimate(int x, int y, int z) {
             double value = exact(graph, distance, x, y, z);
             if (Double.isNaN(value)) {
-                // 掘った・置いたブロックで生まれた、閉包に無い立ち位置。0を返すとそこへ探索と終点選びが
-                // 吸い寄せられるので、近くの点の値から延ばす
+                // A standing spot not in the closure, created by dug or placed blocks. Returning 0 would attract the search and
+                // endpoint selection there, so extend from nearby points' values
                 double near = graph.nearestValue(distance, 3, x, y, z);
                 return Double.isFinite(near) ? near : UNKNOWN;
             }
@@ -475,7 +476,7 @@ final class ClosureGraph {
         }
     }
 
-    /** 重複を許す二分ヒープ（遅延削除）。 */
+    /** A binary heap that allows duplicates (lazy deletion). */
     static final class MinHeap {
         private double[] keys = new double[1024];
         private int[] values = new int[1024];

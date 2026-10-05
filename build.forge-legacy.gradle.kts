@@ -1,7 +1,7 @@
 plugins {
     id("xaeronav.common")
-    // jar-in-jar（jarJar configuration）はlegacyforgeプラグイン自体が既に持っている。
-    // FG6/7向けのnet.minecraftforge.jarjarを別途当てると衝突する（"jarJar configuration already exists"）
+    // The legacyforge plugin itself already provides jar-in-jar (the jarJar configuration).
+    // Also applying net.minecraftforge.jarjar for FG6/7 conflicts with it ("jarJar configuration already exists")
     id("net.neoforged.moddev.legacyforge") version "2.0.146"
 }
 
@@ -10,14 +10,14 @@ stonecutter.properties.tags(stonecutter.current.version, "forge")
 fun dep(key: String) = stonecutter.properties.get<String>("deps.$key")
 
 val mcVersion = dep("minecraft")
-// xaeronav.common.gradle.ktsのtoolchain分岐と同じ境界線。1.17〜1.20.1専用のノードなので今のところ常にJava 17
+// Same boundary as the toolchain branch in xaeronav.common.gradle.kts. This node is only for 1.17-1.20.1, so currently always Java 17
 val mixinCompatibilityLevel = mixinCompatibilityLevelFor(mcVersion)
 val packFormat = packFormatFor(mcVersion)
 
 legacyForge {
-    // enable{}の中でmods/runs等（外側の拡張のメンバー）に触ると、enable()自身がまだ
-    // 「有効化」を終える前に評価されて"Mod development has not been enabled yet"で落ちる。
-    // enable{}にはバージョン指定だけを書き、mods/runsはenable()の呼び出しが完了した後に書く
+    // Touching mods/runs etc. (members of the outer extension) inside enable{} gets them evaluated before enable() itself
+    // has finished "enabling", and it fails with "Mod development has not been enabled yet".
+    // Put only the version in enable{}, and write mods/runs after the enable() call has completed
     enable {
         forgeVersion = "$mcVersion-${dep("forge")}"
     }
@@ -28,30 +28,30 @@ legacyForge {
         }
     }
 
-    // クライアント専用MOD。専用サーバーの実行設定は用意しない
+    // Client-only mod. No run configuration for the dedicated server
     runs {
         create("client") {
             client()
-            // 全ノードでroot/runを共有すると、別MC版・別ローダーのXaero jarまで同時に
-            // 読み込まれてMixinが異なるMinecraftへ適用される。ノードごとに完全分離する。
+            // Sharing root/run across all nodes would also load Xaero jars for other MC versions and loaders
+            // at the same time, applying mixins to a different Minecraft. Keep each node fully separate.
             gameDirectory = rootProject.layout.projectDirectory.dir("run/${stonecutter.current.project}")
         }
     }
 
-    // 単体テストからMinecraftの素の値型（BlockPos等）を使えるようにする
-    // （NeoForgeノードと同じ理由。night-configもForge本体が同梱しているのでここで載る）
+    // Make Minecraft's plain value types (BlockPos etc.) usable from unit tests
+    // (same reason as the NeoForge node; night-config comes along here too since Forge itself bundles it)
     addModdingDependenciesTo(sourceSets["test"])
 }
 
-// Forge 1.20.1のFMLはmods.tomlの[[mixins]]を読まず、MANIFESTのMixinConfigsだけを見る。
-// また本番はSRG名で動くので、注入先の文字列（render・endBatch等）をSRGへ引くrefmapが要る。
-// どちらが欠けてもXaero連携のmixinは本番で1本も当たらない
+// Forge 1.20.1's FML does not read [[mixins]] in mods.toml and only looks at MixinConfigs in the MANIFEST.
+// Production also runs on SRG names, so a refmap mapping the injection target strings (render, endBatch, etc.) to SRG is needed.
+// If either is missing, not a single Xaero integration mixin applies in production
 mixin {
     add(sourceSets["main"], "${modProperty("mod_id")}.refmap.json")
     config("${modProperty("mod_id")}-xaero.mixins.json")
 }
 
-// mixin.config()が効くのは開発実行の引数だけで、配布jarのMANIFESTには書かれない
+// mixin.config() only affects the dev run arguments and is not written to the distributed jar's MANIFEST
 tasks.named<Jar>("jar") {
     manifest.attributes("MixinConfigs" to "${modProperty("mod_id")}-xaero.mixins.json")
 }
@@ -59,7 +59,7 @@ tasks.named<Jar>("jar") {
 val xaeroModules = xaeroModuleCoordinates(
     "forge", mcVersion, dep("xaerolib"), dep("xaero_worldmap"), dep("xaero_minimap"))
 
-// Xaeroを開発実行（runClient）へ載せるか。`./gradlew runClient -Pwith_xaero=false` で外せる。
+// Whether to load Xaero into the dev run (runClient). Disable with `./gradlew runClient -Pwith_xaero=false`.
 val withXaero = withXaeroProperty()
 
 val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
@@ -67,18 +67,18 @@ val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
 dependencies {
     annotationProcessor("org.spongepowered:mixin:0.8.7:processor")
 
-    // 公開jarはSRG名前空間なので、通常のcompileOnly/runtimeコピーではnamed開発環境で
-    // Xaero自身のMixin（@Shadow f_...）が失敗する。MDGのmod構成でnamedへリマップする。
+    // The published jars use the SRG namespace, so with plain compileOnly/runtime copies Xaero's own mixins
+    // (@Shadow f_...) fail in the named dev environment. Remap them to named via MDG's mod configuration.
     xaeroModules.forEach { modCompileOnly(it) }
     if (withXaero) {
         xaeroModules.forEach { modRuntimeOnly(it) }
-        // stageRuntimeTestModsには配布時と同じ未変換jarを渡す。
+        // stageRuntimeTestMods gets the same unremapped jars as at distribution.
         xaeroModules.forEach { xaeroRuntimeMods(it) }
     }
 
-    // @WrapOperation・@ModifyReturnValueはMixin本体のAPが知らない注入なので、mixinextras-commonを
-    // APにも載せないとrefmapへ載らない。1.21.1-forgeでAPに載せてビルドが止まったのは公式マッピングで
-    // 「マッピング無し」になるためで、SRGを渡すこのノードでは起きない
+    // @WrapOperation and @ModifyReturnValue are injections the core Mixin AP doesn't know, so mixinextras-common
+    // must also be on the AP or they don't make it into the refmap. On 1.21.1-forge, putting it on the AP stopped the build
+    // because official mappings yield "no mapping"; that doesn't happen on this node, which passes SRG
     compileOnly("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
     annotationProcessor("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
     implementation("io.github.llamalad7:mixinextras-forge:${dep("mixinextras")}")
@@ -87,13 +87,13 @@ dependencies {
 
 val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     from(xaeroRuntimeMods)
-    // jarタスクの出力はnamed名のdevlibs側で、本番のSRG名へ変換した配布jarはreobfJarの出力。
-    // jarを渡すと本番でNoSuchFieldErrorになる
+    // The jar task outputs the named devlibs jar; the distributed jar remapped to production SRG names is reobfJar's output.
+    // Passing jar results in NoSuchFieldError in production
     from(tasks.named("reobfJar"))
     into(rootProject.layout.buildDirectory.dir("runtime-test/${stonecutter.current.project}/mods"))
 }
 
-// 専用サーバーのproduction smoke testにはXaeroを入れず、利用者へ配るjarだけを渡す。
+// The dedicated server production smoke test gets no Xaero, only the jar shipped to users.
 tasks.register<Sync>("stageServerTestMod") {
     from(tasks.named("reobfJar"))
     into(rootProject.layout.buildDirectory.dir("server-test/${stonecutter.current.project}/mods"))
@@ -122,7 +122,7 @@ tasks.named<ProcessResources>("processResources").configure {
     }
 }
 
-// NeoForgeノードと同じ理由（ModDevGradle系のcreateMinecraftArtifactsが暗黙の依存を持つ）
+// Same reason as the NeoForge node (ModDevGradle's createMinecraftArtifacts has an implicit dependency)
 tasks.named("createMinecraftArtifacts") {
     dependsOn(tasks.named("stonecutterGenerate"))
 }

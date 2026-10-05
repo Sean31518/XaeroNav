@@ -4,8 +4,8 @@ import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.world.CellData;
 
 /**
- * 水中・水面の移動候補生成（泳ぎ・浮上・潜降・ボート）。{@link AStarPathfinder}の分割の一部
- * ——{@link GroundMoves}のクラスJavadoc参照。
+ * Move-candidate generation in and on water (swimming, surfacing, diving, boats). Part of the {@link AStarPathfinder} split;
+ * see the {@link GroundMoves} class Javadoc.
  */
 final class WaterMoves {
 
@@ -16,8 +16,8 @@ final class WaterMoves {
     }
 
     /**
-     * 水中を泳いで進む。足場を要求しないのが{@link GroundMoves#addTraverse}との違いで、これが無いと
-     * 海は「水底まで降りて歩く」か「水面の上にブロックを置いて渡る」でしか越えられない。
+     * Swims forward underwater. Unlike {@link GroundMoves#addTraverse}, it doesn't require a foothold; without it
+     * the ocean could only be crossed by "descending to the seabed and walking" or "placing blocks on the surface to cross".
      */
     void addSwim(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -25,7 +25,7 @@ final class WaterMoves {
         int z = from.z + dz;
 
         if (CellData.standable(owner.view.cell(x, y - 1, z))) {
-            // 足場があるなら同じ移動をTraverse側が作る。2種類のMoveKindで二重に作らない
+            // If there is a foothold, the Traverse side produces the same move. Don't produce it twice under two MoveKinds
             return;
         }
         if (!CellData.water(owner.view.cell(x, y, z))
@@ -36,12 +36,12 @@ final class WaterMoves {
     }
 
     /**
-     * 水中を斜めに泳ぐ。{@link GroundMoves#addDiagonalTraverse}は足場を要求するので水中では成立せず、
-     * これが無いと泳ぎだけがカーディナル4方向に縛られる——斜めに進むのに2手（実コストの1.41倍）
-     * 払うことになり、海を渡る経路が実際より高く見積もられるうえ展開ノード数も増える。
+     * Swims diagonally underwater. {@link GroundMoves#addDiagonalTraverse} requires a foothold so it doesn't apply underwater,
+     * and without this, swimming alone is restricted to the 4 cardinal directions: moving diagonally costs 2 moves (1.41x the actual cost),
+     * so routes across the ocean are estimated as more expensive than they really are, and the number of expanded nodes grows.
      *
-     * <p>角2セルの通行可能性を求めるのは{@link GroundMoves#addDiagonalTraverse}と同じ理由
-     * （体が壁の角をすり抜けないように）。
+     * <p>The two corner cells must be passable for the same reason as in {@link GroundMoves#addDiagonalTraverse}
+     * (so the body doesn't slip through a wall's corner).
      */
     void addDiagonalSwim(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -49,7 +49,7 @@ final class WaterMoves {
         int z = from.z + dz;
 
         if (CellData.standable(owner.view.cell(x, y - 1, z))) {
-            // 足場があるなら同じ移動をDiagonalTraverse側が作る。2種類のMoveKindで二重に作らない
+            // If there is a foothold, the DiagonalTraverse side produces the same move. Don't produce it twice under two MoveKinds
             return;
         }
         if (!CellData.water(owner.view.cell(x, y, z))
@@ -62,7 +62,7 @@ final class WaterMoves {
         owner.relax(from, x, y, z, ActionCosts.SWIM_ONE_BLOCK * ActionCosts.DIAGONAL_DISTANCE, MoveKind.SWIM);
     }
 
-    /** 水中を浮上する。水面まで上がってから水平に泳ぐ経路を作るために要る。 */
+    /** Rises underwater. Needed to build routes that go up to the surface and then swim horizontally. */
     void addSwimUp(PathNode from) {
         int y = from.y + 1;
         if (!CellData.water(owner.view.cell(from.x, y, from.z))
@@ -73,13 +73,13 @@ final class WaterMoves {
     }
 
     /**
-     * 水中を進みながら1マス浮上する。{@link #addSwimUp}が真上にしか上がれないので、これが無いと
-     * 浮上が「その場で上がってから横へ」というL字になる——泳いでいる人間は目的地を向いたまま
-     * 斜めに上がるので、案内としても不自然に見える。
+     * Rises one block while moving forward underwater. {@link #addSwimUp} can only go straight up, so without this
+     * surfacing becomes an L shape of "go up in place, then sideways"; a swimming person rises diagonally while
+     * facing the destination, so that would also look unnatural as guidance.
      *
-     * <p>陸の{@link GroundMoves#addAscend}と同じく、踏み切り地点の頭上（＝上がっていく途中で体が
-     * 通るセル）の通行可能性を求める。掘削は許可しない（水中で掘って上がるくらいなら、開いている
-     * 所まで泳いだ方が速い）。
+     * <p>Like {@link GroundMoves#addAscend} on land, requires the cell above the takeoff point (= the cell the body
+     * passes through on the way up) to be passable. Digging is not allowed (rather than digging upward underwater, swimming to an
+     * open spot is faster).
      */
     void addSwimAscend(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -97,12 +97,12 @@ final class WaterMoves {
     }
 
     /**
-     * 斜めに進みながら1マス浮上する。{@link #addSwimAscend}がカーディナル4方向にしか無いと、
-     * 水面へ向かう区間だけ「真っ直ぐ進んでから上がる」か「上がってから斜めに進む」に分解され、
-     * そこだけ経路が直角に折れる。
+     * Rises one block while moving diagonally. If {@link #addSwimAscend} existed only in the 4 cardinal directions,
+     * just the stretch heading to the surface would be split into "go straight, then up" or "go up, then diagonally",
+     * and the path would bend at a right angle there.
      *
-     * <p>角2セルの通行可能性を求めるのは{@link #addDiagonalSwim}と同じ理由（体が壁の角を
-     * すり抜けないように）。
+     * <p>The two corner cells must be passable for the same reason as in {@link #addDiagonalSwim} (so the body doesn't
+     * slip through a wall's corner).
      */
     void addDiagonalSwimAscend(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -110,7 +110,7 @@ final class WaterMoves {
         int z = from.z + dz;
 
         if (CellData.standable(owner.view.cell(x, y - 1, z))) {
-            // 足場があるなら同じ移動をDiagonalAscend側が作る。2種類のMoveKindで二重に作らない
+            // If there is a foothold, the DiagonalAscend side produces the same move. Don't produce it twice under two MoveKinds
             return;
         }
         if (!CellData.water(owner.view.cell(x, y, z))
@@ -126,7 +126,7 @@ final class WaterMoves {
         owner.relax(from, x, y, z, ActionCosts.DIAGONAL_SWIM_ASCEND_ONE_BLOCK, MoveKind.SWIM_ASCEND);
     }
 
-    /** 水中を潜る。水底の地形沿いに進む方が近い場合に使う。 */
+    /** Dives underwater. Used when following the seabed terrain is shorter. */
     void addSwimDown(PathNode from) {
         int y = from.y - 1;
         if (!CellData.water(owner.view.cell(from.x, y, from.z))) {
@@ -136,11 +136,11 @@ final class WaterMoves {
     }
 
     /**
-     * 水面をボートで進む。1マスあたりは泳ぎの半分以下。乗っている状態からしか出ないので、
-     * 乗る手間（{@link ActionCosts#BOAT_LAUNCH_TICKS}）は{@link #addBoatEnter}で必ず先に払う。
+     * Moves across the water surface by boat. Per block it's less than half of swimming. Only produced from the riding state,
+     * so the cost of boarding ({@link ActionCosts#BOAT_LAUNCH_TICKS}) is always paid first in {@link #addBoatEnter}.
      *
-     * <p>水面から降りる移動は既存のTraverse/Ascendがそのまま担い、壊して拾う手間
-     * （{@link ActionCosts#BOAT_STOW_TICKS}）は{@code AStarPathfinder#relax}が降りる手に足す。
+     * <p>Moves getting off the water surface are handled by the existing Traverse/Ascend as-is, and the cost of breaking and picking up the boat
+     * ({@link ActionCosts#BOAT_STOW_TICKS}) is added to the disembarking move by {@code AStarPathfinder#relax}.
      */
     void addBoatPaddle(PathNode from, int dx, int dz, boolean diagonal) {
         if (!from.boating) {
@@ -160,17 +160,17 @@ final class WaterMoves {
     }
 
     /**
-     * ボートを出して乗り込む。乗る手間をここで、壊して拾う手間を降りるときに払うので、短い水路では
-     * 泳いで渡る方が安いままになる（損益分岐は{@link ActionCosts#BOAT_STOW_TICKS}参照）。
+     * Places a boat and boards it. Boarding is paid here and breaking/picking up on disembarking, so on short waterways
+     * swimming across stays cheaper (see {@link ActionCosts#BOAT_STOW_TICKS} for the break-even point).
      *
-     * <p>岸から漕ぎ出す場合と、泳いでいる途中で出す場合の両方がある。水面は岸より1マス低いのが
-     * 普通なので、同じ高さと1つ下の両方を試す。
+     * <p>Covers both launching from the shore and placing one mid-swim. The water surface is usually one block lower
+     * than the shore, so both the same height and one below are tried.
      */
     void addBoatEnter(PathNode from, int dx, int dz) {
         if (!owner.view.boatAvailable() || from.boating) {
             return;
         }
-        // 岸に立っているか、水面に浮いているか。水中で潜ったままボートは出せない
+        // Standing on the shore or floating on the surface. A boat can't be placed while submerged
         boolean onShore = CellData.standable(owner.view.cell(from.x, from.y - 1, from.z))
                 && !CellData.water(owner.view.cell(from.x, from.y, from.z));
         if (!onShore && !owner.isBoatSurface(from.x, from.y, from.z)) {

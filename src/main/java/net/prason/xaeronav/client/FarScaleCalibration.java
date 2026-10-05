@@ -8,32 +8,36 @@ import net.prason.xaeronav.pathfinding.navgraph.WindowField;
 import net.prason.xaeronav.util.MathSupport;
 
 /**
- * 到着時間の表示で、ガイドの「窓の外の推定」に掛ける倍率を、この道のりで実際に見た値から学ぶ。
+ * For the arrival time display, learns the multiplier applied to the guide's "estimate outside the window" from values
+ * actually observed along this route.
  *
- * <p>窓の外の推定は場所ごとにずれ方が違い、ネザーでは真値の0.45〜0.61倍しかない。そのまま足すと、窓が進むたびに
- * 推定だった区間が実費に置き換わり、歩いているのに到着時間が延びていく。
+ * <p>The outside-window estimate is off in a different way at each place, and in the Nether it is only 0.45 to 0.61 times
+ * the true value. Adding it as-is means that each time the window advances, the estimated stretch gets replaced by the
+ * actual cost, and the arrival time keeps growing while you walk.
  *
- * <p>学び方: 組み上がるたびに、窓の縁で読んだ外の推定{@code O}（点{@code X}）を覚えておく。後の窓で{@code X}が窓の奥に
- * 入ったら、そこからの値は「窓の中を辿った実費{@code I}＋新しい縁の推定{@code O'}」になる。真値を{@code k}倍の推定と置くと
- * {@code k·O = I + k·O'}なので、{@code k = I / (O - O')}。1回ごとの比は揺れるので、和の比を取る。
+ * <p>How it learns: each time the window is built, remember the outside estimate {@code O} read at the window edge (point
+ * {@code X}). When {@code X} later lies inside a window, the value from there becomes "the actual cost {@code I} through
+ * the window + the estimate {@code O'} at the new edge". Taking the true value as {@code k} times the estimate gives
+ * {@code k·O = I + k·O'}, so {@code k = I / (O - O')}. Individual ratios fluctuate, so we take the ratio of the sums.
  *
- * <p><b>経路探索のガイドには掛けない。</b>探索に掛けると質が変わる（自己較正は模型で試して不採用）。表示だけに使う。
- * <b>段取りの1本だけが{@link #observe}・{@link #reset}を呼ぶ。</b>
+ * <p><b>Not applied to the pathfinding guide.</b> Applying it to the search changes its quality (self-calibration was
+ * tried on the model and rejected). Used for display only.
+ * <b>Only the single setup thread calls {@link #observe} and {@link #reset}.</b>
  */
 final class FarScaleCalibration {
 
-    /** 見本が無いうちの倍率。推定を信じる。 */
+    /** Multiplier while there are no samples. Trusts the estimate. */
     private static final double PRIOR_SCALE = 1.0;
     /**
-     * 事前の倍率を、この値段（tick）ぶんの見本として最初に持たせる。最初の1回で倍率が大きく振れないように。
-     * 実際の見本と一緒に減っていくので、歩くうちに効かなくなる。
+     * Seeds the prior multiplier as a sample worth this cost (ticks), so the first observation does not swing the
+     * multiplier too far. It decays together with the real samples, so it stops mattering as you walk.
      */
     private static final double PRIOR_TICKS = 200.0;
-    /** 1回ごとに古い見本を減らす割合。地形が変わればずれ方も変わるので、最近の見本を重く見る。 */
+    /** Fraction by which old samples are reduced each time. If the terrain changes, so does the error, so recent samples weigh more. */
     private static final double DECAY = 0.8;
-    /** これより分母が小さい見本は捨てる。窓が少ししか進んでいないと、比が雑音だけで決まる。 */
+    /** Samples with a smaller denominator are discarded. If the window has barely moved, the ratio is pure noise. */
     private static final double MIN_SAMPLE_TICKS = 40.0;
-    /** 覚えておく点の数。目的地から外れて歩くと、覚えた点は窓の奥に入らないまま溜まる。 */
+    /** Number of points to remember. Walking away from the destination piles up remembered points that never enter a window. */
     private static final int MAX_PENDING = 16;
     private static final double MIN_SCALE = 0.5;
     private static final double MAX_SCALE = 4.0;
@@ -46,12 +50,12 @@ final class FarScaleCalibration {
     private double predicted = PRIOR_TICKS;
     private volatile double scale = PRIOR_SCALE;
 
-    /** 今の倍率。どのスレッドから読んでもよい。 */
+    /** The current multiplier. May be read from any thread. */
     double scale() {
         return scale;
     }
 
-    /** 組み上がった窓で、覚えていた点を答え合わせし、{@code center}から新しく点を覚える。 */
+    /** For a newly built window, checks the remembered points against it and remembers a new point from {@code center}. */
     void observe(WindowField field, BlockPos center) {
         for (Iterator<Pending> it = pending.iterator(); it.hasNext(); ) {
             Pending point = it.next();

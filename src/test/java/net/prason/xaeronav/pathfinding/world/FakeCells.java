@@ -10,113 +10,113 @@ import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * テスト用の{@link CellSource}。地形を文字で書けるようにする。
+ * A {@link CellSource} for tests. Lets terrain be written as text.
  *
- * <p>本番の{@link ChunkView}は{@code Level}と{@code Player}が無いと作れず、
- * {@link CellData#flagsOf}は{@code BlockState}を要求する（＝Minecraftのレジストリ起動が要る）。
- * ここではフラグを直接組み立てることで、レジストリ抜きで探索コアを動かせるようにしている。
+ * <p>The production {@link ChunkView} can't be created without a {@code Level} and {@code Player}, and
+ * {@link CellData#flagsOf} requires a {@code BlockState} (i.e. Minecraft's registries must be bootstrapped).
+ * Here the flags are assembled directly so the search core can run without the registries.
  *
- * <p>地形は上の行が高いYになるよう書く。実際の見た目と同じ向きで読めた方が、
- * 「この経路が出てほしい」をテストに書き写すときに間違えにくい。
+ * <p>Terrain is written with the top row at the highest Y. Reading it in the same orientation as it actually looks
+ * makes it harder to make mistakes when transcribing "I want this path" into a test.
  *
  * <pre>{@code
  * FakeCells.of(0, 60, 0, """
  *     ...
  *     ...
- *     ###""");   // y=60 が床、y=61/62 が空気
+ *     ###""");   // y=60 is the floor, y=61/62 are air
  * }</pre>
  */
 public final class FakeCells implements CellSource {
 
-    /** 空気。掘削不要で通れる。 */
+    /** Air. Passable without digging. */
     public static final char AIR = '.';
-    /** 石。掘れば通れる（掘削コストは{@link #STONE_DIG_TICKS}）。 */
+    /** Stone. Passable if dug (dig cost is {@link #STONE_DIG_TICKS}). */
     public static final char STONE = '#';
     /**
-     * 土・草をシャベルで掘る速さの固体（{@link #SOFT_DIG_TICKS}）。<b>地上を歩いている普段の
-     * プレイで実際に掘る相手</b>はこちらで、掘るか迂回するかの釣り合いはこれで測る。
+     * A solid that digs at the speed of dirt/grass with a shovel ({@link #SOFT_DIG_TICKS}). <b>This is what you actually dig
+     * in normal play while walking on the surface</b>, so the dig-vs-detour balance is measured with this.
      */
     public static final char SOFT = 'D';
-    /** 掘れない岩盤。 */
+    /** Undiggable bedrock. */
     public static final char BEDROCK = 'B';
-    /** 水。足場なしで通れる。 */
+    /** Water. Passable without footing. */
     public static final char WATER = '~';
-    /** 溶岩。 */
+    /** Lava. */
     public static final char LAVA = 'L';
-    /** ソウルサンド。石と同じ足場だが、上を通ると{@link #SOUL_SAND_SPEED_FACTOR}まで減速する。 */
+    /** Soul sand. Footing like stone, but moving across it slows down to {@link #SOUL_SAND_SPEED_FACTOR}. */
     public static final char SOUL_SAND = 'S';
-    /** マグマブロック。足場だが、上を通るにはスニークが要る（走って踏むと燃える）。 */
+    /** Magma block. Footing, but crossing it requires sneaking (running on it burns). */
     public static final char MAGMA = 'M';
-    /** 普通のツタ。掴まって登れて、replaceableなのでブロックを置ける。 */
+    /** Ordinary vines. Climbable, and replaceable so blocks can be placed. */
     public static final char VINE = 'V';
-    /** ネザーのしだれツタ・ねじれツタ。掴まって登れるが<b>replaceableではない</b>ので置けない。 */
+    /** Nether weeping/twisting vines. Climbable, but <b>not replaceable</b>, so blocks can't be placed. */
     public static final char NETHER_VINE = 'N';
-    /** 梯子。掴んで上下できる。 */
+    /** Ladder. Can be grabbed to move up and down. */
     public static final char LADDER = 'H';
-    /** 蜘蛛の巣。当たり判定が無く歩いて通れるが、通過中は大きく減速する。 */
+    /** Cobweb. No collision box so it can be walked through, but it slows you heavily while passing. */
     public static final char COBWEB = 'W';
-    /** 範囲外・未ロード扱い（{@link CellData#ABSENT}）。 */
+    /** Treated as out of range / unloaded ({@link CellData#ABSENT}). */
     public static final char ABSENT = '?';
 
     public static final double STONE_DIG_TICKS = 40.0;
 
     /**
-     * 土・草を鉄のシャベルで掘り切るまで（tick）。硬度0.6・速度6・適正道具なので
-     * {@code 0.6 × 30/6 + }{@link ActionCosts#DIG_OVERHEAD_TICKS}＝25.0。
+     * Ticks to dig through dirt/grass with an iron shovel. Hardness 0.6, speed 6, correct tool, so
+     * {@code 0.6 × 30/6 + }{@link ActionCosts#DIG_OVERHEAD_TICKS} = 25.0.
      *
-     * <p>{@link #STONE_DIG_TICKS}(40)は硬度1.5を木・石のツルハシで掘るくらいの重さで、
-     * <b>地面や土手を掘る場面の値ではない</b>。掘る／迂回するの分岐を40で測ると釣り合いが
-     * 倍近く迂回寄りに出るので、その分岐を見るテストは必ずこちらを使うこと。
+     * <p>{@link #STONE_DIG_TICKS} (40) is about the weight of digging hardness 1.5 with a wooden/stone pickaxe, and
+     * <b>is not the value for digging ground or embankments</b>. Measuring the dig/detour branch with 40 skews the balance
+     * nearly twice as far toward detouring, so tests examining that branch must use this one.
      */
     public static final double SOFT_DIG_TICKS = 0.6 * 30.0 / 6.0 + ActionCosts.DIG_OVERHEAD_TICKS;
 
-    /** バニラの{@code Blocks.SOUL_SAND}の{@code speedFactor(0.4F)}そのもの。 */
+    /** Exactly vanilla's {@code speedFactor(0.4F)} for {@code Blocks.SOUL_SAND}. */
     public static final float SOUL_SAND_SPEED_FACTOR = 0.4f;
 
-    /** スニーク中の移動速度（{@code CellData}のマグマブロックの扱いに合わせる）。 */
+    /** Movement speed while sneaking (matches how {@code CellData} handles magma blocks). */
     public static final float MAGMA_SPEED_FACTOR = 0.3f;
 
     private static final int NO_OVERRIDE = Integer.MIN_VALUE;
 
     private final Long2LongOpenHashMap cells = new Long2LongOpenHashMap();
     /**
-     * 列ごとの区間（{@code [下, 上, 記号]}を並べたもの、下から昇順）。{@link #setColumn}で書いた列だけが持つ。
-     * 1000ブロック四方を超える書き出しを1セルずつ{@link #cells}に持つと数十GBになるので、広い地形はこちらで持つ。
+     * Per-column runs (a sequence of {@code [bottom, top, symbol]}, ascending from the bottom). Only columns written with {@link #setColumn} have them.
+     * Holding a layout larger than 1000 blocks square cell by cell in {@link #cells} would take tens of GB, so wide terrain is held here.
      */
     private final Long2ObjectOpenHashMap<short[]> columns = new Long2ObjectOpenHashMap<>();
     private SearchBounds bounds;
     private boolean canPlaceBlocks;
-    /** 設定の既定値に合わせてtrue。跳躍を禁じたいテストだけが明示的に切る。 */
+    /** true to match the config default. Only tests that want to forbid jumping turn it off explicitly. */
     private boolean jumpGapEnabled = true;
-    /** 設定の既定値に合わせてtrue。溶岩の橋を禁じたいテストだけが明示的に切る。 */
+    /** true to match the config default. Only tests that want to forbid lava bridges turn it off explicitly. */
     private boolean lavaBridgingEnabled = true;
     private int maxBridgeRunBlocks;
     private int maxLavaBridgeRunBlocks;
     private int maxVoidBridgeRunBlocks;
-    /** 既定は0（無制限）。潜水の上限を問うテストだけが明示的に設定する。 */
+    /** Default is 0 (unlimited). Only tests probing the diving limit set it explicitly. */
     private int maxSubmergedTicks;
     private double minDescentTicksPerBlock = ActionCosts.FALL_ASYMPTOTIC_MIN_PER_BLOCK;
-    /** 既定0＝無制限。持ち物のブロック数を効かせたいテストだけが明示的に設定する。 */
+    /** Default 0 = unlimited. Only tests that want the inventory block count to apply set it explicitly. */
     private int placedBlockBudget;
-    /** nullなら{@code canPlaceBlocks}に従う。「設定は許すが持っていない」を作るときだけ設定する。 */
+    /** If null, follows {@code canPlaceBlocks}. Set only to model "allowed by config but not carried". */
     private Boolean bridgingAllowedBySettings;
-    /** 設定の既定値に合わせて0（＝痛い落下は提示しない）。 */
+    /** 0 to match the config default (= painful falls are not offered). */
     private int maxFallDamagePoints;
-    /** 設定の既定値に合わせてtrue（＝奈落・致死落差の上は跳ばない）。 */
+    /** true to match the config default (= don't jump over void or fatal drops). */
     private boolean avoidRiskyJumps = true;
     private boolean strictLimits;
-    /** 体力満タン(20)相当。実機で最も普通の状態に合わせる。 */
+    /** Equivalent to full health (20). Matches the most common state in practice. */
     private int fatalFallBlocks = ActionCosts.SAFE_FALL_BLOCKS + 20;
     private boolean canMlgWaterBucket;
-    /** 既定はfalse。ボートを持たせたいテストだけが明示的に立てる。 */
+    /** Default is false. Only tests that want the player to carry a boat set it explicitly. */
     private boolean boatAvailable;
-    /** 既定はfalse。乗っている状態から始めたいテストだけが明示的に立てる。 */
+    /** Default is false. Only tests that want to start while riding set it explicitly. */
     private boolean ridingBoat;
-    /** 書かれていない座標の既定。空虚（passableEmpty）にしておくと、床を書いた行だけが地形になる。 */
+    /** Default for unwritten coordinates. Making it empty (passableEmpty) means only rows with floors written become terrain. */
     private long fill = air();
     /**
-     * {@link #openSkyY}が返す固定値。天井のある次元（ネザー）では実装の{@code ChunkView}が
-     * ハイトマップ由来の天井を返し、探索範囲より上になりうる——それを再現するため。
+     * The fixed value returned by {@link #openSkyY}. In dimensions with a ceiling (the Nether), the real {@code ChunkView}
+     * returns a heightmap-derived ceiling that can be above the search range; this reproduces that.
      */
     private int openSkyYOverride = NO_OVERRIDE;
 
@@ -131,8 +131,8 @@ public final class FakeCells implements CellSource {
     }
 
     /**
-     * 文字で書いた縦断面から地形を組む。{@code originX}/{@code originZ}の列に、
-     * 最下行が{@code baseY}になるよう積む（X方向に1文字＝1ブロック）。
+     * Build terrain from a text cross-section. Stacks it in the {@code originX}/{@code originZ} column
+     * so the bottom row is at {@code baseY} (1 character = 1 block along X).
      */
     public static FakeCells of(int originX, int baseY, int originZ, String diagram) {
         List<String> rows = new ArrayList<>(List.of(diagram.stripTrailing().split("\n")));
@@ -143,7 +143,7 @@ public final class FakeCells implements CellSource {
         fake.bounds = new SearchBounds(originX - 32, baseY - 32, originZ - 32,
                 originX + width + 32, baseY + height + 32, originZ + 32);
         for (int row = 0; row < height; row++) {
-            // 最上行がいちばん高いYになるよう、行を上下反転して読む
+            // Read rows upside down so the top row is the highest Y
             int y = baseY + (height - 1 - row);
             String line = rows.get(row);
             for (int col = 0; col < line.length(); col++) {
@@ -153,7 +153,7 @@ public final class FakeCells implements CellSource {
         return fake;
     }
 
-    /** {@code x,z}の列を区間で書く（{@code runs}は{@code [下, 上, 記号]}の繰り返し、下から昇順）。{@link #set}が優先する。 */
+    /** Write column {@code x,z} as runs ({@code runs} repeats {@code [bottom, top, symbol]}, ascending from the bottom). {@link #set} takes precedence. */
     public FakeCells setColumn(int x, int z, short[] runs) {
         columns.put(BlockPos.asLong(x, 0, z), runs);
         return this;
@@ -164,7 +164,7 @@ public final class FakeCells implements CellSource {
         return this;
     }
 
-    /** {@code z}方向へ同じ断面を厚く広げる。斜め移動や跳躍を試すときに要る。 */
+    /** Extend the same cross-section thickly along {@code z}. Needed to test diagonal moves and jumps. */
     public FakeCells extrudeZ(int fromZ, int toZ) {
         Long2LongOpenHashMap copy = new Long2LongOpenHashMap(cells);
         copy.long2LongEntrySet().forEach(entry -> {
@@ -176,7 +176,7 @@ public final class FakeCells implements CellSource {
         return this;
     }
 
-    /** 書かれていない座標を{@code symbol}で埋める（既定は空気）。 */
+    /** Fill unwritten coordinates with {@code symbol} (default is air). */
     public FakeCells fillWith(char symbol) {
         this.fill = flagsFor(symbol);
         return this;
@@ -192,31 +192,31 @@ public final class FakeCells implements CellSource {
         return this;
     }
 
-    /** {@code openSkyY}を固定する。岩盤天井が探索範囲の外にある状況を作るため。 */
+    /** Pin {@code openSkyY}. Used to model a bedrock ceiling outside the search range. */
     public FakeCells openSkyYOverride(int value) {
         this.openSkyYOverride = value;
         return this;
     }
 
-    /** 連続して架けてよい橋の長さ（ブロック）。既定の0は無制限。 */
+    /** Length of consecutive bridge allowed (blocks). The default 0 is unlimited. */
     public FakeCells maxBridgeRunBlocks(int value) {
         this.maxBridgeRunBlocks = value;
         return this;
     }
 
-    /** 溶岩の上に架けてよい橋の長さ（ブロック）。既定の0は{@code maxBridgeRunBlocks}だけが効く。 */
+    /** Length of bridge allowed over lava (blocks). With the default 0, only {@code maxBridgeRunBlocks} applies. */
     public FakeCells maxLavaBridgeRunBlocks(int value) {
         this.maxLavaBridgeRunBlocks = value;
         return this;
     }
 
-    /** 底の無い空虚の上に架けてよい橋の長さ（ブロック）。既定の0は{@code maxBridgeRunBlocks}だけが効く。 */
+    /** Length of bridge allowed over bottomless void (blocks). With the default 0, only {@code maxBridgeRunBlocks} applies. */
     public FakeCells maxVoidBridgeRunBlocks(int value) {
         this.maxVoidBridgeRunBlocks = value;
         return this;
     }
 
-    /** 頭を水に浸けたまま続けてよい時間（tick）。既定の0は無制限。 */
+    /** Time (ticks) the head may stay underwater continuously. The default 0 is unlimited. */
     public FakeCells maxSubmergedTicks(int value) {
         this.maxSubmergedTicks = value;
         return this;
@@ -257,7 +257,7 @@ public final class FakeCells implements CellSource {
         return this;
     }
 
-    /** 乗っている状態から探索を始める。{@link #boatAvailable}も併せて立てること。 */
+    /** Start the search while riding. Also set {@link #boatAvailable}. */
     public FakeCells ridingBoat(boolean value) {
         this.ridingBoat = value;
         return this;
@@ -280,11 +280,11 @@ public final class FakeCells implements CellSource {
     private static long flagsFor(char symbol) {
         return switch (symbol) {
             case AIR -> air();
-            // 掘れば通れる普通の固体。掘る前は足場でもある
+            // An ordinary solid that is passable if dug. It is also footing before being dug
             case STONE -> CellData.withDigTicks(CellData.PRESENT | CellData.STANDABLE, STONE_DIG_TICKS);
             case SOFT -> CellData.withDigTicks(CellData.PRESENT | CellData.STANDABLE, SOFT_DIG_TICKS);
             case BEDROCK -> CellData.withDigTicks(CellData.PRESENT | CellData.STANDABLE, Double.POSITIVE_INFINITY);
-            // 水は当たり判定を持たないので足場にはならないが、掘らずに体を置ける
+            // Water has no collision box so it isn't footing, but the body can occupy it without digging
             case WATER -> CellData.withDigTicks(CellData.PRESENT | CellData.WATER, 0.0);
             case LAVA -> CellData.withDigTicks(CellData.PRESENT | CellData.LAVA, Double.POSITIVE_INFINITY);
             case SOUL_SAND -> CellData.withSpeedFactor(
@@ -302,7 +302,7 @@ public final class FakeCells implements CellSource {
             case NETHER_VINE -> CellData.withDigTicks(
                     CellData.PRESENT | CellData.PASSABLE_EMPTY | CellData.CLIMBABLE, 0.0);
             case ABSENT -> CellData.ABSENT;
-            default -> throw new IllegalArgumentException("未知の地形記号: " + symbol);
+            default -> throw new IllegalArgumentException("Unknown terrain symbol: " + symbol);
         };
     }
 
@@ -352,8 +352,8 @@ public final class FakeCells implements CellSource {
     }
 
     /**
-     * 「設定では許しているが、置けるブロックを持っていない」を表すためのもの。
-     * {@code canPlaceBlocks(false)}と組み合わせて使う（既定は{@code canPlaceBlocks}に従う）。
+     * Represents "allowed by config, but no placeable blocks are carried".
+     * Use together with {@code canPlaceBlocks(false)} (by default it follows {@code canPlaceBlocks}).
      */
     public FakeCells bridgingAllowedBySettings(boolean value) {
         this.bridgingAllowedBySettings = value;
@@ -365,7 +365,7 @@ public final class FakeCells implements CellSource {
         return placedBlockBudget;
     }
 
-    /** 経路全体で置ける足場の枚数。既定0＝無制限（持ち物を見ない従来の挙動）。 */
+    /** Number of footing blocks that may be placed over the whole path. Default 0 = unlimited (the old behavior that ignores inventory). */
     public FakeCells placedBlockBudget(int value) {
         this.placedBlockBudget = value;
         return this;
@@ -396,7 +396,7 @@ public final class FakeCells implements CellSource {
         return maxSubmergedTicks;
     }
 
-    /** 既定は「どこでも安全な下限」。締めた版を試すテストだけが上書きする。 */
+    /** Default is "a floor safe everywhere". Only tests trying a tightened version override it. */
     @Override
     public double minDescentTicksPerBlock() {
         return minDescentTicksPerBlock;
@@ -448,10 +448,10 @@ public final class FakeCells implements CellSource {
     }
 
     /**
-     * 本番の{@link ChunkView}はハイトマップを引くが、ここには地形しか無いので列を上から舐めて求める。
-     * 頭上を塞ぐのは空気ではないセル——<b>水も含む</b>。本番が使う{@code MOTION_BLOCKING}の述語が
-     * {@code blocksMotion() || !getFluidState().isEmpty()}で流体を数えるのに合わせてある
-     * （海では「水面の1つ上」が返る）。
+     * The production {@link ChunkView} looks up the heightmap, but here there is only terrain, so the column is scanned from the top.
+     * What blocks the head is any non-air cell, <b>water included</b>. This matches the {@code MOTION_BLOCKING} predicate used in production,
+     * {@code blocksMotion() || !getFluidState().isEmpty()}, which counts fluids
+     * (on the sea, "one above the water surface" is returned).
      */
     @Override
     public int openSkyY(int x, int z) {

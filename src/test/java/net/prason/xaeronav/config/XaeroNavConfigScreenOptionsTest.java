@@ -15,12 +15,12 @@ import net.minecraft.client.OptionInstance;
 import net.prason.xaeronav.client.gui.XaeroNavConfigScreen;
 
 /**
- * 設定画面に登録されるトグルの一覧が壊れていないことを見る。GUIの実描画・レイアウトは対象外——
- * 「登録される項目とその値」の境界だけを確認する。
+ * Checks that the list of toggles registered on the settings screen isn't broken. Actual GUI rendering and layout are out of scope;
+ * only the boundary of "registered items and their values" is checked.
  *
- * <p>{@code XaeroNavConfig.INSTANCE}は静的初期化子でspecを作るだけで実際のload（ファイル読み込み）を
- * 待たないため、値を読むgetterを呼ぶと{@code IllegalStateException}になる。{@link NightConfigStoreTest}と
- * 同じ手順（{@link NightConfigStore}を経由してbuildまで済ませる）でload済みインスタンスを作る。
+ * <p>{@code XaeroNavConfig.INSTANCE} only builds the spec in its static initializer and doesn't wait for the actual load (file read),
+ * so calling getters that read values throws {@code IllegalStateException}. A loaded instance is created with the same steps as
+ * {@link NightConfigStoreTest} (going through {@link NightConfigStore} up to build).
  */
 class XaeroNavConfigScreenOptionsTest {
 
@@ -32,8 +32,8 @@ class XaeroNavConfigScreenOptionsTest {
 
         List<OptionInstance<?>> collected = new ArrayList<>();
         assertDoesNotThrow(() -> XaeroNavConfigScreen.addAllOptions(cfg, collected::add));
-        // XaeroNavConfigScreen.addAllOptions内のaddBig.accept呼び出し数と一致させること。
-        // 項目を増減したときにここが検知する。
+        // Must match the number of addBig.accept calls in XaeroNavConfigScreen.addAllOptions.
+        // This catches it when items are added or removed.
         assertEquals(14, collected.size());
     }
 }

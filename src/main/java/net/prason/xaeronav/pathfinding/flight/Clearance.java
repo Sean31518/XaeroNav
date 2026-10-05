@@ -3,21 +3,21 @@ package net.prason.xaeronav.pathfinding.flight;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * 狭い所を通ることへの割増（tick）。
+ * Surcharge (ticks) for passing through tight spaces.
  *
- * <p><b>探索と平滑化の両方がここを通すこと</b>が要点。片方だけに入れると、A*が正しく広い所へ
- * 迂回した経路を、平滑化が「地形には当たっていないし安い」と判断して狭い所へ引き戻す——
- * 実際に踏んだ（割増を120tick/セルまで上げてもトンネルを通る線が出続けた）。
- * 平滑化の採否は探索と同じコスト関数で決めなければ、探索の意図をそのまま壊す。
+ * <p>The key point is that <b>both the search and smoothing go through this</b>. Putting it in only one makes
+ * smoothing judge a path A* correctly detoured into open space as "not touching terrain and cheap" and pull it
+ * back into the tight space; this actually happened (the line kept going through a tunnel even with the
+ * surcharge raised to 120 ticks/cell). Unless smoothing decides acceptance with the same cost function as the search, it breaks the search's intent outright.
  */
 final class Clearance {
 
     /**
-     * 26近傍のうち、塞がっていても「狭い」とみなさないセル数。
+     * Number of blocked cells among the 26 neighbours that still doesn't count as "tight".
      *
-     * <p>9は平面1枚ぶん——地表や天井の上を余裕を持って飛んでいるだけの状態で、狭くはない。
-     * ここを0にすると開けた場所でも床が近いだけで割増になり、経路が理由もなく高い所を通る
-     * （滑空は降下が無料なので、その2つが正面から衝突する）。
+     * <p>9 is one plane's worth: just flying comfortably above the ground or below a ceiling, which isn't tight.
+     * Setting this to 0 adds a surcharge even in open areas merely for a nearby floor, and paths go high for no
+     * reason (gliding gets descent for free, so the two collide head-on).
      */
     private static final int FREE_BLOCKED_NEIGHBOURS = 9;
 
@@ -26,7 +26,7 @@ final class Clearance {
     private Clearance() {
     }
 
-    /** そのセルへ入る割増。周りが塞がっているほど高い。 */
+    /** Surcharge for entering that cell. Higher the more blocked its surroundings. */
     static double cell(AirGrid grid, int cellX, int cellY, int cellZ, double penaltyTicks) {
         if (penaltyTicks <= 0.0) {
             return 0.0;
@@ -36,7 +36,7 @@ final class Clearance {
                 : penaltyTicks * excess / (NEIGHBOUR_COUNT - FREE_BLOCKED_NEIGHBOURS);
     }
 
-    /** 線分が跨ぐ全セルぶんの割増の合計。 */
+    /** Sum of the surcharge over every cell the segment crosses. */
     static double alongLine(AirGrid grid, Vec3 from, Vec3 to, double penaltyTicks) {
         if (penaltyTicks <= 0.0) {
             return 0.0;

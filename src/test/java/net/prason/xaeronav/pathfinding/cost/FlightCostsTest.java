@@ -8,10 +8,10 @@ import org.junit.jupiter.api.Test;
 import net.prason.xaeronav.pathfinding.cost.ElytraPhysics.Velocity;
 
 /**
- * バニラの漸化式から出た滑空ポーラを固定する。
+ * Pins down the glide polar derived from vanilla's recurrence.
  *
- * <p>ここが動いたらコストモデルの傾き（登りと水平の釣り合い）が変わったということなので、
- * 経路の見た目も必ず変わる。値そのものを覚えておくのが目的で、変えるなとは言っていない。
+ * <p>If this moves, the slope of the cost model (the balance between climbing and level flight) has changed, so the
+ * look of routes will change too. The goal is to remember the values themselves, not to forbid changing them.
  */
 class FlightCostsTest {
 
@@ -21,7 +21,7 @@ class FlightCostsTest {
     void bestGlideMatchesTheVanillaRecurrence() {
         Velocity glide = ElytraPhysics.steadyState(0.0, false);
 
-        // 30.2ブロック/秒・滑空比10.1。どちらもコミュニティで知られた値と一致する
+        // 30.2 blocks/s, glide ratio 10.1. Both match values known in the community
         assertEquals(1.5102, glide.horizontal(), TOLERANCE);
         assertEquals(-0.1495, glide.vertical(), TOLERANCE);
         assertEquals(10.10, glide.glideRatio(), 0.01);
@@ -31,32 +31,32 @@ class FlightCostsTest {
     void divingIsFasterHorizontallyButBurnsAltitude() {
         Velocity fastest = ElytraPhysics.bestSteadyState(0.0, 80.0, 0.5, false, Velocity::horizontal);
 
-        assertTrue(fastest.horizontal() > 3.3, "最速の水平巡航が出ていない: " + fastest);
+        assertTrue(fastest.horizontal() > 3.3, "Fastest horizontal cruise isn't reached: " + fastest);
         assertTrue(fastest.glideRatio() < ElytraPhysics.steadyState(0.0, false).glideRatio(),
-                "最速で飛ぶ姿勢の滑空比が最良滑空を上回っている: " + fastest);
+                "Glide ratio of the fastest attitude exceeds the best glide: " + fastest);
     }
 
     @Test
     void glidingCannotClimbInSteadyState() {
-        // ロケット無しでは、どの姿勢でも定常状態の垂直成分は負。「水平飛行はすでに登り」の根拠
+        // Without rockets, the steady-state vertical component is negative at every attitude. The basis for "level flight is already climbing"
         for (double pitch = -90.0; pitch <= 80.0; pitch += 5.0) {
             Velocity steady = ElytraPhysics.steadyState(pitch, false);
             assertTrue(steady.vertical() < 0.0,
-                    "ピッチ" + pitch + "で高度を保てることになっている: " + steady);
+                    "Altitude can be held at pitch " + pitch + ": " + steady);
         }
     }
 
     @Test
     void terminalDiveMatchesVanillaFallPhysics() {
-        // 真下を向いた滑空は揚力が0になるので、ただの落下と同じ終端速度3.92に落ち着く
+        // Gliding straight down has zero lift, so it settles at terminal velocity 3.92, same as a plain fall
         assertEquals(-3.92, ElytraPhysics.steadyState(90.0, false).vertical(), TOLERANCE);
     }
 
     @Test
     void rocketsMakeClimbingMuchCheaper() {
         assertTrue(FlightCosts.ROCKET_ASCENT_TICKS_PER_BLOCK * 3.0 < FlightCosts.GLIDING_ASCENT_TICKS_PER_BLOCK,
-                "ロケットの有無で上昇コストが3倍も違わない: ロケット有"
-                        + FlightCosts.ROCKET_ASCENT_TICKS_PER_BLOCK + " / 無"
+                "Climb cost with and without rockets doesn't differ by 3x: with rockets "
+                        + FlightCosts.ROCKET_ASCENT_TICKS_PER_BLOCK + " / without "
                         + FlightCosts.GLIDING_ASCENT_TICKS_PER_BLOCK);
     }
 
@@ -78,7 +78,7 @@ class FlightCostsTest {
         double level = FlightCosts.segmentTicks(distance, 0.0, false);
 
         assertTrue(level > gliding * 1.2,
-                "水平飛行が自然な滑空とほぼ同じ値段になっている: 水平" + level + " / 滑空" + gliding);
+                "Level flight costs about the same as natural gliding: level " + level + " / gliding " + gliding);
     }
 
     @Test
@@ -87,20 +87,20 @@ class FlightCostsTest {
         double natural = FlightCosts.segmentTicks(distance, -distance / FlightCosts.GLIDE_RATIO, false);
         double steep = FlightCosts.segmentTicks(distance, -50.0, false);
 
-        assertTrue(steep > natural, "高度を捨てる急降下が最良滑空より安くなっている");
+        assertTrue(steep > natural, "A steep dive that throws away altitude is cheaper than the best glide");
     }
 
     @Test
     void heuristicNeverExceedsTheSegmentCost() {
-        // A*の許容性。滑空の割引を区間コスト側にだけ置いてあることの確認
+        // A* admissibility. Confirms the gliding discount is placed only on the segment cost side
         for (double horizontal = 0.0; horizontal <= 200.0; horizontal += 7.0) {
             for (double vertical = -100.0; vertical <= 100.0; vertical += 7.0) {
                 for (boolean rockets : new boolean[] {false, true}) {
                     double estimate = FlightCosts.heuristicTicks(horizontal, vertical, rockets);
                     double actual = FlightCosts.segmentTicks(horizontal, vertical, rockets);
                     assertTrue(estimate <= actual + 1.0e-9,
-                            "見積もりが区間コストを上回った: 水平" + horizontal + " 垂直" + vertical
-                                    + " ロケット" + rockets + " → 見積" + estimate + " / 実" + actual);
+                            "Estimate exceeded the segment cost: horizontal " + horizontal + " vertical " + vertical
+                                    + " rockets " + rockets + " → estimate " + estimate + " / actual " + actual);
                 }
             }
         }
@@ -108,7 +108,7 @@ class FlightCostsTest {
 
     @Test
     void lowerBoundNeverExceedsAnyTwoLegDetour() {
-        // 経由点を挟んだ折れ線は、始点と終点を結ぶ1区間の下限を下回らない（A*の許容性と一貫性）
+        // A polyline through a waypoint never goes below the lower bound of the single segment from start to end (A* admissibility and consistency)
         for (boolean rockets : new boolean[] {false, true}) {
             for (double viaX = -60.0; viaX <= 160.0; viaX += 20.0) {
                 for (double viaY = -80.0; viaY <= 80.0; viaY += 20.0) {
@@ -117,7 +117,7 @@ class FlightCostsTest {
                         double second = FlightCosts.segmentTicks(Math.abs(100.0 - viaX), endY - viaY, rockets);
                         double bound = FlightCosts.lowerBoundTicks(100.0, endY, endY, rockets);
                         assertTrue(bound <= first + second + 1.0e-9,
-                                "下限が折れ線を上回った: 経由" + viaX + "," + viaY + " 終点Y" + endY);
+                                "Lower bound exceeded the polyline: via " + viaX + "," + viaY + " end Y " + endY);
                     }
                 }
             }

@@ -22,20 +22,20 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import org.junit.jupiter.api.Test;
 
 /**
- * ライブナビの非同期の受け渡しを、{@code PathfindingState}と同じ部品（1本の{@link PathfindingExecutor}・
- * 共有の世代・{@link GenerationGate}）と同じ手順で時系列に並べて確かめる。
+ * Verifies live navigation's asynchronous handover by laying it out in time order with the same parts as
+ * {@code PathfindingState} (one {@link PathfindingExecutor}, a shared generation, {@link GenerationGate}) and the same steps.
  *
- * <p>{@code PathfindingState}自体はMinecraftのクライアントが無いと動かないので、状態遷移のうち
- * 「世代を進める・探索を捨てる・投げ直す」の手順だけをここで再現する。手順は
- * {@code PathfindingState#setGoal}（{@code clear}）・{@code clear}・離陸と着地の分岐に揃えてある。
+ * <p>{@code PathfindingState} itself doesn't run without a Minecraft client, so only the steps of the state
+ * transitions that "advance the generation, discard the search, resubmit" are reproduced here. The steps match
+ * {@code PathfindingState#setGoal} ({@code clear}), {@code clear}, and the takeoff and landing branches.
  *
- * <p>古い探索は{@link #slow}で、放っておけば数十秒走る。届くかどうかではなく<b>止まるか</b>を見る。
+ * <p>The old search is {@link #slow}; left alone it runs for tens of seconds. What's checked is not whether it arrives, but <b>whether it stops</b>.
  */
 class SearchHandoverTest {
 
     private static final long AWAIT_SECONDS = 10;
 
-    /** 遅い探索が自然に終わるまでには、これより十分長くかかる。 */
+    /** It takes much longer than this for the slow search to finish on its own. */
     private static final SearchLimits LONG = new SearchLimits(10_000_000, 120_000,
             AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
 
@@ -44,7 +44,7 @@ class SearchHandoverTest {
 
     private static final BlockPos START = new BlockPos(5, 61, 5);
 
-    /** 床から隙間6マスで切り離した台の上。跳べず、橋も架けられないので届かない。 */
+    /** On top of a platform cut off from the floor by a 6-block gap. Can't jump it and can't bridge, so unreachable. */
     private static final BlockPos UNREACHABLE = new BlockPos(215, 61, 100);
 
     private static final BlockPos NEAR = new BlockPos(20, 61, 5);
@@ -53,51 +53,51 @@ class SearchHandoverTest {
     private final GenerationGate gate = new GenerationGate(generation, Runnable::run);
     private final List<String> delivered = new CopyOnWriteArrayList<>();
 
-    /** 対照。消さなければ読み続けること——これが崩れると下のテストは何も確かめていない。 */
+    /** Control. Without clearing, it keeps reading; if this breaks, the tests below verify nothing. */
     @Test
     void theSlowSearchKeepsRunningUnlessCleared() throws Exception {
         PathfindingExecutor executor = new PathfindingExecutor();
         Slow running = slow();
-        request(executor, running.view(), UNREACHABLE, "対照");
+        request(executor, running.view(), UNREACHABLE, "control");
         running.awaitReads();
 
         long before = running.reads().get();
         Thread.sleep(2_000);
-        assertTrue(running.reads().get() > before, "遅い探索がすぐ終わってしまう＝止まったかを見分けられない");
+        assertTrue(running.reads().get() > before, "The slow search finishes right away = can't tell whether it stopped");
         executor.cancelAll();
     }
 
-    /** 探索中に目的地を変えた。古い探索の結果は届かず、古い探索は新しい探索を待たせない。 */
+    /** Changed the destination mid-search. The old search's result isn't delivered, and the old search doesn't make the new one wait. */
     @Test
     void changingTheGoalMidSearchDeliversOnlyTheNewRoute() throws Exception {
         PathfindingExecutor executor = new PathfindingExecutor();
         Slow old = slow();
-        CompletableFuture<PathResult> stale = request(executor, old.view(), UNREACHABLE, "古い目的地");
+        CompletableFuture<PathResult> stale = request(executor, old.view(), UNREACHABLE, "old goal");
 
-        CompletableFuture<PathResult> fresh = request(executor, field(), NEAR, "新しい目的地");
+        CompletableFuture<PathResult> fresh = request(executor, field(), NEAR, "new goal");
 
         PathResult result = fresh.get(AWAIT_SECONDS, TimeUnit.SECONDS);
-        assertTrue(result.complete(), "新しい目的地へ届かない: " + result.termination());
-        assertTrue(stale.isDone(), "古い探索が新しい探索の後も残っている");
-        assertEquals(List.of("新しい目的地"), delivered);
+        assertTrue(result.complete(), "Doesn't reach the new goal: " + result.termination());
+        assertTrue(stale.isDone(), "The old search is still around after the new search");
+        assertEquals(List.of("new goal"), delivered);
     }
 
-    /** 案内を消した（ログアウト・次元移動・到着）。走っている探索がビューを読むのをやめる。 */
+    /** Cleared the guidance (logout, dimension change, arrival). The running search stops reading the view. */
     @Test
     void clearingStopsTheRunningSearchFromReadingTheWorld() throws Exception {
         PathfindingExecutor executor = new PathfindingExecutor();
         Slow running = slow();
-        CompletableFuture<PathResult> stale = request(executor, running.view(), UNREACHABLE, "消す前");
+        CompletableFuture<PathResult> stale = request(executor, running.view(), UNREACHABLE, "before clear");
         running.awaitReads();
 
         clear(executor);
 
-        assertTrue(running.settles(), "消した後も探索がチャンクを読み続けている");
+        assertTrue(running.settles(), "The search keeps reading chunks after clearing");
         assertTrue(stale.isDone());
-        assertTrue(delivered.isEmpty(), "消した後に経路が復活した: " + delivered);
+        assertTrue(delivered.isEmpty(), "A path came back after clearing: " + delivered);
     }
 
-    /** 深い予算を並列に走らせている探索も、消せば両方のスレッドで止まる。 */
+    /** A search running the deep budget in parallel also stops on both threads when cleared. */
     @Test
     void clearingAlsoStopsTheParallelDeepSearch() throws Exception {
         PathfindingExecutor executor = new PathfindingExecutor();
@@ -106,39 +106,39 @@ class SearchHandoverTest {
         long myGeneration = generation.incrementAndGet();
         CompletableFuture<PathResult> stale = executor.submitWithDeepFallback(normal.view(), deep.view(),
                 START, UNREACHABLE, LONG, LONG, false, 0);
-        gate.whenStillCurrent(stale, myGeneration, (result, error) -> delivered.add("消す前"));
+        gate.whenStillCurrent(stale, myGeneration, (result, error) -> delivered.add("before clear"));
         normal.awaitReads();
         deep.awaitReads();
 
         clear(executor);
 
-        assertTrue(normal.settles(), "通常予算の探索が止まらない");
-        assertTrue(deep.settles(), "深い予算の探索が止まらない");
-        assertTrue(delivered.isEmpty(), "消した後に経路が復活した: " + delivered);
+        assertTrue(normal.settles(), "The normal-budget search doesn't stop");
+        assertTrue(deep.settles(), "The deep-budget search doesn't stop");
+        assertTrue(delivered.isEmpty(), "A path came back after clearing: " + delivered);
     }
 
     /**
-     * 歩いている間の探索中に離陸し、着地して引き直した。離陸前の探索は離陸の時点で止まり、
-     * 着地後の結果だけが届く。
+     * Took off during a search while walking, landed, and recomputed. The pre-takeoff search stops at takeoff,
+     * and only the post-landing result is delivered.
      */
     @Test
     void takingOffAndLandingDeliversOnlyTheRouteFromAfterLanding() throws Exception {
         PathfindingExecutor executor = new PathfindingExecutor();
         Slow beforeTakeoff = slow();
-        request(executor, beforeTakeoff.view(), UNREACHABLE, "離陸前");
+        request(executor, beforeTakeoff.view(), UNREACHABLE, "before takeoff");
         beforeTakeoff.awaitReads();
 
         generation.incrementAndGet();
         executor.cancelAll();
-        assertTrue(beforeTakeoff.settles(), "離陸しても歩きの探索が走り続けている");
+        assertTrue(beforeTakeoff.settles(), "The walking search keeps running after takeoff");
 
-        CompletableFuture<PathResult> afterLanding = request(executor, field(), NEAR, "着地後");
+        CompletableFuture<PathResult> afterLanding = request(executor, field(), NEAR, "after landing");
 
         assertTrue(afterLanding.get(AWAIT_SECONDS, TimeUnit.SECONDS).complete());
-        assertEquals(List.of("着地後"), delivered);
+        assertEquals(List.of("after landing"), delivered);
     }
 
-    /** {@code PathfindingState#recalculate}と同じ手順: 世代を進めてから投げ、その世代で受け取る。 */
+    /** Same steps as {@code PathfindingState#recalculate}: advance the generation, submit, and receive in that generation. */
     private CompletableFuture<PathResult> request(PathfindingExecutor executor, CellSource view, BlockPos goal,
                                                   String label) {
         long myGeneration = generation.incrementAndGet();
@@ -151,13 +151,13 @@ class SearchHandoverTest {
         return future;
     }
 
-    /** {@code PathfindingState#clear}と同じ手順。 */
+    /** Same steps as {@code PathfindingState#clear}. */
     private void clear(PathfindingExecutor executor) {
         generation.incrementAndGet();
         executor.cancelAll();
     }
 
-    /** 200×200の床と、隙間6マスを空けた台。 */
+    /** A 200×200 floor and a platform separated by a 6-block gap. */
     private static FakeCells field() {
         FakeCells cells = FakeCells.empty(new SearchBounds(-4, 20, -4, 230, 90, 204));
         for (int x = 0; x < 200; x++) {
@@ -173,7 +173,7 @@ class SearchHandoverTest {
         return cells;
     }
 
-    /** セルを1つ読むたびに少し待つビュー。床を舐め尽くすまでに数十秒かかる。 */
+    /** A view that waits a little on every cell read. It takes tens of seconds to exhaust the floor. */
     private static Slow slow() {
         FakeCells cells = field();
         AtomicLong reads = new AtomicLong();
@@ -197,12 +197,12 @@ class SearchHandoverTest {
         void awaitReads() throws InterruptedException {
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(AWAIT_SECONDS);
             while (reads.get() < 1_000) {
-                assertTrue(System.nanoTime() < until, "探索が始まらない");
+                assertTrue(System.nanoTime() < until, "The search doesn't start");
                 Thread.sleep(10);
             }
         }
 
-        /** 読み取りが止まったか。止まらなければ{@link #AWAIT_SECONDS}で諦める。 */
+        /** Whether reads stopped. If not, give up after {@link #AWAIT_SECONDS}. */
         boolean settles() throws InterruptedException {
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(AWAIT_SECONDS);
             long last = reads.get();

@@ -20,8 +20,8 @@ class AvoidedCellSourceTest {
 
     @Test
     void routesAroundTheAvoidedFootingInsteadOfThroughIt() throws Exception {
-        // 3マス幅の平らな床の真ん中の列。まっすぐ歩くのが最短だが、その途中の足場を1マス避ければ
-        // 隣の列へ逸れて回り込むしかなくなる（端の列は横が奈落なので、最短でも真ん中を通る）
+        // The middle column of a 3-wide flat floor. Walking straight is shortest, but avoiding one footing block along the way
+        // leaves no choice but to veer into the next column and go around (the edge columns have the void beside them, so the shortest path goes through the middle)
         FakeCells cells = FakeCells.of(0, 60, 0, """
                 .......
                 #######""").extrudeZ(0, 2);
@@ -31,12 +31,12 @@ class AvoidedCellSourceTest {
 
         PathResult direct = search(cells, start, goal);
         assertTrue(direct.complete());
-        assertTrue(steppedOn(direct, footing), "前提: 避けなければこの足場を通る");
+        assertTrue(steppedOn(direct, footing), "Premise: without avoidance, the path passes over this footing");
 
         PathResult avoided = search(AvoidedCellSource.wrap(cells, List.of(footing)), start, goal);
-        assertTrue(avoided.complete(), "回り道が残っているなら経路は引ける");
-        assertFalse(steppedOn(avoided, footing), "避けたセルを選び直してはいけない");
-        assertTrue(CellData.standable(cells.cell(3, 60, 1)), "ワールドは書き換えない");
+        assertTrue(avoided.complete(), "If a detour remains, a path can be drawn");
+        assertFalse(steppedOn(avoided, footing), "Must not pick the avoided cell again");
+        assertTrue(CellData.standable(cells.cell(3, 60, 1)), "The world isn't modified");
     }
 
     @Test

@@ -22,13 +22,13 @@ import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * 実機のネザー（2026-09-23）で経路が(-65,47,521)の行き止まりへ入っては東へ引き返した件を、実機の保存から書き出した地形で測る。
- * 窓の外の推定（3D粗層×倍率）の倍率を固定で振った場合と、組み直しのたびに窓の中の値から自己較正した場合を比べる。
+ * Measures, on terrain exported from the real-game save, the case in the real-game Nether (2026-09-23) where the route kept entering the dead end at (-65,47,521) and turning back east.
+ * Compares sweeping a fixed multiplier for the outside-window estimate (3D coarse layer x multiplier) against self-calibrating from in-window values on every rebuild.
  */
 @Tag("bench")
 class NetherTrapBenchTest {
 
-    /** 実機の既定（{@code NavGraphGuide.WINDOW_BLOCKS}）。{@code -Pxaeronav.window=240}で振れる。 */
+    /** The real-game default ({@code NavGraphGuide.WINDOW_BLOCKS}). Can be swept with {@code -Pxaeronav.window=240}. */
     private static final int WINDOW = Integer.getInteger("xaeronav.window", 224);
     static final BlockPos GOAL = new BlockPos(-53, Integer.getInteger("xaeronav.goalY", 68), 716);
     private static final BlockPos TRAP = new BlockPos(-65, 47, 521);
@@ -42,8 +42,8 @@ class NetherTrapBenchTest {
     }
 
     /**
-     * 窓の中で実際に辿った値と、同じ点の推定（倍率を掛ける前）の比の中央値。推定の尺度を窓の中へ揃える倍率になる。
-     * 縁の近くは値が推定から来るので除く（{@link WindowField#measuredInWindow}）。
+     * Median ratio of the values actually traced inside the window to the estimate at the same points (before the multiplier). This is the multiplier that aligns the estimate's scale with the window.
+     * Points near the edge are excluded because their values come from the estimate ({@link WindowField#measuredInWindow}).
      */
     static double calibrate(FakeCells cells, WindowField field, CostToGo raw, BlockPos center) {
         List<Double> ratios = new ArrayList<>();
@@ -68,7 +68,7 @@ class NetherTrapBenchTest {
         return ratios.get(ratios.size() / 2);
     }
 
-    /** {@code scale}が正なら固定倍率、0なら組み直しのたびに自己較正（初期値1.3、前回の倍率から1回だけ更新）。 */
+    /** A positive {@code scale} is a fixed multiplier; 0 self-calibrates on every rebuild (initial value 1.3, updated once from the previous multiplier). */
     private static Function<BlockPos, CostToGo> guide(FakeCells cells, BlockPos goal, CostToGo raw, double scale,
                                                       List<Double> used, long[] guideMillis) {
         NavGraph graph = new NavGraph(goal, cells.bounds().minY(), cells.bounds().maxY());
@@ -130,8 +130,8 @@ class NetherTrapBenchTest {
                 }
                 BlockPos end = trace.steps().isEmpty() ? start : trace.steps().get(trace.steps().size() - 1).pos();
                 System.out.printf(Locale.ROOT,
-                        "始点%s 倍率=%s 実費=%.0f tick 到達=%s 罠まで最接近=%.0f 最大の後退=%.0f 描き変わり%d 見直し%d 組み直し計%dms 倍率の推移=%s %ds %s%n",
-                        start.toShortString(), scale > 0 ? token : "自己較正",
+                        "start %s multiplier=%s actual=%.0f tick reached=%s closest to trap=%.0f max backtrack=%.0f redraws %d reviews %d rebuilds total %dms multiplier history=%s %ds %s%n",
+                        start.toShortString(), scale > 0 ? token : "self-calibrated",
                         trace.steps().isEmpty() ? Double.NaN : ProgressiveWalk.cost(trace.steps()),
                         end.closerThan(goal, 3), trapDistance, worstRetreat, trace.redraws(),
                         ProgressiveWalk.REVIEWS.get(), guideMillis[0], summarize(used), (System.currentTimeMillis() - began) / 1000, trace.stopped());
@@ -145,6 +145,6 @@ class NetherTrapBenchTest {
         }
         double min = used.stream().mapToDouble(Double::doubleValue).min().orElse(0);
         double max = used.stream().mapToDouble(Double::doubleValue).max().orElse(0);
-        return String.format(Locale.ROOT, "%.2f〜%.2f(%d回)", min, max, used.size());
+        return String.format(Locale.ROOT, "%.2f-%.2f(%d times)", min, max, used.size());
     }
 }

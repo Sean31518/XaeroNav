@@ -12,8 +12,8 @@ displayURL="${mod_display_url}"
 description='''${mod_description}'''
 logoFile="xaeronav_icon.png"
 
-# Xaero連携だけを持つ専用config（required=false）。Xaero未導入・注入先が変わった場合は
-# この機能だけが無効になり、MOD本体はワールド内描画で動き続ける
+# Dedicated config holding only the Xaero integration (required=false). If Xaero isn't installed or the
+# injection targets change, only this feature is disabled and the mod keeps working with in-world rendering
 [[mixins]]
 config="${mod_id}-xaero.mixins.json"
 
@@ -31,13 +31,15 @@ versionRange="${minecraft_range_maven}"
 ordering="NONE"
 side="BOTH"
 
-# Xaeroの世界地図・ミニマップへの経路描画・右クリックメニュー追加はオプション連携（design doc §2-5）。
-# 未導入でもこのMOD自体はクラッシュせず、ワールド内描画（PathRenderer）だけで動作する。
+# Drawing the route on Xaero's World Map / Minimap and adding right-click menu entries is an optional
+# integration (design doc §2-5). Without them this mod doesn't crash and works with in-world rendering
+# (PathRenderer) alone.
 #
-# versionRangeの下限は、mixinの注入先（GuiMap#render / MinimapFBORenderer#renderChunksToFBO の
-# endBatch呼び出し、GuiMap#getRightClickOptions、WaypointReader#getRightClickOptions）を
-# 実際に確認したバージョン。これより古い版では注入先の形が違い、required=falseのmixin configが
-# 黙って無効になるだけで、ユーザーには「地図に経路が出ない」としか見えない。
+# The versionRange lower bounds are the versions where the mixin injection targets (the endBatch call in
+# GuiMap#render / MinimapFBORenderer#renderChunksToFBO, GuiMap#getRightClickOptions,
+# WaypointReader#getRightClickOptions) were actually verified. Older versions have differently shaped
+# targets; the required=false mixin config just silently disables itself, and all the user sees is
+# "the route doesn't show on the map".
 [[dependencies.${mod_id}]]
 modId="xaeroworldmap"
 type="optional"

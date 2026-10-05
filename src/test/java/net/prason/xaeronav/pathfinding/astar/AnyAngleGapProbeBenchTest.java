@@ -15,11 +15,11 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * 8方向の格子の最適経路を、同じ高さの平地の疾走区間だけ直線に引き直したら何割縮むか（any-angleとの差）。
- * 模型の最適と比べるbenchには原理的に映らない損を測る。判定なし。
+ * How much the optimal 8-direction grid path shrinks if only the level, flat sprint stretches are redrawn as straight lines (the gap to any-angle).
+ * Measures a loss that, in principle, doesn't show up in benches comparing against the model's optimum. No assertions.
  *
- * <p>あわせて、最適経路の値段のうち段差の手間（{@link ActionCosts#STEP_TRANSITION_TICKS}）が占める割合も出す。
- * ダッシュジャンプで進む人には段差の手間がほぼ掛からないので、この割合が模型と跳ぶ人のずれの上限になる。
+ * <p>Also reports the share of the optimal path's price taken up by step overhead ({@link ActionCosts#STEP_TRANSITION_TICKS}).
+ * Someone moving by sprint-jumping pays almost no step overhead, so this share is the upper bound on the gap between the model and a jumper.
  */
 @Tag("bench")
 class AnyAngleGapProbeBenchTest {
@@ -40,7 +40,7 @@ class AnyAngleGapProbeBenchTest {
         return Math.abs(step.cost() - straight) < 1e-6 || Math.abs(step.cost() - diagonal) < 1e-6;
     }
 
-    /** 幅0.6の体がaの中心からbの中心まで、高さを変えずに床の上を真っ直ぐ歩けるか。 */
+    /** Whether a 0.6-wide body can walk straight on the floor from a's center to b's center without changing height. */
     private static boolean clearLine(FakeCells cells, BlockPos a, BlockPos b) {
         double ax = a.getX() + 0.5;
         double az = a.getZ() + 0.5;
@@ -68,7 +68,7 @@ class AnyAngleGapProbeBenchTest {
         return true;
     }
 
-    /** 平地の疾走区間を前から貪欲に直線へ引き直した経路の値段。 */
+    /** Price of the path with flat sprint stretches greedily redrawn as straight lines from the front. */
     private static double pulled(FakeCells cells, BlockPos start, List<PathStep> steps) {
         BlockPos[] points = new BlockPos[steps.size() + 1];
         points[0] = start;
@@ -96,8 +96,8 @@ class AnyAngleGapProbeBenchTest {
     }
 
     /**
-     * ダッシュジャンプで進む人の所要時間。跳び続けていれば段差の上下に手間は掛からず、登りでも疾走を保てるので、
-     * 素の1段の昇降（掘る・置く・減速床の無い手）だけを疾走の水平移動と跳ぶ時間の大きい方へ置き換える。
+     * Time taken by someone moving by sprint-jumping. Jumping continuously costs no overhead on step ups and downs and keeps sprint speed even uphill, so
+     * only plain single-step ascents/descents (moves without digging, placing or slowing floors) are replaced with the larger of the sprint horizontal move and the jump time.
      */
     private static double jumpingTicks(List<PathStep> steps) {
         double total = 0;
@@ -124,7 +124,7 @@ class AnyAngleGapProbeBenchTest {
         return Math.abs(a - b) < 1e-6;
     }
 
-    /** 正味の高低差を引いた上り＋下り（{@code PathOptimalityTest}と同じ）。 */
+    /** Climb + descent minus the net height difference (same as {@code PathOptimalityTest}). */
     private static int wobble(BlockPos start, List<PathStep> steps) {
         int up = 0;
         int down = 0;
@@ -141,17 +141,17 @@ class AnyAngleGapProbeBenchTest {
     @Test
     void gap() throws IOException {
         List<Terrain> terrains = List.of(
-                new Terrain("地上/平原丘陵", "/overworld_terrain_columns.txt.gz", false),
-                new Terrain("地上/山岳", "/overworld_mountains.txt.gz", false),
-                new Terrain("地上/サバンナ", "/overworld_savanna.txt.gz", false),
-                new Terrain("地上/海岸", "/overworld_coast.txt.gz", false),
-                new Terrain("地上/森", "/overworld_forest.txt.gz", false),
-                new Terrain("地上/ジャングル", "/overworld_jungle.txt.gz", false),
-                new Terrain("地上/沼地", "/overworld_swamp.txt.gz", false),
-                new Terrain("ネザー/荒地", "/nether_terrain_columns.txt.gz", true),
-                new Terrain("ネザー/玄武岩", "/nether_basalt_deltas.txt.gz", true),
-                new Terrain("ネザー/ソウル", "/nether_soul_sand_valley.txt.gz", true),
-                new Terrain("エンド", "/end_terrain_columns.txt.gz", false));
+                new Terrain("Overworld/plains-hills", "/overworld_terrain_columns.txt.gz", false),
+                new Terrain("Overworld/mountains", "/overworld_mountains.txt.gz", false),
+                new Terrain("Overworld/savanna", "/overworld_savanna.txt.gz", false),
+                new Terrain("Overworld/coast", "/overworld_coast.txt.gz", false),
+                new Terrain("Overworld/forest", "/overworld_forest.txt.gz", false),
+                new Terrain("Overworld/jungle", "/overworld_jungle.txt.gz", false),
+                new Terrain("Overworld/swamp", "/overworld_swamp.txt.gz", false),
+                new Terrain("Nether/wastes", "/nether_terrain_columns.txt.gz", true),
+                new Terrain("Nether/basalt", "/nether_basalt_deltas.txt.gz", true),
+                new Terrain("Nether/soul", "/nether_soul_sand_valley.txt.gz", true),
+                new Terrain("End", "/end_terrain_columns.txt.gz", false));
         int routesPer = Integer.getInteger("xaeronav.routes", 20);
         for (Terrain terrain : terrains) {
             FakeCells cells = TerrainFixture.load(terrain.resource(), bounds -> {
@@ -186,7 +186,7 @@ class AnyAngleGapProbeBenchTest {
                 sumWobble += wobble(route[0], best.steps());
                 n++;
             }
-            System.out.printf(Locale.ROOT, "%-10s %2d本 格子/直線化 平均%.4f 最悪%.4f 合計%.4f 段差の手間%.1f%% 跳ぶ人の所要%.0f 無駄な上下%d%n",
+            System.out.printf(Locale.ROOT, "%-10s %2d routes grid/straightened mean %.4f worst %.4f total %.4f step overhead %.1f%% jumper time %.0f wasted up/down %d%n",
                     terrain.name(), n, sumRatio / n, worst, sumGrid / sumPulled, 100 * sumStep / sumGrid, sumJumping, sumWobble);
         }
     }

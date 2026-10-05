@@ -3,12 +3,12 @@ package net.prason.xaeronav.pathfinding.astar;
 import java.util.Arrays;
 
 /**
- * A*のオープンセット用の二分ヒープ。1-indexedの配列で持つ。
+ * Binary heap for A*'s open set. Held in a 1-indexed array.
  *
- * <p>{@code PriorityQueue}にコスト更新のたび新しいエントリを積む方式（lazy deletion）だと、
- * 同じ座標のエントリが何重にも溜まり、ヒープが実ノード数の数倍まで膨らむ。
- * {@link PathNode#heapPosition}を持たせてdecrease-keyを直接行うことで、
- * ヒープの要素数は常にオープンなノード数と一致し、エントリ用のオブジェクトも生まれない。
+ * <p>Pushing a new entry onto a {@code PriorityQueue} on every cost update (lazy deletion) piles up
+ * entries for the same coordinate many times over, bloating the heap to several times the real node count.
+ * Giving nodes {@link PathNode#heapPosition} and doing decrease-key directly keeps the heap size
+ * always equal to the number of open nodes, and no entry objects are created.
  */
 final class BinaryHeapOpenSet {
 
@@ -31,7 +31,7 @@ final class BinaryHeapOpenSet {
         siftUp(node);
     }
 
-    /** コストが下がったノードを正しい位置へ引き上げる。 */
+    /** Moves a node whose cost dropped up to its correct position. */
     void update(PathNode node) {
         siftUp(node);
     }
@@ -53,7 +53,7 @@ final class BinaryHeapOpenSet {
         return result;
     }
 
-    /** 段ごとに入れ替えず、空けた穴へ親を降ろしていき、最後に一度だけノードを置く。 */
+    /** Instead of swapping at each level, moves parents down into the vacated hole and places the node only once at the end. */
     private void siftUp(PathNode node) {
         int index = node.heapPosition;
         double cost = node.combinedCost;

@@ -24,61 +24,61 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>「ネザーのルートがおかしい」のオフライン再現。</b>実機（2026-09-07・
- * {@code 0.1.3+6404f17}）で撮れた事実:
+ * <b>Offline reproduction of "the Nether route is wrong".</b> Facts captured in the real game (2026-09-07,
+ * {@code 0.1.3+6404f17}):
  *
  * <ul>
- * <li>{@code /xaeronav debug mapdata}が<b>洞窟レイヤー3（高さ26〜55）だけに3561セル、
- *     他のレイヤーは全部0セル</b>と答えた</li>
- * <li>層1のルートは中間目標5個で目的地に届かず、そのYは33〜50</li>
- * <li>ところが同じ列を保存データで見ると、<b>立てる場所は溶岩面のy32と、その30ブロック上の
- *     クリムゾンの森(y65〜97)</b>。層1が並べた中間目標は溶岩の海の上だった</li>
- * <li>層2は区間3・4・5を解けなかった（{@code leg 3/5: did not reach}）</li>
+ * <li>{@code /xaeronav debug mapdata} reported <b>3561 cells only in cave layer 3 (heights 26-55),
+ *     and 0 cells in every other layer</b></li>
+ * <li>Layer 1's route had 5 intermediate targets and didn't reach the destination; their Y was 33-50</li>
+ * <li>Yet looking at the same columns in the save data, <b>the standable places were the lava surface at y32 and the
+ *     crimson forest 30 blocks above it (y65-97)</b>. The intermediate targets layer 1 laid out were over the lava sea</li>
+ * <li>Layer 2 couldn't solve legs 3, 4, and 5 ({@code leg 3/5: did not reach})</li>
  * </ul>
  *
- * <p><b>再現の要点は「地図がYのスラブでしか見えていない」こと。</b>Xaeroは天井のある次元の
- * 地図を洞窟レイヤー（{@code CAVE_MODE_DEPTH}＝30ブロック）ごとに分けて持つので、
- * プレイヤーが歩いた高さ帯のレイヤーしか埋まらない。歩ける地形が別のレイヤーにあると、
- * 層1にはその床が<b>存在しないもの</b>として見える——{@link CoarseMap#NO_DATA}（未知＝ほぼ最安）
- * ですらなく、<b>そのセルには溶岩の床しか無いという「確かな地図」</b>になる。
+ * <p><b>The key to reproducing it is that "the map is only visible as a Y slab".</b> Xaero keeps the map of dimensions
+ * with a ceiling split into cave layers ({@code CAVE_MODE_DEPTH} = 30 blocks), so only the layers in the height band the
+ * player walked get filled. If walkable terrain is in a different layer, layer 1 sees that floor as
+ * <b>nonexistent</b>: not even {@link CoarseMap#NO_DATA} (unknown = nearly the cheapest), but
+ * <b>a "definite map" saying that cell has only a lava floor</b>.
  *
- * <p>ここでは{@link LiveCoarseSampler}に渡す箱のYを切ってスラブを作る。層1が読むのが
- * Xaeroの地図か実データかは、この症状には関係が無い（{@link CoarseRouter}に何が見えているか
- * だけの話）ので、Xaeroを持ち込まずに同じ地図を作れる。
+ * <p>Here the slab is made by cutting the Y of the box passed to {@link LiveCoarseSampler}. Whether layer 1 reads
+ * Xaero's map or real data doesn't matter for this symptom (it's only about what {@link CoarseRouter} can see),
+ * so the same map can be made without bringing in Xaero.
  */
 class NetherCaveLayerSlabReproTest {
 
     private static final BooleanSupplier NEVER = () -> false;
 
     /**
-     * 見えているレイヤーの高さ帯。実機の{@code layer 3: 3561 cells known, height 26-55}そのまま。
-     * この地形では溶岩面(y31前後)と下の洞窟だけが入り、歩けるクリムゾンの森(y61以上)は外れる。
+     * The height band of the visible layer. Exactly the real game's {@code layer 3: 3561 cells known, height 26-55}.
+     * On this terrain only the lava surface (around y31) and the caves below fall in; the walkable crimson forest (y61 and up) is excluded.
      */
     private static final int SLAB_MIN_Y = 26;
     private static final int SLAB_MAX_Y = 55;
 
-    /** 溶岩の海を挟んだ、上の階（クリムゾンの森）の2点。 */
+    /** Two points on the upper level (the crimson forest), across the lava sea. */
     private static final BlockPos START_COLUMN = new BlockPos(-400, 0, 456);
     private static final BlockPos GOAL_COLUMN = new BlockPos(-216, 0, 520);
 
-    /** 上の階を探し始める高さ。岩盤天井(y123〜127)の上に乗らない値。 */
+    /** Height to start searching for the upper level. A value that doesn't land on top of the bedrock ceiling (y123-127). */
     private static final int UPPER_FLOOR_SEARCH_TOP = 90;
 
-    /** 区間ごとの探索の予算。実機の既定（10万ノード・2秒）と同じ。 */
+    /** Search budget per leg. Same as the real game's default (100,000 nodes, 2 seconds). */
     private static final SearchLimits LEG_LIMITS =
             new SearchLimits(100_000, 2_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
 
-    /** 中間目標はチャンク解像度なので、実機と同じく領域ゴールとして狙う。 */
+    /** Intermediate targets are at chunk resolution, so aim at them as area goals, as in the real game. */
     private static final int LEG_GOAL_RADIUS = 16;
 
     /**
-     * 経路の膨らみの下限。実測は<b>1.52倍</b>（1352tick/200ステップ → 2057tick/258ステップ）。
-     * 実機はこれよりさらに悪い——区間が5本ではなく19本あり、HUDは直線294ブロックに対して
-     * 残り655ブロックと出ていた。
+     * Lower bound on path inflation. Measured at <b>1.52x</b> (1352 ticks/200 steps -> 2057 ticks/258 steps).
+     * The real game was even worse: there were 19 legs instead of 5, and the HUD showed 655 blocks remaining
+     * against a straight line of 294 blocks.
      */
     private static final double COST_RATIO_FLOOR = 1.35;
 
-    /** 中間目標のYと実地形の床がこれ以上離れていたら、そこへは降りられない。 */
+    /** If an intermediate target's Y is farther than this from the real terrain's floor, it can't be descended to. */
     private static final int STANDABLE_TOLERANCE_BLOCKS = 8;
 
     private static FakeCells terrain() throws IOException {
@@ -88,10 +88,10 @@ class NetherCaveLayerSlabReproTest {
     }
 
     /**
-     * {@code y}以下でいちばん高い「立てるY」。
+     * The highest "standable Y" at or below {@code y}.
      *
-     * <p>{@code TerrainFixture#standableY}は列のいちばん上を返すので、天井のある次元では
-     * <b>岩盤天井の上</b>が返る。ここが要るのは「この高さの近くに床があるか」なので上から切る。
+     * <p>{@code TerrainFixture#standableY} returns the top of the column, so in dimensions with a ceiling it returns
+     * <b>the top of the bedrock ceiling</b>. What's needed here is "is there a floor near this height", so cut from above.
      */
     private static int standableAtOrBelow(CellSource cells, SearchBounds bounds, int x, int z, int y) {
         for (int at = Math.min(y, bounds.maxY() - 2); at > bounds.minY(); at--) {
@@ -105,11 +105,11 @@ class NetherCaveLayerSlabReproTest {
     }
 
     /**
-     * その中間目標のYの近くに、実地形で立てる場所があるか。
+     * Whether there's a standable place in the real terrain near that intermediate target's Y.
      *
-     * <p><b>セル（チャンク）全体で見る。</b>中間目標はチャンク解像度の代表点でしかなく、実機も
-     * {@code PathfindingState#resolveOnSurface}でチャンクの中の立てる場所へ寄せてから使う。
-     * 指定された列だけを見ると、そのチャンクに床があっても「立てない」と判定してしまう。
+     * <p><b>Looks at the whole cell (chunk).</b> An intermediate target is only a chunk-resolution representative point, and
+     * the real game also snaps it to a standable place within the chunk via {@code PathfindingState#resolveOnSurface}
+     * before use. Looking only at the given column would judge it "unstandable" even if the chunk has a floor.
      */
     private static boolean standableThere(FakeCells terrain, BlockPos waypoint) {
         int baseX = (waypoint.getX() >> 4) << 4;
@@ -131,7 +131,7 @@ class NetherCaveLayerSlabReproTest {
         return LiveCoarseSampler.sample(terrain, bounds, referenceY, NEVER);
     }
 
-    /** 実機（{@code computeCoarseRoute}）と同じ梯子。到達した段と結果を返す。 */
+    /** The same ladder as the real game ({@code computeCoarseRoute}). Returns the stage reached and the result. */
     private static Attempt ladder(CoarseMap map, BlockPos start, BlockPos goal) {
         for (CoarseRouter.BridgePolicy policy : CoarseRouter.BridgePolicy.values()) {
             CoarseRouter.Route route = CoarseRouter.findRoute(map, start, goal, false, policy);
@@ -174,41 +174,41 @@ class NetherCaveLayerSlabReproTest {
                 full.maxX(), SLAB_MAX_Y, full.maxZ());
         CoarseMap slab = sample(terrain, slabBox, (SLAB_MIN_Y + SLAB_MAX_Y) / 2);
 
-        // 1. スラブの外にある床は、未知ではなく「無かったこと」になる。始点のセルで
-        //    プレイヤーが現に立っている床が消え、層1は30ブロック下の床を「始点」として解く
+        // 1. Floors outside the slab aren't unknown; they "never existed". In the start cell, the floor the
+        //    player is actually standing on disappears, and layer 1 solves with the floor 30 blocks below as the "start"
         int startCellX = start.getX() >> 4;
         int startCellZ = start.getZ() >> 4;
         int seenFloor = seen.nearestFloor(startCellX, startCellZ, start.getY());
         int slabFloor = slab.nearestFloor(startCellX, startCellZ, start.getY());
         assertTrue(Math.abs(seen.heightAtFloor(startCellX, startCellZ, seenFloor) - start.getY()) <= 8,
-                "全部見えていれば、始点のセルの床はプレイヤーの足元にある");
+                "with everything visible, the start cell's floor is at the player's feet");
         assertTrue(slab.heightAtFloor(startCellX, startCellZ, slabFloor) < start.getY() - 8,
-                "スラブしか見えないと、始点の床が足元より大きく下になる（実機: 立っているのはy51、"
-                        + "地図の床はy46で1枚だけ）");
+                "with only the slab visible, the start floor is well below the player's feet (real game: standing at y51, "
+                        + "the only map floor at y46)");
 
-        // 2. 全部見えていれば、溶岩を一切通らない道が見つかり、中間目標は全部立てる場所にある
+        // 2. With everything visible, a path that avoids lava entirely is found, and every intermediate target is standable
         Attempt whenSeen = ladder(seen, start, goal);
         assertEquals(CoarseRouter.BridgePolicy.AVOID, whenSeen.reachedWith(),
-                "上の階が見えていれば溶岩を避けて歩ける");
+                "with the upper level visible, it can walk around the lava");
         assertEquals(List.of(), unstandableWaypoints(terrain, whenSeen.route()),
-                "避けて引いたルートの中間目標は、どれも実地形で立てる場所");
+                "every intermediate target of the avoiding route is standable in the real terrain");
 
-        // 3. スラブしか見えないと、同じ地形で梯子がALLOWまで落ち（実機ログ「奈落・溶岩混じりを
-        //    避ける道が見つからないため、そこを通る長距離ルートに切り替えました」）、
-        //    立てない場所を指す中間目標が出る。これが症状の発生源——詳細探索はそこへ到達できず、
-        //    到達できないぶんを大回りで埋める
+        // 3. With only the slab visible, on the same terrain the ladder falls all the way to ALLOW (real-game log: "No path
+        //    avoiding the void or lava-mixed areas was found, so switched to a long-distance route through them"),
+        //    and intermediate targets pointing at unstandable places appear. This is the source of the symptom: the detailed
+        //    search can't reach them, and makes up for what it can't reach with wide detours
         Attempt whenSlab = ladder(slab, start, goal);
         assertNotEquals(CoarseRouter.BridgePolicy.AVOID, whenSlab.reachedWith(),
-                "スラブしか見えないと、溶岩を避ける道が地図の上に存在しない");
+                "with only the slab visible, no lava-avoiding path exists on the map");
         assertTrue(whenSlab.route().waypoints().size() > whenSeen.route().waypoints().size(),
-                "下の階を這うぶん中間目標が増える（実機: 19区間）");
+                "crawling along the lower level adds intermediate targets (real game: 19 legs)");
         assertNotEquals(List.of(), unstandableWaypoints(terrain, whenSlab.route()),
-                "実機と同じく、立てない場所（溶岩の海・奈落）を指す中間目標が出る");
+                "as in the real game, intermediate targets pointing at unstandable places (lava sea, void) appear");
     }
 
     /**
-     * <b>症状そのもの——同じ地形・同じ両端で、経路が何倍になるか。</b>実機のHUDは直線294ブロックに
-     * 対して残り655ブロックと出ていた。中間目標を順に辿って組み立てたときの総コストで測る。
+     * <b>The symptom itself: how many times longer the path gets with the same terrain and endpoints.</b> The real game's HUD
+     * showed 655 blocks remaining against a straight line of 294 blocks. Measured as the total cost when assembled by following the intermediate targets in order.
      */
     @Test
     void followingTheSlabRouteCostsFarMoreThanWalkingTheUpperFloor() throws Exception {
@@ -230,18 +230,18 @@ class NetherCaveLayerSlabReproTest {
         Walk slab = walk(terrain, start,
                 ladder(sample(terrain, slabBox, (SLAB_MIN_Y + SLAB_MAX_Y) / 2), start, goal).route());
         double ratio = slab.cost() / seen.cost();
-        String measured = "全部見えている=" + Math.round(seen.cost()) + "tick/" + seen.steps() + "ステップ, "
-                + "スラブ=" + Math.round(slab.cost()) + "tick/" + slab.steps() + "ステップ ("
-                + Math.round(ratio * 100) / 100.0 + "倍)";
+        String measured = "all visible=" + Math.round(seen.cost()) + "tick/" + seen.steps() + " steps, "
+                + "slab=" + Math.round(slab.cost()) + "tick/" + slab.steps() + " steps ("
+                + Math.round(ratio * 100) / 100.0 + "x)";
 
-        assertTrue(ratio > COST_RATIO_FLOOR, "スラブしか見えないと経路が大きく膨らむ (" + measured + ")");
+        assertTrue(ratio > COST_RATIO_FLOOR, "with only the slab visible, the path inflates greatly (" + measured + ")");
     }
 
-    /** {@link #walk}の測定値。 */
+    /** Measurements from {@link #walk}. */
     private record Walk(double cost, int steps, int reachedLegs) {
     }
 
-    /** 中間目標を順に辿って組み立てる（実機の区間分割・継ぎ足しと同じ形）。 */
+    /** Assembles by following intermediate targets in order (the same shape as the real game's leg splitting and extension). */
     private static Walk walk(FakeCells terrain, BlockPos start, CoarseRouter.Route route)
             throws Exception {
         PathfindingExecutor executor = new PathfindingExecutor();

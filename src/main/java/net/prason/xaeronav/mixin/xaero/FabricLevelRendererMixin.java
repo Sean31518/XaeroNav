@@ -13,9 +13,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /^*
- * Fabric APIの{@code WorldRenderEvents.END_MAIN}と同じ位置で経路を描く。1.21.10のjarは1.21.9でも使うが、
- * 1.21.9向けのFabric APIにはWorldRenderEventsが無い。{@code method_62214}はメインパスのラムダで、
- * 1.21.9と1.21.10で形が同じ。
+ * Draws the path at the same point as Fabric API's {@code WorldRenderEvents.END_MAIN}. The 1.21.10 jar is
+ * also used on 1.21.9, but the Fabric API for 1.21.9 has no WorldRenderEvents. {@code method_62214} is the
+ * main pass lambda and has the same shape in 1.21.9 and 1.21.10.
  ^/
 @Mixin(LevelRenderer.class)
 public abstract class FabricLevelRendererMixin {

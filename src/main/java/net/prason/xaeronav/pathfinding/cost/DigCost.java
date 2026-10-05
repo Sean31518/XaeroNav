@@ -6,20 +6,20 @@ import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * 掘削コスト計算。1セル分の素の破壊コストのみを扱う。
- * 落下ブロック連鎖は複数セルにまたがる話なので、必須セル群を知っている
- * {@code AStarPathfinder}側で一度だけスキャンする（ここで各セル個別に足すと二重計上になる）。
+ * Dig cost calculation. Handles only the plain break cost of a single cell.
+ * Falling-block chains span multiple cells, so they are scanned once on the
+ * {@code AStarPathfinder} side, which knows the required cells (adding them per cell here would double-count).
  *
- * <p>硬度・ツール速度は独自テーブルではなく、Minecraft本体が実際に使っている
- * {@link BlockState#getDestroySpeed} / {@link ItemStack#getDestroySpeed} をそのまま使う。
- * これにより硬度早見表を手で再実装せずに済み、バニラの挙動と常に一致する。
- * 例外は効率強化で、これだけはプレイヤー側の属性なので{@link ItemStack}からは取れず、
- * ここで{@code Player#getDigSpeed}と同じ式を再現している。
+ * <p>Hardness and tool speed come not from our own table but straight from what Minecraft itself uses:
+ * {@link BlockState#getDestroySpeed} / {@link ItemStack#getDestroySpeed}.
+ * This avoids reimplementing a hardness chart by hand and always matches vanilla behavior.
+ * The exception is Efficiency, which is a player attribute and cannot be read from the {@link ItemStack},
+ * so the same formula as {@code Player#getDigSpeed} is reproduced here.
  *
- * <p>{@code BlockState#getDestroySpeed}は事前計算済みのフィールドを返すだけでlevelを参照しないため、
- * {@link EmptyBlockGetter}を渡してワーカースレッドから呼べる。ホットバーは
- * {@code ChunkView}がメインスレッドで複製したものを受け取る（ライブの{@code Inventory}を
- * ワーカースレッドから触ると競合するため）。
+ * <p>{@code BlockState#getDestroySpeed} just returns a precomputed field and does not touch the level, so
+ * it can be called from a worker thread by passing {@link EmptyBlockGetter}. The hotbar is received as
+ * a copy {@code ChunkView} made on the main thread (touching the live {@code Inventory} from a worker
+ * thread would race).
  */
 public final class DigCost {
 
@@ -45,8 +45,8 @@ public final class DigCost {
     }
 
     /**
-     * ホットバー内の各アイテム（+素手）について「divisor / 速度」を計算し最小値を返す。
-     * hardnessは全候補で共通なので、比較にhardnessを含める必要はない。
+     * Computes "divisor / speed" for each item in the hotbar (+ bare hand) and returns the minimum.
+     * hardness is the same for all candidates, so it does not need to be part of the comparison.
      */
     private static double bestToolEffort(ItemStack[] hotbar, int[] hotbarEfficiency, BlockState state) {
         double best = effort(ItemStack.EMPTY, 0, state);
@@ -64,9 +64,9 @@ public final class DigCost {
         if (speed <= 0.0) {
             return ActionCosts.INFEASIBLE;
         }
-        // 効率強化は道具側の速度ではなくプレイヤーのMINING_EFFICIENCY属性として加算されるため、
-        // ItemStack#getDestroySpeedには含まれない。加算条件（素の速度が1を超えるとき、
-        // ＝その道具で掘れる対象のとき）もPlayer#getDigSpeedに合わせる
+        // Efficiency is added as the player's MINING_EFFICIENCY attribute, not as tool speed, so it is
+        // not included in ItemStack#getDestroySpeed. The condition for adding it (when the base speed exceeds 1,
+        // i.e. the tool is right for the target) also follows Player#getDigSpeed
         if (speed > 1.0 && efficiencyLevel > 0) {
             speed += (double) efficiencyLevel * efficiencyLevel + 1.0;
         }

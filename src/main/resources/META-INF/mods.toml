@@ -12,11 +12,11 @@ displayURL="${mod_display_url}"
 description='''${mod_description}'''
 logoFile="xaeronav_icon.png"
 
-# クライアント専用modだが、Forgeの@Modにはdist指定が無いのでouter entrypointは専用サーバーでも
-# 読み込まれる。client class参照はDist.CLIENTのnested setupへ隔離し、誤導入でも起動を妨げない。
+# A client-only mod, but Forge's @Mod has no dist designation, so the outer entrypoint is loaded on
+# dedicated servers too. Client class references are isolated in Dist.CLIENT's nested setup so a mistaken install doesn't block startup.
 
-# Xaero連携だけを持つ専用config（required=false）。Xaero未導入・注入先が変わった場合は
-# この機能だけが無効になり、MOD本体はワールド内描画で動き続ける
+# Dedicated config holding only the Xaero integration (required=false). If Xaero isn't installed or the injection target changes,
+# only this feature is disabled and the mod itself keeps working with in-world rendering
 [[mixins]]
 config="${mod_id}-xaero.mixins.json"
 
@@ -34,13 +34,13 @@ versionRange="${minecraft_range_maven}"
 ordering="NONE"
 side="BOTH"
 
-# Xaeroの世界地図・ミニマップへの経路描画・右クリックメニュー追加はオプション連携（design doc §2-5）。
-# 未導入でもこのMOD自体はクラッシュせず、ワールド内描画（PathRenderer）だけで動作する。
+# Path rendering on Xaero's world map and minimap and the added right-click menu entries are an optional integration (design doc §2-5).
+# Without it this mod doesn't crash and works with in-world rendering (PathRenderer) alone.
 #
-# versionRangeの下限は、mixinの注入先（GuiMap#render / MinimapFBORenderer#renderChunksToFBO の
-# endBatch呼び出し、GuiMap#getRightClickOptions、WaypointReader#getRightClickOptions）を
-# 実際に確認したバージョン。これより古い版では注入先の形が違い、required=falseのmixin configが
-# 黙って無効になるだけで、ユーザーには「地図に経路が出ない」としか見えない。
+# The lower bound of versionRange is the version where the mixin injection targets (the endBatch call in
+# GuiMap#render / MinimapFBORenderer#renderChunksToFBO, GuiMap#getRightClickOptions, WaypointReader#getRightClickOptions)
+# were actually verified. In older versions the targets have a different shape and the required=false mixin config
+# is just silently disabled, which users only see as "no path on the map".
 [[dependencies.${mod_id}]]
 modId="xaeroworldmap"
 mandatory=false

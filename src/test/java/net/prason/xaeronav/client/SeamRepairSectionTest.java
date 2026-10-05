@@ -15,10 +15,10 @@ import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 繋ぎ目をまたぐ区間だけを差し替えたとき、経路と<b>区間の境目</b>が正しく張り直されること。
+ * When only the stretch spanning a seam is swapped, the path and <b>leg boundaries</b> are correctly re-established.
  *
- * <p>境目はHUDの「何番目の中継地点へ向かっているか」と、地図の点線（未通過ぶんだけ描く）が
- * 見ている。差し替えは前後の添字を動かすので、ここがずれると案内の数字だけが飛ぶ。
+ * <p>Boundaries are looked at by the HUD's "which relay point are we heading to" and the map's dotted line (drawn only for the part not yet passed).
+ * A swap moves the indices before and after it, so if this drifts, only the guidance numbers jump.
  */
 class SeamRepairSectionTest {
 
@@ -29,7 +29,7 @@ class SeamRepairSectionTest {
                 List.of(), List.of(), PathRisk.NONE, null);
     }
 
-    /** x=1..12へ1歩ずつ進む、コスト4の経路。 */
+    /** A path stepping one block at a time to x=1..12, with cost 4. */
     private static List<PathStep> straight() {
         List<PathStep> steps = new ArrayList<>();
         for (int x = 1; x <= 12; x++) {
@@ -45,13 +45,13 @@ class SeamRepairSectionTest {
                 segments);
     }
 
-    /** 差し替えた区間の外は1ステップも動かない。 */
+    /** Nothing outside the swapped stretch moves by even one step. */
     @Test
     void keepsEverythingOutsideTheSection() {
         List<PathStep> steps = straight();
         PathfindingState.DisplayedPath before = shown(steps,
                 List.of(new PathfindingState.PathSegment(11, 2)));
-        // x=4..8（添字3..7）を、コストの安い2ステップへ差し替える
+        // Swap x=4..8 (indices 3..7) for 2 cheaper steps
         List<PathStep> section = List.of(step(20, 1.0), step(8, 1.0));
 
         List<PathStep> after = SeamRepair.withSection(before, section, 3, 7).result().steps();
@@ -61,7 +61,7 @@ class SeamRepairSectionTest {
         assertEquals(3 + section.size() + 4, after.size());
     }
 
-    /** 差し替えた中にあった境目は消え、その中間目標の番号は後ろの区間が引き取る。 */
+    /** Boundaries inside the swapped part disappear, and their intermediate target numbers are taken over by the following leg. */
     @Test
     void dropsSegmentBoundariesInsideTheSection() {
         List<PathStep> steps = straight();
@@ -78,7 +78,7 @@ class SeamRepairSectionTest {
                 after.segments());
     }
 
-    /** 経路の末尾まで差し替えても、最後の区間は必ず末端まで届く。 */
+    /** Even if the swap reaches the end of the path, the last leg always reaches the end. */
     @Test
     void alwaysCoversTheEnd() {
         List<PathStep> steps = straight();
@@ -94,13 +94,13 @@ class SeamRepairSectionTest {
         assertEquals(2, after.waypointIndexAtStep(after.result().steps().size() - 1));
     }
 
-    /** 差し替えた区間が前後と同じ位置を踏んでいたら畳む（繋ぎ目で線が重ならない）。 */
+    /** If the swapped stretch steps on the same positions as before or after, it's folded (lines don't overlap at the seam). */
     @Test
     void foldsOverlapAtTheNewSeam() {
         List<PathStep> steps = straight();
         PathfindingState.DisplayedPath before = shown(steps,
                 List.of(new PathfindingState.PathSegment(11, 2)));
-        // 差し替えた区間が、手前で通ったx=2へ戻ってから進む
+        // The swapped stretch goes back to x=2, passed earlier, before advancing
         List<PathStep> section = List.of(step(2, 1.0), step(8, 1.0));
 
         List<PathStep> after = SeamRepair.withSection(before, section, 3, 7).result().steps();

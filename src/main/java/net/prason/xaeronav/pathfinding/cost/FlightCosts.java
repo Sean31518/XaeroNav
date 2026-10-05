@@ -3,83 +3,83 @@ package net.prason.xaeronav.pathfinding.cost;
 import net.prason.xaeronav.pathfinding.cost.ElytraPhysics.Velocity;
 
 /**
- * 空中経路のコストモデル（単位: tick、他のコストと揃えてある）。
+ * Cost model for aerial routes (unit: ticks, consistent with the other costs).
  *
- * <p>すべての定数は{@link ElytraPhysics}がバニラの漸化式を回して求める。ここに直接書かれた数値は
- * <b>掃引の範囲と刻みだけ</b>で、速度・沈下率・滑空比・上昇率は1つも書き写していない。
+ * <p>Every constant is derived by {@link ElytraPhysics} running vanilla's recurrence. The only numbers written here
+ * directly are <b>the sweep range and step</b>; not a single speed, sink rate, glide ratio or climb rate is copied in.
  *
- * <h2>要点: 水平飛行はすでに「登り」である</h2>
+ * <h2>Key point: level flight is already "climbing"</h2>
  *
- * エリトラはどのピッチでも定常状態で高度を失う（{@link ElytraPhysics#zoomClimb}のコメント参照）。
- * つまり高度を保って飛ぶこと自体に能動的な入力＝ロケットが要る。この非対称性をコストに入れないと、
- * 「まっすぐ水平に飛ぶ」が最安に見えてしまい、実際には滑空だけで届く緩い下り勾配が選ばれなくなる。
+ * The elytra loses altitude in steady state at any pitch (see the comment on {@link ElytraPhysics#zoomClimb}).
+ * In other words, holding altitude itself takes active input, i.e. rockets. Without this asymmetry in the cost,
+ * "flying straight and level" looks cheapest, and gentle downward slopes reachable by gliding alone stop being chosen.
  *
- * <p>そこで区間のコストは、自然な滑空で稼げる降下（水平距離÷滑空比）を先に差し引いてから、
- * 残った分だけを「能動的に稼ぐ高度」として課金する:
+ * <p>So a segment's cost first subtracts the descent that natural gliding earns (horizontal distance ÷ glide ratio),
+ * then charges only the remainder as "altitude to be gained actively":
  *
  * <pre>
  *   requiredClimb = dv + dh / GLIDE_RATIO
  *   cost = dh * HORIZONTAL + max(0, -dv) * DESCENT + max(0, requiredClimb) * ASCENT
  * </pre>
  *
- * <p>副次的に、滑空比より急な降下も割に合わなくなる（{@code -dv}に課金され、requiredClimbは0で
- * 頭打ちなので得にならない）。使い切った高度は登り直すしかない、という実際の損得がそのまま出る。
+ * <p>As a side effect, descents steeper than the glide ratio also stop paying off ({@code -dv} is charged, and requiredClimb
+ * bottoms out at 0 so there's no gain). The real trade-off, that spent altitude can only be regained by climbing, shows up as-is.
  *
- * <h2>見積もりも同じ式で測る</h2>
+ * <h2>The estimate is measured with the same formula</h2>
  *
- * 直線の区間コストそのものが、どんな折れ線のコストも下回らない（{@link #lowerBoundTicks}参照）。
- * 水平飛行の登りの分（ロケット無しで水平コストの約3割）を見積もりから落とすと、そのぶん見積もりが
- * 実コストから離れ、A*が横へ広がる。
+ * The cost of the straight segment itself never exceeds the cost of any polyline (see {@link #lowerBoundTicks}).
+ * Dropping the level-flight climb share (about 30% of the horizontal cost without rockets) from the estimate would move the
+ * estimate that much further from the real cost and make A* spread sideways.
  */
 public final class FlightCosts {
 
-    /** 掃引の刻み（度）。0.5度でポーラの頂点は十分に捉えられる（頂点付近は平坦）。 */
+    /** Sweep step (degrees). 0.5 degrees captures the polar's peak well enough (it's flat near the peak). */
     private static final double PITCH_STEP_DEGREES = 0.5;
 
-    /** 最も遠くまで滑空できる姿勢。ここから水平コストと滑空比が決まる。 */
+    /** The attitude that glides the farthest. The horizontal cost and glide ratio come from this. */
     private static final Velocity BEST_GLIDE =
             ElytraPhysics.bestSteadyState(-30.0, 80.0, PITCH_STEP_DEGREES, false, Velocity::glideRatio);
 
-    /** ロケットを焚き続けたときに最も速く登れる姿勢。 */
+    /** The attitude that climbs fastest while continuously firing rockets. */
     private static final Velocity BEST_ROCKET_CLIMB =
             ElytraPhysics.bestSteadyState(-90.0, 0.0, PITCH_STEP_DEGREES, true, Velocity::vertical);
 
-    /** ロケット無しの上昇は、巡航で溜めた速度を一度きり高度へ替えるしかない。 */
+    /** Climbing without rockets can only trade the speed built up while cruising for altitude, once. */
     private static final ElytraPhysics.ZoomClimb BEST_ZOOM_CLIMB =
             ElytraPhysics.bestZoomClimb(BEST_GLIDE, -5.0, -90.0, PITCH_STEP_DEGREES);
 
-    /** 水平に1ブロック進むtick数。最良滑空姿勢の巡航速度から。 */
+    /** Ticks to travel one block horizontally. From the cruise speed at the best glide attitude. */
     public static final double HORIZONTAL_TICKS_PER_BLOCK = 1.0 / BEST_GLIDE.horizontal();
 
-    /** 水平に何ブロック進む間に1ブロック沈むか。無料で使える降下の勾配。 */
+    /** How many blocks of horizontal travel per block of sinking. The slope of descent available for free. */
     public static final double GLIDE_RATIO = BEST_GLIDE.glideRatio();
 
     /**
-     * 1ブロック降りるtick数。真下へ向けたときの終端速度から。
+     * Ticks to descend one block. From the terminal velocity when pointing straight down.
      *
-     * <p><b>0にしてはいけない</b>。登った高度を取り返す代償が無料に見えると、重み付きA*は
-     * 上りの枝を系統的に選んで{@code closed}で確定させる（歩行側で実際に踏んだ振動と同じ形）。
+     * <p><b>Must not be 0</b>. If the price of giving back climbed altitude looks free, weighted A* systematically picks
+     * the climbing branches and finalizes them as {@code closed} (the same shape as the oscillation actually hit on the walking side).
      */
     public static final double DESCENT_TICKS_PER_BLOCK =
             1.0 / -ElytraPhysics.steadyState(90.0, false).vertical();
 
-    /** ロケットを持っているときに1ブロック登るtick数。 */
+    /** Ticks to climb one block with rockets. */
     public static final double ROCKET_ASCENT_TICKS_PER_BLOCK = 1.0 / BEST_ROCKET_CLIMB.vertical();
 
-    /** ロケットが無いときに1ブロック登るtick数。速度と高度の交換なので桁違いに高い。 */
+    /** Ticks to climb one block without rockets. It's a trade of speed for altitude, so orders of magnitude more expensive. */
     public static final double GLIDING_ASCENT_TICKS_PER_BLOCK = BEST_ZOOM_CLIMB.ticksPerBlock();
 
     private FlightCosts() {
     }
 
-    /** 1ブロック登るtick数。ロケットの所持で切り替わる（ボートの有無で水のコストが変わるのと同じ形）。 */
+    /** Ticks to climb one block. Switches on whether rockets are carried (the same shape as water costs changing with having a boat). */
     public static double ascentTicksPerBlock(boolean rockets) {
         return rockets ? ROCKET_ASCENT_TICKS_PER_BLOCK : GLIDING_ASCENT_TICKS_PER_BLOCK;
     }
 
     /**
-     * 区間を飛ぶtick数。{@code verticalBlocks}は上が正。
-     * 自然な滑空で賄える降下は差し引いてから登りに課金する（クラスのコメント参照）。
+     * Ticks to fly a segment. {@code verticalBlocks} is positive upward.
+     * The descent covered by natural gliding is subtracted before the climb is charged (see the class comment).
      */
     public static double segmentTicks(double horizontalBlocks, double verticalBlocks, boolean rockets) {
         double requiredClimb = verticalBlocks + horizontalBlocks / GLIDE_RATIO;
@@ -89,16 +89,16 @@ public final class FlightCosts {
     }
 
     /**
-     * 水平{@code horizontalBlocks}・垂直{@code verticalLow}〜{@code verticalHigh}（上が正）のどこかへ着く
-     * 経路のコストの下限。<b>どう折れ曲がった経路でも、これを下回らない</b>。
+     * Lower bound on the cost of a route reaching anywhere at horizontal {@code horizontalBlocks} and vertical
+     * {@code verticalLow} to {@code verticalHigh} (positive upward). <b>No route, however bent, goes below this</b>.
      *
-     * <p>{@link #segmentTicks}の3項はどれも区間に対して劣加法的（水平の項は線形、残り2つは線形な量の
-     * {@code max(0, ·)}）なので、折れ線の合計は始点と終点を直線で結んだ1区間のコストを下回らない。
-     * 遠回りは水平距離を増やすだけで、{@code requiredClimb}をかえって増やす。だから直線の区間コストが
-     * そのまま許容的な見積もりになり、隣どうしでも三角不等式が成り立つ（一貫性もある）。
+     * <p>All three terms of {@link #segmentTicks} are subadditive over segments (the horizontal term is linear, the other two are
+     * {@code max(0, ·)} of linear quantities), so the total of a polyline never goes below the cost of the single segment joining
+     * its start and end in a straight line. A detour only adds horizontal distance and, if anything, increases {@code requiredClimb}.
+     * So the straight segment cost is itself an admissible estimate, and the triangle inequality holds between neighbors too (it's consistent).
      *
-     * <p>垂直の幅の中では、最良滑空の勾配（{@code -水平/GLIDE_RATIO}）に最も近い高さで測る。区間コストは
-     * そこで最小になる（それより下は降下に、上は登りに課金される）。
+     * <p>Within the vertical range, it's measured at the height closest to the best glide slope ({@code -horizontal/GLIDE_RATIO}).
+     * The segment cost is minimal there (below it descent is charged, above it climbing is).
      */
     public static double lowerBoundTicks(double horizontalBlocks, double verticalLow, double verticalHigh,
                                          boolean rockets) {
@@ -108,8 +108,8 @@ public final class FlightCosts {
     }
 
     /**
-     * 滑空で賄える登りを割り引かない、粗い見積もり。{@link #lowerBoundTicks}より常に小さい。
-     * 帯の幅を持つ粗い層の状態から測る{@code CoarseFlightRouter}が使う。
+     * A coarse estimate that doesn't discount climbs covered by gliding. Always smaller than {@link #lowerBoundTicks}.
+     * Used by {@code CoarseFlightRouter}, which measures from coarse-layer states that span a band.
      */
     public static double heuristicTicks(double horizontalBlocks, double verticalBlocks, boolean rockets) {
         return horizontalBlocks * HORIZONTAL_TICKS_PER_BLOCK

@@ -5,14 +5,14 @@ import net.prason.xaeronav.pathfinding.astar.SectionMoves;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 1セクションのうち、グラフに入れるセル。自然に立てる点（{@link NaturalColumns}）から水平{@link #HORIZONTAL}・
- * 垂直{@link #VERTICAL}以内の体積だけ。
+ * The cells of one section that go into the graph: only the volume within {@link #HORIZONTAL} horizontally and
+ * {@link #VERTICAL} vertically of a naturally standable point ({@link NaturalColumns}).
  *
- * <p>閉包の99%は掘削と空中の体積で、それを丸ごと持つと窓の辺が数千万本になる。この幅なら質は落ちない
- * （実測: 窓160の中を殻にしてもネザー1.021・山岳1.000で殻なしと同じ、全体に掛けてもネザー1.012・エンド1.010）。
- * <b>水平8より狭めるとエンドの橋が切れる</b>（水平2で1.108）。
+ * <p>99% of the closure is dig-through and mid-air volume; keeping all of it puts tens of millions of edges in the window. This width costs no quality
+ * (measured: shelling the inside of a 160 window gives Nether 1.021 and mountains 1.000, same as no shell; applying it everywhere gives Nether 1.012, End 1.010).
+ * <b>Narrower than 8 horizontally breaks End bridges</b> (1.108 at 2 horizontally).
  *
- * <p>それより広い奈落・溶岩の海は、橋が通りうる列の高さだけを足す（{@link NaturalColumns#bridgeCorridor}）。
+ * <p>Wider voids and lava seas only add the heights of columns a bridge could pass through ({@link NaturalColumns#bridgeCorridor}).
  */
 final class SectionShell implements SectionMoves.Mask {
 
@@ -22,7 +22,7 @@ final class SectionShell implements SectionMoves.Mask {
     private final int minX;
     private final int minZ;
     private final int minY;
-    /** セクションの列（16×16）ごとの、残してよい高さのビット。 */
+    /** Per column of the section (16x16), the bits of the heights that may be kept. */
     private final long[][] allowed;
 
     private SectionShell(int minX, int minZ, int minY, long[][] allowed) {
@@ -33,7 +33,7 @@ final class SectionShell implements SectionMoves.Mask {
     }
 
     /**
-     * 奈落を渡る橋の途中を探す距離の上限（ブロック）。設定の橋の長さが無制限（0）のときに使う。窓の直径より長い橋は窓の中に収まらない。
+     * Upper limit (blocks) on searching for the middle of a bridge across a void. Used when the configured bridge length is unlimited (0). A bridge longer than the window diameter does not fit inside the window.
      */
     private static final int UNLIMITED_BRIDGE_REACH = 320;
 
@@ -43,7 +43,7 @@ final class SectionShell implements SectionMoves.Mask {
         int span = SectionMoves.SIZE + 2 * HORIZONTAL;
         int originX = sectionX * SectionMoves.SIZE - HORIZONTAL;
         int originZ = sectionZ * SectionMoves.SIZE - HORIZONTAL;
-        // 垂直に膨らませてから、X方向・Z方向の順に水平へ膨らませる（分離できるので2回で済む）
+        // Dilate vertically, then horizontally in X then Z (separable, so two passes suffice)
         long[][] grown = new long[span * span][];
         for (int ax = 0; ax < span; ax++) {
             for (int az = 0; az < span; az++) {
@@ -56,7 +56,7 @@ final class SectionShell implements SectionMoves.Mask {
                     for (int w = 0; w < words; w++) {
                         vertical[w] |= column[w] << k;
                         vertical[w] |= column[w] >>> k;
-                        // 語の境目をまたいで膨らむぶん
+                        // The part that dilates across word boundaries
                         if (w > 0) {
                             vertical[w] |= column[w - 1] >>> (64 - k);
                         }

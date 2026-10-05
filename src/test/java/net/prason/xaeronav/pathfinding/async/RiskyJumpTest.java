@@ -17,11 +17,11 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import org.junit.jupiter.api.Test;
 
 /**
- * 「外したら取り返しがつかない跳躍」を避けつつ、他に道が無いときだけ跳ぶこと。
+ * Avoid "jumps you can't recover from if you miss", and jump only when there's no other way.
  *
- * <p>ユーザーの言い分そのものを地形にしてある——<b>C字の島の両端は、跳べば近いが回れば安全</b>
- * なので回る。<b>島と島の間は跳ぶしかない</b>ので跳ぶ。この使い分けは「他に道があるか」であり、
- * 詰み回避の緩和梯子（{@link PathfindingExecutor}）の発動条件そのものなので、そこに載せてある。
+ * <p>The user's own argument turned into terrain: <b>the two ends of a C-shaped island are close by jumping but safe by walking around</b>,
+ * so walk around. <b>Between two islands the only way is to jump</b>, so jump. The distinction is "whether there's another way",
+ * which is exactly the trigger condition of the dead-end relaxation ladder ({@link PathfindingExecutor}), so it rides on that.
  */
 class RiskyJumpTest {
 
@@ -33,24 +33,24 @@ class RiskyJumpTest {
     private static final int FLOOR_Y = 60;
     private static final int FEET_Y = FLOOR_Y + 1;
 
-    /** 跳べば届き、橋なら3マス架かる幅。 */
+    /** A width reachable by jumping, or spanned by a 3-block bridge. */
     private static final int GAP = 3;
 
-    /** C字の腕の長さ。跳べば{@link #GAP}マス、回れば約80マス——近道の誘惑が桁で勝つ形にしておく。 */
+    /** Length of the C's arms. {@link #GAP} blocks by jumping, about 80 by walking around, so the shortcut's temptation wins by an order of magnitude. */
     private static final int ARM_LENGTH = 40;
 
-    /** 上の腕の先端。 */
+    /** Tip of the upper arm. */
     private static final BlockPos UPPER_TIP = new BlockPos(ARM_LENGTH, FEET_Y, 2);
-    /** 下の腕の先端。{@link #UPPER_TIP}とは奈落を挟んで{@link #GAP}マス。 */
+    /** Tip of the lower arm. {@link #GAP} blocks from {@link #UPPER_TIP} across the void. */
     private static final BlockPos LOWER_TIP = new BlockPos(ARM_LENGTH, FEET_Y, 6);
 
     /**
-     * C字の島。開いた口（右端）を跳べば{@link #GAP}マスの近道だが、背（左端）を回れば安全に着ける。
+     * A C-shaped island. Jumping the open mouth (right end) is a {@link #GAP}-block shortcut, but walking around the back (left end) arrives safely.
      *
      * <pre>
-     *   z=0..2   #########################   ← 上の腕
-     *   z=3..5   ###......................   ← 口（奈落）。左3マスだけが背として繋がる
-     *   z=6..8   #########################   ← 下の腕
+     *   z=0..2   #########################   ← upper arm
+     *   z=3..5   ###......................   ← mouth (void). Only the left 3 blocks connect as the back
+     *   z=6..8   #########################   ← lower arm
      * </pre>
      */
     private static FakeCells cShapedIsland() {
@@ -69,8 +69,8 @@ class RiskyJumpTest {
     }
 
     /**
-     * 上の腕の先端から下の腕の先端へ。奈落の上を{@link #GAP}マス跳べば近いが、背を回れば安全に着く。
-     * <b>回る方を選ぶこと</b>——跳んで外せば奈落なので、近道の価値では釣り合わない。
+     * From the upper arm's tip to the lower arm's tip. Jumping {@link #GAP} blocks over the void is shorter, but walking around the back arrives safely.
+     * <b>Choose walking around</b>: a missed jump means the void, so the value of the shortcut doesn't balance it out.
      */
     @Test
     void walksAroundTheCShapeInsteadOfJumpingItsMouth() throws Exception {
@@ -79,14 +79,14 @@ class RiskyJumpTest {
         PathResult result = new PathfindingExecutor()
                 .submit(cells, UPPER_TIP, LOWER_TIP, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "背を回れば着けるはず: " + result.termination());
-        assertFalse(hasJump(result), "回り道があるなら奈落の上は跳ばない");
+        assertTrue(result.complete(), "Walking around the back should arrive: " + result.termination());
+        assertFalse(hasJump(result), "If there's a detour, don't jump over the void");
     }
 
     /**
-     * 同じC字で避けない設定にすると跳ぶ——<b>上のテストが空振りしていないことの担保</b>。
-     * これが無いと、口が跳べない幅だっただけの地形でも上のテストは通ってしまう
-     * （実際、最初に書いた地形は口が24マスあり、直す前から一度も跳んでいなかった）。
+     * On the same C, with the avoid setting turned off, it jumps: <b>the guarantee that the test above isn't passing vacuously</b>.
+     * Without this, the test above would also pass on terrain where the mouth was simply too wide to jump
+     * (in fact, the terrain first written had a 24-block mouth and never jumped even before the fix).
      */
     @Test
     void jumpsTheSameMouthWhenNotAvoidingRiskyJumps() throws Exception {
@@ -95,22 +95,22 @@ class RiskyJumpTest {
         PathResult result = new PathfindingExecutor()
                 .submit(cells, UPPER_TIP, LOWER_TIP, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "跳べば着けるはず: " + result.termination());
-        assertTrue(hasJump(result), "避けない設定なら近道を跳ぶ");
+        assertTrue(result.complete(), "Jumping should arrive: " + result.termination());
+        assertTrue(hasJump(result), "With the avoid setting off, it jumps the shortcut");
     }
 
     /**
-     * <b>橋を架ければ渡れるなら、緩和の梯子は跳躍を開ける前にそちらを使い切る。</b>
+     * <b>If bridging can get across, the relaxation ladder exhausts that option before opening up jumps.</b>
      *
-     * <p>地形は「奈落を挟んだ2つの足場」だが、今度はブロックを持っていて、奈落の橋の上限だけが
-     * 足りない（上限1に対して3マス要る）。素の探索は跳躍も橋も出せずに失敗し、
-     * {@code riskyJumpBlocked}と{@code bridgeRunCapBlocked}が<b>両方</b>立つ。
+     * <p>The terrain is "two platforms across the void", but this time with blocks in the inventory, and only the void bridge cap
+     * falls short (a cap of 1 against the 3 blocks needed). The plain search fails, producing neither a jump nor a bridge, and
+     * <b>both</b> {@code riskyJumpBlocked} and {@code bridgeRunCapBlocked} are set.
      *
-     * <p>以前はこの状態で梯子の1段目が跳躍を無条件に開けていたので、上限を1段緩めれば橋で渡れる
-     * 場面でも<b>跳ぶ方が安いので跳んでいた</b>。実機ジ・エンドは橋が常用される地形なので、
-     * この経路でほぼ毎回跳躍が解禁され、回り込める島の内部の亀裂まで跳んでいた。
+     * <p>Previously, in this state the first rung of the ladder unconditionally opened jumps, so even where relaxing the cap one
+     * rung would have allowed bridging, <b>it jumped because jumping was cheaper</b>. The real End is terrain where bridges are routine,
+     * so jumps were unlocked on almost every route, and it even jumped cracks inside islands that could be walked around.
      *
-     * <p>いまは上限だけを緩める段を全部試してから跳躍を開けるので、ここは橋で渡る。
+     * <p>Now every rung that relaxes only the caps is tried before jumps are opened, so this crosses by bridge.
      */
     @Test
     void looseningTriesBridgingBeforeUnlockingRiskyJumps() throws Exception {
@@ -121,14 +121,14 @@ class RiskyJumpTest {
 
         PathResult result = new PathfindingExecutor().submit(cells, start, goal, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "上限を緩めれば橋で渡れるはず: " + result.termination());
-        assertFalse(hasJump(result), "橋で渡れるなら奈落の上は跳ばない");
-        assertTrue(result.steps().stream().anyMatch(PathStep::bridging), "橋で渡っていること");
+        assertTrue(result.complete(), "Relaxing the cap should allow bridging across: " + result.termination());
+        assertFalse(hasJump(result), "If a bridge can get across, don't jump over the void");
+        assertTrue(result.steps().stream().anyMatch(PathStep::bridging), "Must cross by bridge");
     }
 
     /**
-     * 島と島の間。回り道が無く、置くブロックも持っていないので、跳ぶ以外に手が無い。
-     * 緩和の梯子が開けて跳ぶこと（「絶対に跳ばない」ではなく「他に道が無いときだけ跳ぶ」）。
+     * Between two islands. There's no detour and no blocks to place, so jumping is the only option.
+     * The relaxation ladder must open up and jump ("jump only when there's no other way", not "never jump").
      */
     @Test
     void jumpsBetweenIslandsWhenThereIsNoOtherWay() throws Exception {
@@ -138,11 +138,11 @@ class RiskyJumpTest {
 
         PathResult result = new PathfindingExecutor().submit(cells, start, goal, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "他に道が無いなら跳んで渡るはず: " + result.termination());
-        assertTrue(hasJump(result), "跳躍で渡っていること");
+        assertTrue(result.complete(), "With no other way, it should jump across: " + result.termination());
+        assertTrue(hasJump(result), "Must cross by jumping");
     }
 
-    /** 梯子を通さない素の探索では、同じ地形でも跳ばない（＝既定は避ける側）。 */
+    /** A plain search without the ladder doesn't jump on the same terrain (i.e. the default is to avoid). */
     @Test
     void theBareSearchRefusesTheSameJump() {
         FakeCells cells = twoPlatforms(GAP, 0);
@@ -151,13 +151,13 @@ class RiskyJumpTest {
 
         PathResult result = new AStarPathfinder(cells, LIMITS).search(start, goal, NEVER);
 
-        assertFalse(result.complete(), "既定では奈落の上を跳ばないので届かない: " + result.termination());
-        assertFalse(hasJump(result), "跳躍が経路に含まれないこと");
+        assertFalse(result.complete(), "By default it doesn't jump over the void, so it can't reach: " + result.termination());
+        assertFalse(hasJump(result), "The route must not contain a jump");
     }
 
     /**
-     * 底はあるが、落ちれば今の体力で死ぬ深さの溝。奈落と同じく避ける——
-     * {@code addFall}が「意図して降りる」高さを見るのに対し、こちらは「跳んで外したとき」を見る。
+     * A trench with a bottom, but deep enough that falling would kill you at current health. Avoided like the void:
+     * {@code addFall} looks at heights for "intentionally dropping down", whereas this looks at "missing a jump".
      */
     @Test
     void refusesToJumpOverAPitDeepEnoughToKill() {
@@ -168,10 +168,10 @@ class RiskyJumpTest {
 
         PathResult result = new AStarPathfinder(cells, LIMITS).search(start, goal, NEVER);
 
-        assertFalse(hasJump(result), "落ちたら死ぬ深さの溝は跳ばない");
+        assertFalse(hasJump(result), "Don't jump a trench deep enough to kill on a fall");
     }
 
-    /** 同じ溝でも、落ちて助かる深さなら従来どおり跳ぶ。 */
+    /** The same trench, if shallow enough to survive a fall, is jumped as before. */
     @Test
     void stillJumpsOverAPitShallowEnoughToSurvive() {
         int fatal = ActionCosts.SAFE_FALL_BLOCKS + 20;
@@ -181,14 +181,14 @@ class RiskyJumpTest {
 
         PathResult result = new AStarPathfinder(cells, LIMITS).search(start, goal, NEVER);
 
-        assertTrue(result.complete(), "浅い溝は跳んで渡れるはず: " + result.termination());
-        assertTrue(hasJump(result), "跳躍で渡っていること");
+        assertTrue(result.complete(), "A shallow trench should be jumpable: " + result.termination());
+        assertTrue(hasJump(result), "Must cross by jumping");
     }
 
     /**
-     * 2つの足場を{@code gap}マス離して並べる。
+     * Places two platforms {@code gap} blocks apart.
      *
-     * @param pitDepth 隙間の底までの深さ。0なら底を作らない＝奈落
+     * @param pitDepth depth to the bottom of the gap. 0 means no bottom, i.e. the void
      */
     private static FakeCells twoPlatforms(int gap, int pitDepth) {
         int right = 8 + gap;

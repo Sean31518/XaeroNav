@@ -25,11 +25,11 @@ class AirGridTest {
 
     @Test
     void oneBlockInTheCellIsEnoughToBlockIt() {
-        // 粗さそのものがクリアランス。1ブロックの出っ張りでもセルごと諦める
+        // The coarseness itself is the clearance. Even a one-block protrusion gives up the whole cell
         FakeCells cells = FakeCells.empty(BOUNDS);
         cells.set(2, 42, 1, FakeCells.STONE);
 
-        assertFalse(grid(cells).flyable(0, 10, 0), "セル(0,10,0)は 8..11 のYを含むので石が入っている");
+        assertFalse(grid(cells).flyable(0, 10, 0), "cell (0,10,0) covers Y 8..11, so it contains the stone");
     }
 
     @Test
@@ -42,11 +42,11 @@ class AirGridTest {
 
     @Test
     void unloadedChunksAreBlockedRatherThanTransparent() {
-        // 未ロードを素通りさせるのはFlightLineRouter（方角を示すだけの線）の作法で、
-        // 実際に辿らせる経路では逆にしなければならない
+        // Passing straight through unloaded areas is the convention of FlightLineRouter (a line only showing direction);
+        // for paths actually followed it must be the other way around
         FakeCells cells = FakeCells.empty(new SearchBounds(0, 0, 0, 15, 15, 15));
 
-        assertFalse(grid(cells).flyable(-1, 0, 0), "範囲外のセルが飛行可になっている");
+        assertFalse(grid(cells).flyable(-1, 0, 0), "an out-of-range cell is flyable");
     }
 
     @Test
@@ -60,7 +60,7 @@ class AirGridTest {
         AirGrid grid = grid(cells);
 
         assertFalse(grid.clearLine(new Vec3(-32.0, 40.0, 0.0), new Vec3(32.0, 40.0, 0.0)),
-                "壁を挟んだ2点が「見通せる」ことになっている");
+                "two points with a wall between them count as \"visible\"");
         assertTrue(grid.clearLine(new Vec3(-32.0, 40.0, 0.0), new Vec3(-8.0, 40.0, 0.0)));
     }
 
@@ -76,10 +76,10 @@ class AirGridTest {
         }
         AirGrid grid = grid(cells);
 
-        // 目的地は「着地する地面」であることの方が多い。そのままではセルが飛行不可
+        // The destination is more often "ground to land on". As-is the cell is not flyable
         long snapped = grid.nearestFlyable(new Vec3(0.5, 40.0, 0.5), 3);
 
-        assertTrue(snapped != AirGrid.NONE, "地面の上の空間へ寄せられていない");
+        assertTrue(snapped != AirGrid.NONE, "not snapped to the space above the ground");
         assertTrue(grid.flyable(net.minecraft.core.BlockPos.getX(snapped),
                 net.minecraft.core.BlockPos.getY(snapped),
                 net.minecraft.core.BlockPos.getZ(snapped)));

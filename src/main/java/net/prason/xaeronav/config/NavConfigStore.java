@@ -1,19 +1,19 @@
 package net.prason.xaeronav.config;
 
 /**
- * 設定の保存先。
+ * Where the config is stored.
  *
- * <p>NeoForgeでは{@code ModConfigSpec}（＝FMLが読み書きとファイル監視まで面倒を見る）、
- * Fabricでは自前でnight-configのTOMLを読み書きする。どちらもファイルの場所と書式は同じ
- * （{@code config/xaeronav-client.toml}）。
+ * <p>On NeoForge this is {@code ModConfigSpec} (FML takes care of reading, writing, and even watching the file);
+ * on Fabric we read and write night-config TOML ourselves. Both use the same file location and format
+ * ({@code config/xaeronav-client.toml}).
  */
 public interface NavConfigStore {
 
     NavConfigSpec spec();
 
-    /** 全項目の宣言が済んだ後に1度だけ呼ぶ。ここで初めてファイルの読み込みと既定値の補完が起きる。 */
+    /** Call once, after every entry has been declared. Only then is the file read and defaults filled in. */
     void build();
 
-    /** 変更をディスクへ書き出す。 */
+    /** Writes changes to disk. */
     void save();
 }

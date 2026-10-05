@@ -14,32 +14,32 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * 地形を触る手（掘削・設置）と、横へ回り込む迂回の釣り合い。
+ * The balance between terrain-editing moves (digging, placing) and detouring around to the side.
  *
- * <p><b>ここが低すぎると自然地形では歩くたびに地形を壊す／積むことになる。</b>2マスの段差や幅1の壁は
- * 数ブロックおきにあるので、迂回数ブロックで触る側に倒れる値だと経路の1〜3割が掘削・設置になる
- * （ユーザー報告「地上を歩いてる時に無駄なブロックを掘る動作や、ブロックを置く動作が多い」）。
+ * <p><b>If this is too low, natural terrain gets broken/built up at every step.</b> 2-block steps and 1-wide walls
+ * occur every few blocks, so a value that tips toward editing at a few blocks of detour turns 10-30% of the path into digging/placing
+ * (user report: "when walking on the surface there's a lot of pointless block digging and block placing").
  *
- * <p>倒れる位置は{@link ActionCosts#DIG_OVERHEAD_TICKS}・
- * {@link ActionCosts#PLACE_BLOCK_OVERHEAD_TICKS}の意味そのものなので、片方だけが動いたら
- * どちらかが壊れている。<b>算術上の比（手間 ÷ {@link ActionCosts#SIDESTEP_ONE_BLOCK}）より
- * わずかに手前で倒れる</b>のは重み付きA*が目的地から離れる手を嫌うためで、
- * 定数を動かすときに見るのは比ではなくここで測る位置。
+ * <p>The tipping point is exactly what {@link ActionCosts#DIG_OVERHEAD_TICKS} and
+ * {@link ActionCosts#PLACE_BLOCK_OVERHEAD_TICKS} mean, so if only one of them moves,
+ * one of them is broken. <b>It tips slightly before the arithmetic ratio (overhead / {@link ActionCosts#SIDESTEP_ONE_BLOCK})</b>
+ * because weighted A* dislikes moves away from the destination;
+ * when changing the constants, look at the position measured here, not the ratio.
  *
- * <p>掘削には{@link FakeCells#SOFT}（土・草を鉄のシャベル）を使う。{@link FakeCells#STONE}は
- * 石を<b>素手で</b>掘る値なので、道具を持って歩いている普段のプレイでは常に迂回が勝ってしまい、
- * この釣り合いを測れない。
+ * <p>Digging uses {@link FakeCells#SOFT} (dirt/grass with an iron shovel). {@link FakeCells#STONE} is
+ * the value for digging stone <b>bare-handed</b>, so in normal play walking around with tools the detour would always win,
+ * and this balance couldn't be measured.
  */
 class TerrainEditVersusDetourTest {
 
     private static final BooleanSupplier NEVER = () -> false;
 
-    /** 行程のX距離。斜めで横ずれを吸収できるだけの長さが要る（足りないと迂回が割高に見える）。 */
+    /** X distance of the trip. Needs to be long enough for diagonals to absorb the sideways offset (too short makes the detour look expensive). */
     private static final int SPAN = 40;
 
     /**
-     * 障害物のX。<b>ここまでのX距離が、斜めで吸収できる横ずれの上限になる</b>——障害物が近いと
-     * 迂回が「斜め2手」ではなく「真横へ1手」の値段になり、測っている釣り合いが変わってしまう。
+     * X of the obstacle. <b>The X distance up to here caps the sideways offset diagonals can absorb</b>: if the obstacle is close,
+     * the detour is priced as "1 move straight sideways" instead of "2 diagonal moves", changing the balance being measured.
      */
     private static final int OBSTACLE_X = 20;
 
@@ -47,7 +47,7 @@ class TerrainEditVersusDetourTest {
         return new AStarPathfinder(cells).search(start, goal, NEVER);
     }
 
-    /** 平地。障害物は{@code z < detour}にだけ置くので、{@code z = detour}から先が迂回路になる。 */
+    /** Flat ground. Obstacles are only placed at {@code z < detour}, so from {@code z = detour} onward is the detour route. */
     private static FakeCells flatGround(int detour) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-40, 20, -40, 90, 120, 90));
         for (int x = -4; x <= SPAN + 4; x++) {
@@ -70,7 +70,7 @@ class TerrainEditVersusDetourTest {
         return result.steps().stream().filter(PathStep::bridging).count();
     }
 
-    /** 2マスの壁は登れないので、掘るか回り込むかしかない。設置は切って掘削だけを問う。 */
+    /** A 2-block wall can't be climbed, so the only options are digging or going around. Placing is disabled to ask only about digging. */
     private static PathResult acrossWall(int detour) {
         FakeCells cells = flatGround(detour).canPlaceBlocks(false);
         for (int z = -6; z < detour; z++) {
@@ -81,8 +81,8 @@ class TerrainEditVersusDetourTest {
     }
 
     /**
-     * 2マスの段差。跳んでは登れないので、柱を1本立てるか回り込むかになる。台地を岩盤にするのは
-     * 掘削という第3の道を消すため（残すと、迂回が長いときに柱ではなく天井を崩す方が選ばれる）。
+     * A 2-block step. It can't be jumped up, so it's either building one pillar or going around. The plateau is bedrock
+     * to remove digging as a third option (if left, with a long detour, collapsing the ceiling would be chosen over a pillar).
      */
     private static PathResult upOntoLedge(int detour) {
         FakeCells cells = flatGround(detour).canPlaceBlocks(true);
@@ -98,10 +98,10 @@ class TerrainEditVersusDetourTest {
     }
 
     /**
-     * <b>下の2つが測っているものの前提。</b>横へ1ブロックずれる迂回が
-     * {@link ActionCosts#SIDESTEP_ONE_BLOCK}（＝斜め2手が直進2手を置き換える）で済んでいること。
-     * 斜めの手が出なくなると迂回は真横への1手（{@link ActionCosts#SPRINT_ONE_BLOCK}の2倍）に
-     * 跳ね上がり、倒れる位置が<b>定数を動かさないまま</b>変わる。
+     * <b>The premise of what the two below measure.</b> A detour shifting 1 block sideways costs only
+     * {@link ActionCosts#SIDESTEP_ONE_BLOCK} (= 2 diagonal moves replace 2 straight moves).
+     * If diagonal moves stop appearing, the detour jumps to 1 move straight sideways (2x {@link ActionCosts#SPRINT_ONE_BLOCK}),
+     * and the tipping point changes <b>without the constants moving</b>.
      */
     @Test
     void aSidestepCostsTwoDiagonalStepsWorthOfExtraTravel() {
@@ -112,23 +112,23 @@ class TerrainEditVersusDetourTest {
     }
 
     /**
-     * <p>倒れる位置が「掘削1回ぶんの値段 ÷ 迂回1ブロックの値段」より遠いのは、実際に選ばれる
-     * 掘り方が<b>上の1マスだけ掘って壁の上を越える</b>形だから——越える1段の上り下りに
-     * {@link ActionCosts#STEP_TRANSITION_TICKS}が2回ぶん乗る。
+     * <p>The tipping point is further than "price of one dig / price of one block of detour" because the dig actually chosen
+     * <b>digs only the upper block and goes over the wall</b>: climbing up and down that one step adds
+     * {@link ActionCosts#STEP_TRANSITION_TICKS} twice.
      */
     @Test
     void digsThroughAWallOnlyWhenTheDetourExceedsEightBlocks() {
-        assertEquals(0, digs(acrossWall(7)), "迂回7ブロックなら回り込む");
-        assertEquals(1, digs(acrossWall(8)), "迂回8ブロックからは掘って通る");
+        assertEquals(0, digs(acrossWall(7)), "with a 7-block detour, go around");
+        assertEquals(1, digs(acrossWall(8)), "from an 8-block detour, dig through");
 
         assertTrue(acrossWall(7).complete() && acrossWall(8).complete());
     }
 
-    /** 迂回路の端にも1段の上りがあるので、そのぶん柱の方が早く釣り合う。 */
+    /** The end of the detour also has a one-step climb, so the pillar breaks even that much sooner. */
     @Test
     void pillarsOntoALedgeOnlyWhenTheDetourExceedsTenBlocks() {
-        assertEquals(0, places(upOntoLedge(9)), "迂回9ブロックなら回り込む");
-        assertEquals(1, places(upOntoLedge(10)), "迂回10ブロックからは柱を立てる");
+        assertEquals(0, places(upOntoLedge(9)), "with a 9-block detour, go around");
+        assertEquals(1, places(upOntoLedge(10)), "from a 10-block detour, build a pillar");
 
         assertTrue(upOntoLedge(9).complete() && upOntoLedge(10).complete());
     }

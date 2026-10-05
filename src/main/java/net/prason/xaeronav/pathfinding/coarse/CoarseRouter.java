@@ -12,232 +12,246 @@ import net.prason.xaeronav.pathfinding.astar.CostToGo;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * {@link CoarseMap}の上で、目的地までのおおまかな道筋を1チャンク単位で引く。
+ * Draws a rough route to the destination over the {@link CoarseMap}, one chunk at a time.
  *
- * <p>結果は経路そのものではなく<b>中間目標の列</b>として使う。ここで決めるのは「海をどちら回りで
- * 避けるか」「どの谷を通るか」「（天井のある次元では）どの階層を通るか」という大局だけで、
- * 実際に辿る経路は読み込み済みチャンクを見る詳細探索が中間目標ごとに引き直す。粗い側が
- * 1マス単位の通行可否を持たない以上、ここで出した線をそのまま歩けるとは限らない。
+ * <p>The result is used not as the path itself but as <b>a sequence of intermediate targets</b>. All
+ * this decides is the big picture: "which way around the sea", "which valley to go through", and
+ * "(in dimensions with a ceiling) which layer to use". The path actually followed is re-drawn per
+ * intermediate target by the detail search, which looks at loaded chunks. Since the coarse side has
+ * no per-block passability, the line drawn here is not guaranteed to be walkable as-is.
  *
- * <p>探索の状態は{@code (chunkX, chunkZ, floor)}——{@link CoarseMap}のセル単位の床。
- * 同じXZに複数の独立した階層が重なる次元（ネザー）で、階層をまたぐ移動を「安い段差」として
- * 誤魔化さず、専用のコスト（{@link #LAYER_TRANSITION_PENALTY}）を持つ独立した辺として扱う。
- * 床数が常に1になる次元（地上・ジ・エンド）では、この状態空間は旧来の{@code (chunkX, chunkZ)}と
- * 完全に同じになる。
+ * <p>The search state is {@code (chunkX, chunkZ, floor)}: a per-cell floor of the {@link CoarseMap}.
+ * In dimensions where several independent layers stack at the same XZ (the Nether), moving between
+ * layers is not fudged as a "cheap step" but treated as a separate edge with its own cost
+ * ({@link #LAYER_TRANSITION_PENALTY}). In dimensions where the floor count is always 1 (Overworld,
+ * The End), this state space is exactly the same as the old {@code (chunkX, chunkZ)}.
  *
- * <p>コストは詳細探索と同じtick単位で見積もる。単位を揃えておかないと、「粗い側では最短なのに
- * 詳細側では明らかな遠回り」という食い違いが起きたときに、どちらの見積もりが外れているのか
- * 突き合わせられない。
+ * <p>Costs are estimated in ticks, the same unit as the detail search. Without matching units, when
+ * they disagree ("shortest on the coarse side but an obvious detour on the detail side"), there is
+ * no way to tell which estimate is off.
  */
 public final class CoarseRouter {
 
-    /** 1セルの一辺（ブロック）。{@link CoarseMap}が1チャンク単位なので16。 */
+    /** Side length of one cell (blocks). 16, since {@link CoarseMap} is per chunk. */
     private static final int CELL_BLOCKS = 16;
 
     private static final double STRAIGHT_COST = CELL_BLOCKS * ActionCosts.SPRINT_ONE_BLOCK;
     private static final double DIAGONAL_COST = STRAIGHT_COST * ActionCosts.DIAGONAL_DISTANCE;
 
     /**
-     * 水面を渡る倍率。疾走とうつ伏せ泳ぎの速度比（5.612 / 3.6）そのもの。
+     * Multiplier for crossing water surface. Exactly the speed ratio of sprinting to swimming (5.612 / 3.6).
      *
-     * <p>層1が水セルに見ているのは<b>水面を渡る</b>コストなので{@link ActionCosts#SWIM_ONE_BLOCK}を使う。
+     * <p>What layer 1 sees in a water cell is the cost of <b>crossing the surface</b>, so it uses {@link ActionCosts#SWIM_ONE_BLOCK}.
      *
-     * <p>分母が{@link ActionCosts#SPRINT_ONE_BLOCK}なのは、倍率を掛ける相手の
-     * {@link #STRAIGHT_COST}が疾走を基準にしているから。徒歩で割ると、陸を疾走で見積もりながら
-     * 水との比だけ徒歩で測ることになり、比が体系的にずれる。
+     * <p>The denominator is {@link ActionCosts#SPRINT_ONE_BLOCK} because the multiplier is applied to
+     * {@link #STRAIGHT_COST}, which is based on sprinting. Dividing by walking would estimate land at
+     * sprint speed while measuring only the water ratio at walking speed, skewing the ratio systematically.
      */
     private static final double WATER_MULTIPLIER =
             ActionCosts.SWIM_ONE_BLOCK / ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
-     * ボートで進むときの水面通過倍率。{@link ActionCosts#PADDLE_ONE_BLOCK}が
-     * {@link ActionCosts#SPRINT_ONE_BLOCK}より小さいため、{@link #WATER_MULTIPLIER}と違い
-     * 1未満になる＝水を避けるコストではなく積極的に選ぶ近道になる。
+     * Water-surface multiplier when travelling by boat. Because {@link ActionCosts#PADDLE_ONE_BLOCK} is
+     * smaller than {@link ActionCosts#SPRINT_ONE_BLOCK}, unlike {@link #WATER_MULTIPLIER} this is
+     * below 1, i.e. not a cost for avoiding water but a shortcut to choose actively.
      */
     private static final double BOAT_MULTIPLIER =
             ActionCosts.PADDLE_ONE_BLOCK / ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
-     * 地図に無いセルを通る倍率。通れないと決めつけると、未訪問の土地を挟む目的地へは
-     * 一切ルートが出ない。逆に陸と同じ扱いにすると、既知の迂回路を捨てて未知の直線へ突っ込む。
-     * 「分かっている道が多少遠回りでも、そちらを選ぶ」程度に重くしておく。
+     * Multiplier for passing through cells missing from the map. Treating them as impassable means no
+     * route ever reaches a destination beyond unvisited land. Treating them like land, on the other
+     * hand, abandons known detours to charge straight into the unknown. Make it heavy enough that "a
+     * known road is preferred even if somewhat longer".
      */
     private static final double UNKNOWN_MULTIPLIER = 1.6;
 
     /**
-     * 溶岩が混じるセルを通る倍率。他の倍率と違い実測の速度比ではない——溶岩は歩みを遅くするのではなく
-     * 迂回を強いるものなので、「チャンク内で溶岩を避けて回り込むぶん実距離が2倍前後になる」という
-     * 見積もりに、層1からは安全に抜けられるか分からないぶんの余裕を足した値。
+     * Multiplier for passing through cells containing lava. Unlike the other multipliers this is not a
+     * measured speed ratio: lava doesn't slow you down, it forces detours, so this is the estimate "going
+     * around lava within a chunk roughly doubles the actual distance", plus a margin for layer 1 not
+     * knowing whether the cell can be crossed safely.
      *
-     * <p>ネザーはこの種のセルが常時混じるので、これを通行不能にすると経路が繋がらない。
-     * かといって陸と同じにすると溶岩地帯を突っ切る案内になる。「他に道があるならそちら」を選ばせる重み。
+     * <p>The Nether always has cells like this, so making them impassable would disconnect routes.
+     * But treating them like land would guide straight through lava fields. A weight that makes it pick "the other way, if there is one".
      */
     private static final double LAVA_MIXED_MULTIPLIER = 2.5;
 
     /**
-     * {@link BridgePolicy#BRIDGE}で溶岩セルを渡る倍率。層1と層3はコストの単位をtickで揃えてあるので、
-     * ここは勘ではなく層3の実コストから導く——1ブロックあたり
-     * {@code SPRINT_ONE_BLOCK + PLACE_BLOCK_AIM_TICKS + LAVA_BRIDGE_PENALTY_TICKS ≒ 35.6}tick、
-     * 通常の陸が3.564なので比は約10倍になる。
+     * Multiplier for crossing lava cells with {@link BridgePolicy#BRIDGE}. Layers 1 and 3 share tick
+     * units for cost, so this is derived from layer 3's actual cost rather than a guess: per block
+     * {@code SPRINT_ONE_BLOCK + PLACE_BLOCK_AIM_TICKS + LAVA_BRIDGE_PENALTY_TICKS ≒ 35.6} ticks,
+     * against 3.564 for normal land, a ratio of about 10x.
      *
-     * <p>足すのが{@code PLACE_BLOCK_OVERHEAD_TICKS}ではなく{@code PLACE_BLOCK_AIM_TICKS}なのは、
-     * 層3が溶岩・奈落の橋では走行を中断するぶんの割増を乗せないため
-     * （{@code ActionCosts#TERRAIN_EDIT_INTERRUPTION_TICKS}）。層1だけ乗せると2つの層が
-     * 別の値段で同じ橋を評価することになる。
+     * <p>It adds {@code PLACE_BLOCK_AIM_TICKS} rather than {@code PLACE_BLOCK_OVERHEAD_TICKS} because
+     * layer 3 does not add the surcharge for interrupting the sprint on lava and void bridges
+     * ({@code ActionCosts#TERRAIN_EDIT_INTERRUPTION_TICKS}). Adding it only in layer 1 would make the
+     * two layers price the same bridge differently.
      */
     private static final double LAVA_BRIDGE_MULTIPLIER =
             (ActionCosts.SPRINT_ONE_BLOCK + ActionCosts.PLACE_BLOCK_AIM_TICKS
                     + ActionCosts.LAVA_BRIDGE_PENALTY_TICKS) / ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
-     * {@link BridgePolicy#BRIDGE}で奈落セルを渡る倍率。{@link #LAVA_BRIDGE_MULTIPLIER}と同じく
-     * 層3の実コスト（{@link ActionCosts#VOID_BRIDGE_PENALTY_TICKS}）から導く。
+     * Multiplier for crossing void cells with {@link BridgePolicy#BRIDGE}. Like
+     * {@link #LAVA_BRIDGE_MULTIPLIER}, derived from layer 3's actual cost ({@link ActionCosts#VOID_BRIDGE_PENALTY_TICKS}).
      *
-     * <p><b>この倍率が「どこまでの奈落なら渡るか」を実質的に決めている。</b>層1はA*なので橋の
-     * 連続長を状態に持てず（状態数がk倍になれば到達距離は1/√k）、{@code maxVoidBridgeRunBlocks}を
-     * 層1で表現する手段が無い。代わりに1セル＝16ブロックがこの倍率で効くので、奈落2セル
-     * （32ブロック）を渡る費用は徒歩約320ブロック相当になる——それより近い回り込みがあれば
-     * 必ずそちらが勝つ。詳細探索が上限で渡れない長さの奈落は、そもそも層1が選ばなくなる。
+     * <p><b>This multiplier effectively decides "how much void is worth crossing".</b> Layer 1 is A*,
+     * so it can't keep the bridge's run length in its state (k times the states means 1/√k the reach),
+     * and has no way to express {@code maxVoidBridgeRunBlocks}. Instead, with 1 cell = 16 blocks under
+     * this multiplier, crossing 2 void cells (32 blocks) costs about as much as walking 320 blocks, so
+     * any shorter way around always wins. Void too long for the detail search to bridge within its
+     * limit is simply never chosen by layer 1.
      */
     private static final double VOID_BRIDGE_MULTIPLIER =
             (ActionCosts.SPRINT_ONE_BLOCK + ActionCosts.PLACE_BLOCK_AIM_TICKS
                     + ActionCosts.VOID_BRIDGE_PENALTY_TICKS) / ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
-     * {@link #UNKNOWN_MULTIPLIER}を奈落比に読み替えた値——{@code 1.6 = (1-r) + r·}
-     * {@link #VOID_BRIDGE_MULTIPLIER}を{@code r}について解いたもの（約0.067）。
-     * 「未知セルの7%弱は奈落」という見積もりが元の1.6倍の正体だった、と言い換えている。
+     * {@link #UNKNOWN_MULTIPLIER} reinterpreted as a void ratio: {@code 1.6 = (1-r) + r·}
+     * {@link #VOID_BRIDGE_MULTIPLIER} solved for {@code r} (about 0.067).
+     * In other words, the original 1.6x really meant "just under 7% of unknown cells are void".
      */
     private static final double UNKNOWN_PRIOR_VOID_RATIO =
             (UNKNOWN_MULTIPLIER - 1.0) / (VOID_BRIDGE_MULTIPLIER - 1.0);
 
     /**
-     * {@link #calibratedUnknownMultiplier}で、既知セルの実測に対抗させる
-     * {@link #UNKNOWN_PRIOR_VOID_RATIO}の重み（セル数に換算した値）。
+     * Weight (in equivalent cell count) of {@link #UNKNOWN_PRIOR_VOID_RATIO} pitted against the measured
+     * known cells in {@link #calibratedUnknownMultiplier}.
      *
-     * <p><b>閾値ではなく重みにしてあるのが要点。</b>「既知がN個未満なら較正しない」と切ると、
-     * N個目の1セルが陸か奈落かだけで倍率が1.6から10近くまで跳ぶ段差ができる——層1は移動の
-     * たびに引き直されるので、その段差は「行きは未知を直進、帰りは既知を大回り」と経路が
-     * 揺れる形で表に出る。先に奈落比{@link #UNKNOWN_PRIOR_VOID_RATIO}の既知セルをこの数だけ
-     * 見たことにして混ぜれば、既知が増えるほど実測へ滑らかに寄り、段差は出ない。
+     * <p><b>The key point is that this is a weight, not a threshold.</b> Cutting off with "don't
+     * calibrate below N known cells" creates a step where the multiplier jumps from 1.6 to nearly 10
+     * depending only on whether the Nth cell is land or void. Layer 1 is re-drawn on every move, so
+     * that step surfaces as the route flip-flopping ("straight through the unknown going out, a wide
+     * detour through the known coming back"). Mixing in this many pretend-seen known cells at void
+     * ratio {@link #UNKNOWN_PRIOR_VOID_RATIO} makes it shift smoothly toward the measurement as known
+     * cells increase, with no step.
      *
-     * <p>50セルという重みは、奈落比40%前後を想定したとき標準誤差がおよそ7ポイントに収まる数
-     * （実測に基づく厳密な統計的閾値ではない）。
+     * <p>The weight of 50 cells keeps the standard error around 7 points assuming a void ratio near 40%
+     * (not a rigorous statistical threshold based on measurement).
      */
     private static final double UNKNOWN_PRIOR_WEIGHT_CELLS = 50.0;
 
     /**
-     * 高低差1ブロックあたりの追加コスト。登りも下りも同じだけ掛ける。
-     * 粗いセルでは崖と緩斜面を区別できないので、どちらつかずの中間の重みにしておき、
-     * 「同じくらいの距離なら平坦な方」を選ばせるためだけに使う。
+     * Extra cost per block of height difference, applied equally up and down.
+     * Coarse cells can't tell cliffs from gentle slopes, so this is a noncommittal middle weight,
+     * used only to make it pick "the flatter one at about the same distance".
      */
     private static final double HEIGHT_COST_PER_BLOCK = ActionCosts.JUMP_ONE_BLOCK;
 
     /**
-     * ガイドが1ブロックの登りに乗せる追加コスト。<b>{@link #HEIGHT_COST_PER_BLOCK}ではない</b>——
-     * 登りは水平移動に相乗りするので、実際に増えるのは{@code Ascend}と疾走の差だけ
-     * （{@code Heuristic}の相乗りと同じ考え方）。{@link #HEIGHT_COST_PER_BLOCK}をそのまま使うと
-     * 4倍ほど過大になり、起伏のある地上で経路が平坦な方へ不必要に逃げる。
+     * Extra cost the guide puts on one block of ascent. <b>Not {@link #HEIGHT_COST_PER_BLOCK}</b>:
+     * climbing piggybacks on horizontal movement, so all that actually increases is the difference
+     * between {@code Ascend} and sprinting (same idea as the piggyback in {@code Heuristic}). Using
+     * {@link #HEIGHT_COST_PER_BLOCK} as-is overestimates about 4x, pushing routes on hilly terrain
+     * toward flat ground needlessly.
      */
     private static final double GUIDE_ASCEND_COST_PER_BLOCK =
             ActionCosts.ASCEND_ONE_BLOCK - ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
-     * セル内の起伏（{@code maxHeight - minHeight}）がこれを超えたら崖とみなす。
-     * バニラの{@code SAFE_FALL_DISTANCE}既定値（{@link ActionCosts#SAFE_FALL_BLOCKS}）をそのまま使う。
-     * これより緩やかな起伏は、平均高さの差分で表現される通常の坂として扱えば十分。
+     * Relief within a cell ({@code maxHeight - minHeight}) beyond this is treated as a cliff.
+     * Uses vanilla's {@code SAFE_FALL_DISTANCE} default ({@link ActionCosts#SAFE_FALL_BLOCKS}) as-is.
+     * Gentler relief is fine to treat as an ordinary slope, expressed by differences in average height.
      */
     private static final int CLIFF_THRESHOLD_BLOCKS = ActionCosts.SAFE_FALL_BLOCKS;
 
     /**
-     * 崖セルへ踏み込む追加コスト。平均高さは周囲と同じでも、セル内部の起伏が大きいチャンクは
-     * 「崖の途中に平地が乗っている」可能性が高く、詳細探索が大きく迂回・掘削する羽目になりやすい。
-     * 平均だけを見る{@link #HEIGHT_COST_PER_BLOCK}では、山腹の急斜面チャンクと緩斜面チャンクが
-     * 同じ扱いになってしまうのを補う。
+     * Extra cost for stepping into a cliff cell. Even with the same average height as its surroundings,
+     * a chunk with large internal relief is likely "a flat patch partway up a cliff", where the detail
+     * search tends to end up detouring or digging a lot. This compensates for
+     * {@link #HEIGHT_COST_PER_BLOCK}, which only looks at averages and so treats steep and gentle
+     * hillside chunks the same.
      */
     private static final double CLIFF_COST_PER_BLOCK = ActionCosts.JUMP_ONE_BLOCK;
 
     /**
-     * 崖ペナルティの上限。線形加算のままだと、起伏が激しい地形（ネザーの3D迷路では常態）で
-     * {@link #LAVA_MIXED_MULTIPLIER}による溶岩の追加コストをあっさり上回り、「平坦な溶岩の海」が
-     * 「起伏のある本物の地形」より安く見えてしまう（実測: 起伏30ブロック程度でLAND側が逆転する）。
+     * Cap on the cliff penalty. Left linear, on rugged terrain (the norm in the Nether's 3D maze) it
+     * easily exceeds the extra lava cost from {@link #LAVA_MIXED_MULTIPLIER}, making "a flat sea of lava"
+     * look cheaper than "real terrain with relief" (measured: LAND flips at about 30 blocks of relief).
      *
-     * <p>不変条件として「崖ペナルティの上限 &lt; 溶岩混じりセルの追加コスト」を保つ。直進1セルぶんの
-     * 追加コスト（{@code STRAIGHT_COST * (LAVA_MIXED_MULTIPLIER - 1)}）を基準にする——斜めより
-     * 直進の方が基準コストが小さく、条件が厳しい側なのでここで揃えておけば両方で成り立つ。
-     * 安全マージンとして9割に抑える。
+     * <p>Keeps the invariant "cliff penalty cap &lt; extra cost of a lava-mixed cell". It is based on the
+     * extra cost of one straight cell ({@code STRAIGHT_COST * (LAVA_MIXED_MULTIPLIER - 1)}): straight has
+     * a smaller base cost than diagonal, making it the stricter case, so matching it here holds for both.
+     * Held to 90% as a safety margin.
      */
     private static final double CLIFF_PENALTY_CAP = STRAIGHT_COST * (LAVA_MIXED_MULTIPLIER - 1.0) * 0.9;
 
     /**
-     * 同じセル内で階層をまたぐ（床i↔床i+1）移動の割増倍率。粗い地図はその階層間に実際に
-     * 通れる縦穴があるかまでは分からない——{@code Δheight × HEIGHT_COST_PER_BLOCK}に、
-     * 「本当に繋がっているか分からない」ぶんの割増を掛ける。{@link #UNKNOWN_MULTIPLIER}や
-     * {@link #LAVA_MIXED_MULTIPLIER}と同じ「通れなくはないが、確実な道より高くつく」という
-     * 設計思想の値で、実測に基づく係数ではない（要調整）。
+     * Surcharge multiplier for moving between layers within the same cell (floor i ↔ floor i+1). The
+     * coarse map doesn't know whether there is actually a passable shaft between the layers, so
+     * {@code Δheight × HEIGHT_COST_PER_BLOCK} is multiplied by a surcharge for "not knowing whether it's
+     * really connected". Same design idea as {@link #UNKNOWN_MULTIPLIER} and
+     * {@link #LAVA_MIXED_MULTIPLIER} ("not impassable, but pricier than a sure road"); not a measured
+     * coefficient (needs tuning).
      */
     private static final double LAYER_TRANSITION_PENALTY = 2.0;
 
     /**
-     * これだけのセル数があれば「大きい島」とみなす（3×3チャンク＝48×48ブロック）。
-     * これ以上の陸塊へ渡るときは割増を取らない。
+     * A landmass of at least this many cells counts as a "large island" (3×3 chunks = 48×48 blocks).
+     * No surcharge when crossing to a landmass at least this large.
      */
     private static final int LARGE_ISLAND_CELLS = 9;
 
     /**
-     * 1セル（16×16ブロック）だけの陸塊へ渡るときの割増。ユーザー要望
-     * 「ジ・エンドでは島と島を渡ることをなるべく避けたい。<b>大きい島を渡りながらのルート</b>にしたい」
-     * に応えるためのもの。
+     * Surcharge for crossing to a landmass of only 1 cell (16×16 blocks). Answers the user request
+     * "In The End I'd like to avoid hopping between islands as much as possible. I want <b>a route that
+     * travels across large islands</b>".
      *
-     * <p><b>「渡る回数」そのものには課さない。</b>短い飛び石を選ぶのは層3の橋の上限
-     * （{@code maxVoidBridgeRunBlocks}）という<b>実現可能性</b>の要請で、
-     * {@code CoarseRouterTest#prefersSteppingStoneIslandsOverTheShortestVoidCrossing}が
-     * 固定しているとおり正しい挙動——そこを潰すと渡れない長さの奈落を選ぶようになる。
-     * 課すのは「どの島を踏むか」だけで、小さい島より大きい島を選ばせる。
+     * <p><b>It does not charge for "the number of crossings" itself.</b> Choosing short stepping stones
+     * is a <b>feasibility</b> requirement from layer 3's bridge limit ({@code maxVoidBridgeRunBlocks}),
+     * and is correct behaviour, as pinned down by
+     * {@code CoarseRouterTest#prefersSteppingStoneIslandsOverTheShortestVoidCrossing}; breaking it
+     * makes the route pick void too long to cross. It charges only for "which islands to land on",
+     * making it prefer large islands over small ones.
      *
-     * <p>徒歩4チャンク（64ブロック）相当。これだけ遠回りしてでも大きい島を経由する価値がある、
-     * という重み。奈落1セル（{@link #VOID_BRIDGE_MULTIPLIER}≒10倍＝徒歩160ブロック相当）よりは
-     * 十分軽いので、<b>大きい島へ渡るために余計な奈落を1セル増やす</b>ような選択にはならない。
+     * <p>Equivalent to walking 4 chunks (64 blocks): the weight of "worth detouring this far to go via
+     * a large island". Well below one void cell ({@link #VOID_BRIDGE_MULTIPLIER} ≒ 10x = walking 160
+     * blocks), so it never <b>adds an extra void cell to reach a large island</b>.
      */
     private static final double SMALL_ISLAND_PENALTY = STRAIGHT_COST * 4.0;
 
     /**
-     * 中間目標を置く水平間隔（セル＝チャンク）。
+     * Horizontal spacing (cells = chunks) at which intermediate targets are placed.
      *
-     * <p><b>詳細探索が一度に狙う距離（{@code detailHorizonBlocks}、既定96）より必ず短く保つこと。</b>
-     * 間引きは「最大軸の差がこの値に達したら」で判定するので、斜めに続くルートでの実際の間隔は
-     * 最大{@code spacing * √2 * 16}ブロックになる——6セルだと最大135.8ブロックで、96を超えた分は
-     * 詳細探索が一度に狙えない。そうなると目標は<b>waypointへの直線上</b>に取るしかなくなり
-     * （{@code PathfindingState#pointAlongRoute}）、ルートが曲がっている所でその直線が角を切り落として、
-     * 層1が避けた溶岩の海のただ中に目標が落ちる。4セルなら最大90.5ブロックで常に96の内側に収まり、
-     * 「次の中間目標そのものを狙う」だけで済む。
+     * <p><b>Always keep this shorter than the distance the detail search aims at once
+     * ({@code detailHorizonBlocks}, default 96).</b> Thinning triggers when "the largest-axis difference
+     * reaches this value", so on diagonal routes the actual spacing is up to
+     * {@code spacing * √2 * 16} blocks: with 6 cells that is up to 135.8 blocks, and anything past 96
+     * can't be aimed at in one detail search. The target then has to be taken <b>on the straight line
+     * toward the waypoint</b> ({@code PathfindingState#pointAlongRoute}), and where the route bends that
+     * line cuts the corner, dropping the target into the middle of a lava sea layer 1 avoided. With 4
+     * cells it's at most 90.5 blocks, always inside 96, so "aim at the next intermediate target itself"
+     * is enough.
      *
-     * <p>間隔を詰めても詳細探索の回数は増えない。{@code reachableWaypointTarget}は
-     * <b>届く範囲で最も遠い</b>中間目標を狙うので、詰めた分は素通りされて解像度だけが上がる。
+     * <p>Tighter spacing doesn't increase the number of detail searches. {@code reachableWaypointTarget}
+     * aims at the <b>farthest reachable</b> intermediate target, so the extra ones are skipped and only resolution improves.
      */
     private static final int WAYPOINT_SPACING_CELLS = 4;
 
     /**
-     * 中間目標を置く垂直間隔（ブロック）。水平の間隔（{@link #WAYPOINT_SPACING_CELLS}）だけで
-     * 間引くと、同じXZで階層を何段も登る区間（水平移動が0のまま）がwaypoint無しの1区間に
-     * 圧縮され、詳細探索が「現在地から遥か上」という1つの目標をいきなり狙う羽目になる。
-     * {@code PathfindingState#REFINED_WAYPOINT_MIN_SPACING_BLOCKS}と同じ値に揃えてある。
+     * Vertical spacing (blocks) at which intermediate targets are placed. Thinning only by the
+     * horizontal spacing ({@link #WAYPOINT_SPACING_CELLS}) collapses a stretch climbing many layers at the
+     * same XZ (zero horizontal movement) into one segment with no waypoints, so the detail search
+     * suddenly has to aim at a single target "far above the current position".
+     * Matches {@code PathfindingState#REFINED_WAYPOINT_MIN_SPACING_BLOCKS}.
      */
     private static final int WAYPOINT_VERTICAL_SPACING_BLOCKS = 24;
 
     /**
-     * ゴールに届かなかったときの到達点候補を、{@code h + g / 係数}という複数の指標で同時に追う。
-     * {@link net.prason.xaeronav.pathfinding.astar.AStarPathfinder}と同じ考え方・同じ係数列。
-     * ヒューリスティック単独（＝ゴールに一番近いセル）で選ぶと、海に突き出した半島の先端のような
-     * 「辿り着くのに莫大なコストを払った行き止まり」を掴んでしまう。係数が小さいほど
-     * 実際に進んだ距離を重く見る。
+     * When the goal isn't reached, tracks endpoint candidates by several metrics {@code h + g / coefficient}
+     * at once. Same idea and same coefficient list as
+     * {@link net.prason.xaeronav.pathfinding.astar.AStarPathfinder}. Choosing by the heuristic alone
+     * (= the cell closest to the goal) grabs "a dead end that cost an enormous amount to reach", like the
+     * tip of a peninsula jutting into the sea. Smaller coefficients weigh actual distance travelled more.
      */
     private static final double[] COEFFICIENTS = {1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0};
 
     /**
-     * これ未満しか進めない暫定ルートは提示する価値がない（セル＝チャンク、XZ平面上の距離）。
-     * {@link net.prason.xaeronav.pathfinding.astar.AStarPathfinder#MIN_DIST_PATH}と同じ役割だが、
-     * 単位がブロックではなくチャンクなのでこちらは1セルにしておく。
+     * A provisional route that progresses less than this isn't worth presenting (cells = chunks,
+     * distance on the XZ plane). Same role as
+     * {@link net.prason.xaeronav.pathfinding.astar.AStarPathfinder#MIN_DIST_PATH}, but the unit is
+     * chunks rather than blocks, so this one is 1 cell.
      */
     private static final double MIN_DIST_CELLS = 1.0;
 
@@ -245,8 +259,8 @@ public final class CoarseRouter {
     }
 
     /**
-     * 中間目標の列。{@code reachedGoal}がfalseなら、目的地まで届かないまま
-     * 「その時点で最もゴールに近づけた地点」で終わっている。
+     * Sequence of intermediate targets. If {@code reachedGoal} is false, it ends without reaching the
+     * destination, at "the point that got closest to the goal at that time".
      */
     public record Route(List<BlockPos> waypoints, boolean reachedGoal) {
 
@@ -260,24 +274,25 @@ public final class CoarseRouter {
     }
 
     /**
-     * <b>足場を置かないと通れないセル</b>（溶岩・奈落）の扱い。呼び出し側は{@link #AVOID}から
-     * 順に試し、届かなかったときだけ緩める。
+     * How to treat <b>cells that can't be crossed without placing blocks</b> (lava, void). Callers try
+     * from {@link #AVOID} in order and relax only when the goal isn't reached.
      *
-     * <p>層1が溶岩地帯や奈落を突っ切ると決めると、そのwaypointへは詳細探索が原理的に到達できない
-     * （溶岩の上も奈落の上も歩けない）。段階を分けるのは「大きく迂回してでも避ける道」を必ず先に
-     * 探させるため——迂回や後戻りはA*が勝手に見つけるので、ここで表現するのは可否だけでよい。
+     * <p>If layer 1 decides to cut through a lava field or the void, the detail search fundamentally
+     * cannot reach that waypoint (you can't walk on lava or void). Staging ensures "a road that avoids
+     * it, even with a big detour" is always searched first; A* finds detours and backtracking on its
+     * own, so all this needs to express is allowed/not allowed.
      *
-     * <p>溶岩と奈落を1つのつまみにまとめてあるのは、どちらも「橋を架ける前提でなら通れる」という
-     * 同じ性質だから。ただし<b>緩む段が違う</b>——溶岩の橋には設定のスイッチがあるのに対し、
-     * 奈落の橋にはそれが無い（層3は{@code canPlaceBlocks}だけで判断する）ので、奈落は
-     * {@link #ALLOW}の時点で開く。
+     * <p>Lava and void share one knob because both have the same property: "passable if you bridge
+     * them". However, <b>they relax at different stages</b>: lava bridging has a config switch, while
+     * void bridging doesn't (layer 3 decides only by {@code canPlaceBlocks}), so void opens up at
+     * {@link #ALLOW}.
      */
     public enum BridgePolicy {
-        /** 溶岩の混じるセルも奈落も一切通らない。大回りでも避けた道があるならそれを見つける。 */
+        /** Never passes lava-mixed cells or void. Finds a road that avoids them, even a long detour. */
         AVOID,
-        /** 溶岩が混じるセルと奈落は通れるが高い。過半数が溶岩のセルだけは通行不能。 */
+        /** Lava-mixed cells and void are passable but expensive. Only majority-lava cells are impassable. */
         ALLOW,
-        /** 過半数が溶岩のセルも含めて、橋を架けて渡る前提で通す。最後の手段。 */
+        /** Passes everything, including majority-lava cells, assuming they are bridged. Last resort. */
         BRIDGE
     }
 
@@ -318,7 +333,7 @@ public final class CoarseRouter {
 
         while (!open.isEmpty()) {
             Candidate current = open.poll();
-            // decrease-keyの代わりに同じ状態を複数回積むので、古い方はここで捨てる
+            // The same state is pushed multiple times instead of decrease-key, so drop stale ones here
             if (closed[current.index()]) {
                 continue;
             }
@@ -349,67 +364,71 @@ public final class CoarseRouter {
     }
 
     /**
-     * ゴールから逆向きに全セル・全床への実コスト下限を計算する。層3のヒューリスティックが
-     * 併用するguide（{@link net.prason.xaeronav.pathfinding.astar.CostToGo}）の実体——壁や
-     * 溶岩の海を回避した見積もりを、幾何学的な直線距離の代わりに使えるようにする。
+     * Computes a lower bound on actual cost from the goal backwards to every cell and floor. This is
+     * the substance of the guide ({@link net.prason.xaeronav.pathfinding.astar.CostToGo}) used alongside
+     * layer 3's heuristic, letting it use estimates that route around walls and lava seas instead of
+     * geometric straight-line distance.
      *
-     * <p>{@link #findRoute}と違い、ヒューリスティックを使わない素のDijkstraで
-     * openが尽きるまで（＝到達可能な全状態への最短距離が確定するまで）回す。
-     * {@link #stepCost}系は非対称（進入先セルの性質で決まる）なので、ゴールから逆走するときは
-     * 呼び出しの{@code from}/{@code to}を入れ替える——「セルAからBへ入るコスト」を、
-     * Bに立ってAへ向かって数える形になる。
+     * <p>Unlike {@link #findRoute}, this runs plain Dijkstra without a heuristic until open is
+     * exhausted (= until shortest distances to all reachable states are settled).
+     * The {@link #stepCost} family is asymmetric (determined by the properties of the entered cell), so
+     * when running backwards from the goal the call's {@code from}/{@code to} are swapped: "the cost of
+     * entering B from cell A" is counted standing on B, facing A.
      *
-     * <p><b>近似であることの注意</b>: {@link #findRoute}の水平移動は隣接セルの最も高さが近い
-     * 床<b>だけ</b>に繋ぐ（階層をまたぐ移動が垂直遷移の割増を迂回しないため）。この関数を
-     * 正確に逆走するには「どの床がどの床から『最寄り』として選ばれうるか」を逆算する必要があり
-     * 複雑になるため、ここでは隣接セルの全床を候補にする単純化を採用する。結果は
-     * 「本当に繋がる場合より広く見積もる」方向にしか外れない——admissibleな
-     * {@link net.prason.xaeronav.pathfinding.astar.Heuristic}とのmaxを取って使う設計
-     * （{@code AStarPathfinder#node}参照）なので、この近似が探索を壊すことはない
-     * （最悪でも幾何学的下限まで自然に落ちる）。
+     * <p><b>Caveat on approximation</b>: horizontal moves in {@link #findRoute} connect <b>only</b> to
+     * the floor of the neighbouring cell closest in height (so moves between layers don't bypass the
+     * vertical transition surcharge). Reversing that exactly would require working out "which floors
+     * could be chosen as 'nearest' from which floors", which is complicated, so this simplifies by
+     * taking all floors of neighbouring cells as candidates. The result can only err toward
+     * "estimating wider than what's really connected". It's designed to be used as the max with the
+     * admissible {@link net.prason.xaeronav.pathfinding.astar.Heuristic}
+     * (see {@code AStarPathfinder#node}), so this approximation never breaks the search
+     * (at worst it naturally falls back to the geometric lower bound).
      *
-     * <p><b>ガイド（この表）は実コストの下限でなければならない、という約束。</b>
+     * <p><b>The contract: the guide (this table) must be a lower bound on actual cost.</b>
      *
-     * <p>{@code AStarPathfinder#node}はガイドと幾何学的な{@code Heuristic}の<b>大きい方</b>をhに使う。
-     * ガイドが実コストを上回った瞬間、A*はその方向を実際より高く見積もって<b>経路の形を変える</b>——
-     * しかも層1はチャンク単位なので、変わり方は地形ではなくチャンク格子に従う。
+     * <p>{@code AStarPathfinder#node} uses the <b>larger</b> of the guide and the geometric {@code Heuristic} as h.
+     * The moment the guide exceeds actual cost, A* overestimates that direction and <b>changes the
+     * shape of the path</b>; and since layer 1 is per chunk, the change follows the chunk grid, not the terrain.
      *
-     * <p>そこで<b>同じ地図を2通りに値付けする</b>。{@link #findRoute}（どの谷を通るかの計画）は
-     * 好みを含んだ値、この表（詳細探索のガイド）は下限だけ。
-     * 下限側で落とすのは次の5つで、いずれも<b>実際にかかる時間ではない</b>:
+     * <p>So <b>the same map is priced two ways</b>. {@link #findRoute} (planning which valley to take)
+     * uses values including preferences; this table (the detail search's guide) uses lower bounds only.
+     * The lower-bound side drops the following five, none of which are <b>actual time spent</b>:
      *
      * <ul>
-     * <li>{@link #cliffPenalty} — セル内の起伏が大きいだけで、平坦な棚を通れることもある</li>
-     * <li>{@link #SMALL_ISLAND_PENALTY} — 「大きい島を渡りたい」という人間の好み</li>
-     * <li>{@code NO_DATA}の倍率（{@link #calibratedUnknownMultiplier}） — 分からないことは
-     *     高くつく理由にならない</li>
-     * <li>{@link #LAYER_TRANSITION_PENALTY} — 縦穴があるか分からないぶんの割増</li>
-     * <li>下りの{@link #HEIGHT_COST_PER_BLOCK} — 降りは走り抜けられて実コストが増えない</li>
-     * <li>水・{@link CoarseMap#LAVA_MIXED}の倍率 — セルの過半数が水でも、乾いた帯を通って
-     *     16ブロック横断できる列は珍しくない。閾値ぶんまで薄めても下限にはならない</li>
-     * <li>代表高さ(チャンク平均)で測った登り — 鞍部を越えられる尾根セルが平均の高さぶん
-     *     登らされる。<b>セル内の最低と最高</b>で測り直す</li>
-     * <li>床の高さと実際のYのずれ（{@link #floorOffsetCost}） — 崖下の浜のように床として
-     *     記録されなかった高さに居ると、「その床まで登ってから」の値になる</li>
+     * <li>{@link #cliffPenalty}: large relief within a cell doesn't rule out a flat ledge to pass along</li>
+     * <li>{@link #SMALL_ISLAND_PENALTY}: the human preference "I want to cross large islands"</li>
+     * <li>The {@code NO_DATA} multiplier ({@link #calibratedUnknownMultiplier}): not knowing is not
+     *     a reason for something to be expensive</li>
+     * <li>{@link #LAYER_TRANSITION_PENALTY}: the surcharge for not knowing whether a shaft exists</li>
+     * <li>Descending {@link #HEIGHT_COST_PER_BLOCK}: you can run down, so actual cost doesn't increase</li>
+     * <li>The water and {@link CoarseMap#LAVA_MIXED} multipliers: even when most of a cell is water,
+     *     it's common for a row to be crossable for 16 blocks along a dry strip. Diluting to the
+     *     threshold fraction still isn't a lower bound</li>
+     * <li>Climbs measured by representative height (chunk average): a ridge cell whose saddle can be
+     *     crossed is made to climb by its average height. Re-measured with <b>the cell's min and max</b></li>
+     * <li>Offset between floor height and actual Y ({@link #floorOffsetCost}): standing at a height not
+     *     recorded as a floor, like a beach below a cliff, yields the value "after climbing to that floor"</li>
      * </ul>
      *
-     * <p>奈落（{@link CoarseMap#VOID}）の倍率だけは薄めない。ジ・エンドで島の縁へ誘導しているのは
-     * これで、外すと島渡りが解けなくなる。
+     * <p>Only the void ({@link CoarseMap#VOID}) multiplier is not diluted. It's what steers toward island
+     * edges in The End; removing it makes island hopping unsolvable.
      *
-     * <p><b>下限であることは{@code GuideAdmissibilityTest}が直接測る。</b>実測は最適経路上で
-     * 0.65〜0.98倍。上の5つのうち後半3つは、そこで1.22〜2.02倍の上振れとして見つかったもの。
+     * <p><b>Being a lower bound is measured directly by {@code GuideAdmissibilityTest}.</b> Measured on
+     * optimal paths: 0.65-0.98x. The last three of the five above were found there as overshoots of 1.22-2.02x.
      *
-     * <p><b>代償は探索の広さ。</b>実機エンドの島渡り（{@code RealEndTerrainTest}の区間）で
-     * 69,159→260,176ノード、並列の深い予算まで含めた実時間で約1.2秒→約3.2秒。好みを戻すほど
-     * 速くなるが経路は悪くなる（崖ペナルティを戻すと147,073ノード・約1.4秒だが、地上で許容を
-     * 超える経路が7本→34本）。<b>案内の速さより経路の質を採った</b>のがこの選択。
+     * <p><b>The price is search breadth.</b> For island hopping in a real End (the segment in
+     * {@code RealEndTerrainTest}): 69,159 → 260,176 nodes, about 1.2 s → about 3.2 s in wall time
+     * including the parallel deep budget. Restoring preferences makes it faster but paths worse
+     * (restoring the cliff penalty gives 147,073 nodes and about 1.4 s, but Overworld paths beyond
+     * tolerance go from 7 to 34). This choice <b>favours path quality over guidance speed</b>.
      *
-     * <p>基準（重み1.0・ガイド無し・予算無制限）との経路コスト比。40〜90ブロックは
-     * {@code PathOptimalityTest}、200〜450ブロックは{@code LongRouteOptimalityTest}:
+     * <p>Path cost ratio against the baseline (weight 1.0, no guide, unlimited budget). 40-90 blocks from
+     * {@code PathOptimalityTest}, 200-450 blocks from {@code LongRouteOptimalityTest}:
      *
      * <pre>
-     * 40〜90ブロック   地上 平均0.96〜1.01 最悪1.067 / ネザー 平均0.82〜1.00 / エンド 平均1.011
-     * 200〜450ブロック 地上 平均1.046 最悪1.078
+     * 40-90 blocks    Overworld avg 0.96-1.01 worst 1.067 / Nether avg 0.82-1.00 / End avg 1.011
+     * 200-450 blocks  Overworld avg 1.046 worst 1.078
      * </pre>
      */
     public static CostToGo costToGo(CoarseMap map, BlockPos goal, boolean boatAvailable, BridgePolicy bridgePolicy) {
@@ -417,13 +436,15 @@ public final class CoarseRouter {
     }
 
     /**
-     * 航法グラフの窓の外の推定。{@link #costToGo}と同じ表を引くが、床より下にいる座標では床までの登りを
-     * <b>引かずに足す</b>。
+     * Estimate outside the nav graph's window. Looks up the same table as {@link #costToGo}, but for
+     * coordinates below the floor the climb to the floor is <b>added rather than subtracted</b>.
      *
-     * <p>{@link #costToGo}の差し引きは下限を守るためのもので、窓の縁の値としては地中深くの縁ほど安く見せる。
-     * 窓の中の登りは正確に数えるので、差し引くと「登らずに深いまま縁へ出て、窓の外で登ったことにする」出口が勝つ
-     * （海沿いの地形で深さ-23からの経路が最適の1.19倍、窓の中にある水の縦穴を使わず東へ深いまま進んだ）。
-     * 窓の外の推定は下限である必要が無い（ネザーの3D粗層も1.3倍して使う）。
+     * <p>The subtraction in {@link #costToGo} is there to keep the lower bound; as a window-edge value
+     * it makes edges deeper underground look cheaper. Climbs inside the window are counted exactly, so
+     * subtracting lets an exit win that "stays deep to the edge without climbing and pretends to climb
+     * outside the window" (on coastal terrain, a route from depth -23 came out 1.19x optimal, heading
+     * east while staying deep instead of using a water shaft inside the window).
+     * The estimate outside the window needn't be a lower bound (the Nether's 3D coarse layer is also used at 1.3x).
      */
     public static CostToGo farEstimate(CoarseMap map, BlockPos goal, boolean boatAvailable, BridgePolicy bridgePolicy) {
         CoarseCostToGo table = costToGo(map, goal, boatAvailable, bridgePolicy, true);
@@ -478,26 +499,30 @@ public final class CoarseRouter {
     }
 
     /**
-     * セル中心の値をブロック座標へ落とすときに差し引く量（tick）。
+     * Amount (ticks) to subtract when bringing a cell-center value down to block coordinates.
      *
-     * <p>表が持っているのは<b>セル中心から目的地セルの中心まで</b>の値だけなので、素のまま引くと
-     * セルの中のどこにいても同じ値になる。実際には、引く側の座標も目的地もセルの中で最大
-     * 半セル対角ぶん中心からずれていて、その分だけ表の値は実コストを上回る。
+     * <p>The table only holds values <b>from cell center to the destination cell's center</b>, so a raw
+     * lookup gives the same value anywhere in the cell. In reality, both the looked-up coordinate and
+     * the destination are offset from center by up to half a cell diagonal, and the table value
+     * exceeds actual cost by that much.
      *
-     * <p>差し引かないと、{@code AStarPathfinder#node}のmaxが幾何学的な下限（{@code Heuristic}）より
-     * 大きい値を拾い、<b>hに16ブロック周期の鋸歯が乗る</b>。重み1.5・closedを開き直さない探索と
-     * 組み合わさると、詳細経路はチャンク境界へ吸い寄せられて<b>長い直線と直角</b>だけになる。
-     * 同じ始終点での実測（左が鋸歯の乗った経路、右がガイド無しの最適経路と一致する現在の経路）:
+     * <p>Without subtracting, the max in {@code AStarPathfinder#node} picks a value larger than the
+     * geometric lower bound ({@code Heuristic}), and <b>h gets a sawtooth with a 16-block period</b>.
+     * Combined with weight 1.5 and a search that doesn't reopen closed nodes, the detail path gets
+     * pulled to chunk borders and becomes <b>only long straights and right angles</b>.
+     * Measured with the same start and end (left: path with the sawtooth; right: the current path,
+     * matching the guide-less optimal path):
      *
      * <pre>
-     * 合成の平地   60手(斜め22/直進38)          → 40手(全部斜め)
-     * 合成の起伏   150手(斜め30/直進120)         → 100手(斜め80)
-     * 実機エンド島 148手(斜め32/直進116)         → 101手(斜め79)
+     * Synthetic flat     60 moves (22 diag / 38 straight)    → 40 moves (all diagonal)
+     * Synthetic hills    150 moves (30 diag / 120 straight)  → 100 moves (80 diag)
+     * Real End island    148 moves (32 diag / 116 straight)  → 101 moves (79 diag)
      * </pre>
      *
-     * <p><b>一律に1セル対角ぶん（{@link #DIAGONAL_COST}）引くのでは引きすぎる。</b>上振れの上限では
-     * あるが、ガイド全体が弱まって奈落越えに要る展開ノード数が既定予算(10万)を超える。ずれは
-     * 座標ごとに分かっているので、その実測値だけを引く。
+     * <p><b>Subtracting a flat one-cell diagonal ({@link #DIAGONAL_COST}) is too much.</b> It is an upper
+     * bound on the overshoot, but it weakens the whole guide so the nodes expanded to cross the void
+     * exceed the default budget (100k). The offset is known per coordinate, so only that measured value
+     * is subtracted.
      */
     private static double centerOffsetCost(int x, int z, int chunkX, int chunkZ) {
         int dx = Math.abs(x - (chunkX * CELL_BLOCKS + CELL_BLOCKS / 2));
@@ -508,15 +533,16 @@ public final class CoarseRouter {
     }
 
     /**
-     * その座標が、割り当てられた床の高さからどれだけ縦にずれているか。
+     * How far the coordinate is vertically offset from the height of its assigned floor.
      *
-     * <p>層1は<b>床＝水平な面</b>しか持たないので、張り出しの下・崖下の浜のように床として
-     * 記録されなかった高さに居ると、見積もりが「その床まで登ってから」の値になり実コストを
-     * 上回る。実測（{@code GuideAdmissibilityTest}の海岸）で、ゴールが崖下のy=48なのに層1の床が
-     * y=63しか無い経路が<b>1.84倍</b>まで上振れしていた。ずれのぶんを引いて打ち消す。
+     * <p>Layer 1 only has <b>floors = horizontal surfaces</b>, so standing at a height not recorded as a
+     * floor, like under an overhang or on a beach below a cliff, makes the estimate the value "after
+     * climbing to that floor", exceeding actual cost. Measured (the coast in {@code GuideAdmissibilityTest}):
+     * a route whose goal was y=48 below a cliff while layer 1's floor was only y=63 overshot by
+     * <b>1.84x</b>. Subtracting the offset cancels this out.
      *
-     * <p>下りにも登りの単価を使う（下りは実コストが増えないので引きすぎになるが、
-     * <b>引きすぎは下限を壊さない</b>）。
+     * <p>The ascent rate is used for descent too (descent doesn't increase actual cost, so this
+     * subtracts too much, but <b>subtracting too much doesn't break the lower bound</b>).
      */
     private static double floorOffsetCost(CoarseMap map, int chunkX, int chunkZ, int floor, int y) {
         short height = stateHeight(map, chunkX, chunkZ, floor);
@@ -527,19 +553,20 @@ public final class CoarseRouter {
     }
 
     /**
-     * {@link #costToGo}の結果をブロック座標で引けるようにする薄いラッパー。範囲外・データ無しの
-     * 座標は0を返す（層1に情報が無いだけで、{@code AStarPathfinder}側は幾何学的な
-     * {@link net.prason.xaeronav.pathfinding.astar.Heuristic}とのmaxを取るので、0を返しても
-     * 「情報が無いので寄与しない」以上の害は無い——{@link Double#POSITIVE_INFINITY}を返すと、
-     * layer3の探索範囲がこの地図の読み取り範囲より広いだけで無限大に汚染されてしまう）。
+     * Thin wrapper making {@link #costToGo}'s result look-up-able by block coordinate. Out-of-range or
+     * no-data coordinates return 0 (layer 1 just has no information, and {@code AStarPathfinder} takes
+     * the max with the geometric {@link net.prason.xaeronav.pathfinding.astar.Heuristic}, so returning 0
+     * does no harm beyond "contributing nothing for lack of information"; returning
+     * {@link Double#POSITIVE_INFINITY} would poison layer 3 with infinity just because its search range
+     * is wider than this map's read range).
      *
-     * @param goalOffset 目的地がその所属セルの中心からずれているぶん（{@link #centerOffsetCost}）。
-     *                   座標ごとのずれと違って探索中は変わらないので、表を作るときに1度だけ求める
+     * @param goalOffset How far the destination is offset from the center of its cell ({@link #centerOffsetCost}).
+     *                   Unlike the per-coordinate offset it doesn't change during the search, so it is computed once when building the table
      */
     /**
-     * @param valueUnknownCells Xaeroの地図に無いセルでも未知セルの表の値を返す（窓の外の推定）。0を返すと窓の縁で
-     *                          「分からない」として種から外され、地図に無い所（テレポート直後・未踏の洞窟）では
-     *                          窓の縁に種が1つも無く、ガイドが丸ごと空になる
+     * @param valueUnknownCells Return the unknown-cell table value even for cells missing from Xaero's map (estimate outside the window).
+     *                          Returning 0 drops window-edge cells as "unknown" from the seeds, and where the map has nothing
+     *                          (right after a teleport, unexplored caves) the window edge has no seeds at all and the guide is entirely empty
      */
     private record CoarseCostToGo(CoarseMap map, double[] cost, double goalOffset, boolean chargeClimbFromBelow,
                                   boolean valueUnknownCells) implements CostToGo {
@@ -577,9 +604,9 @@ public final class CoarseRouter {
         boolean diagonal = dx != 0 && dz != 0;
         int neighborFloorCount = Math.max(map.floorCount(neighborX, neighborZ), 1);
         for (int neighborFloor = 0; neighborFloor < neighborFloorCount; neighborFloor++) {
-            // from/toを入れ替え: 「neighborからxへ入るコスト」を計算する（逆走なので）
-            // lowerBound=trueなので、渡した値は捨てられる（下限は常に1.0）。較正値ではなく
-            // 定数を渡して「ガイドは較正の対象外」という契約を呼び出し側にも書いておく
+            // Swap from/to: compute "the cost of entering x from neighbor" (since we're running backwards).
+            // lowerBound=true, so the passed value is discarded (the lower bound is always 1.0). Passing a
+            // constant rather than the calibrated value documents the "guide is not calibrated" contract at the call site too
             double step = horizontalStepCost(map, neighborX, neighborZ, neighborFloor, x, z, floor, diagonal,
                     waterMultiplier, UNKNOWN_MULTIPLIER, bridgePolicy, true);
             if (Double.isInfinite(step)) {
@@ -599,8 +626,8 @@ public final class CoarseRouter {
             if (neighborFloor < 0 || neighborFloor >= floorCount) {
                 continue;
             }
-            // 逆走なので「neighborFloorからfloorへ上がる」ぶん。下りに値段を付けず、
-            // LAYER_TRANSITION_PENALTYも掛けないのはcostToGoのjavadocのとおり
+            // Running backwards, so this is "climbing from neighborFloor to floor". Not pricing descent
+            // and not applying LAYER_TRANSITION_PENALTY is per costToGo's javadoc
             double climb = Math.max(0,
                     map.heightAtFloor(x, z, floor) - map.heightAtFloor(x, z, neighborFloor));
             offerBackward(map, cost, closed, open, x, z, floor, x, z, neighborFloor,
@@ -624,8 +651,8 @@ public final class CoarseRouter {
     }
 
     /**
-     * 始点・終点の座標が実際にどの床を指すかを解決する。既知セルなら実際のYに最も近い床、
-     * 未知セルなら唯一の状態（{@code floor=0}、{@link #stateKind}が{@code NO_DATA}を返す）。
+     * Resolves which floor the start and end coordinates actually refer to. For a known cell, the floor
+     * closest to the actual Y; for an unknown cell, the only state ({@code floor=0}, for which {@link #stateKind} returns {@code NO_DATA}).
      */
     private static int resolveFloor(CoarseMap map, int chunkX, int chunkZ, int y) {
         int floor = map.nearestFloor(chunkX, chunkZ, y);
@@ -633,13 +660,14 @@ public final class CoarseRouter {
     }
 
     /**
-     * 水平方向の隣接セルへは、今の床に高さが最も近い床<b>だけ</b>へ繋ぐ（隣接セルの全床へではない）。
+     * Horizontal neighbours connect <b>only</b> to the floor closest in height to the current floor (not to all floors of the neighbour).
      *
-     * <p>全床へ繋ぐと、階層をまたぐはずの移動が{@link #LAYER_TRANSITION_PENALTY}を経由せず、
-     * 普通の坂と同じ{@code heightPenalty}だけで隣のセルの遠い階層へ「水平移動のふりをして」
-     * 渡れてしまう——{@link #relaxVertical}で明示的に払わせているはずの「本当に繋がっているか
-     * 分からない」割増を、水平移動が迂回して素通りする抜け道になる。最寄りの床だけに絞れば、
-     * 緩やかな坂はそのまま辿れる一方、階層が急に変わる箇所は必ず垂直遷移を経由することになる。
+     * <p>Connecting to all floors would let a move that should cross layers reach a distant layer in the
+     * neighbouring cell "disguised as a horizontal move", paying only the same {@code heightPenalty} as an
+     * ordinary slope and skipping {@link #LAYER_TRANSITION_PENALTY}. That becomes a loophole where
+     * horizontal moves bypass the "not knowing whether it's really connected" surcharge that
+     * {@link #relaxVertical} is supposed to charge explicitly. Restricting to the nearest floor keeps
+     * gentle slopes traversable as-is, while abrupt layer changes always go through a vertical transition.
      */
     private static void relaxHorizontal(CoarseMap map, double[] cost, int[] previous, boolean[] closed,
                                         PriorityQueue<Candidate> open, int x, int z, int floor, int dx, int dz,
@@ -662,7 +690,7 @@ public final class CoarseRouter {
                 bestSoFar, bestHeuristic, waterMultiplier);
     }
 
-    /** 隣接セルのうち、今の床の高さに最も近い床。相手が未知セルなら唯一の状態（floor=0）。 */
+    /** The floor of the neighbouring cell closest to the current floor's height. If it is unknown, its only state (floor=0). */
     private static int nearestConnectableFloor(CoarseMap map, int fromX, int fromZ, int fromFloor,
                                                int toX, int toZ) {
         if (map.floorCount(toX, toZ) == 0) {
@@ -676,8 +704,8 @@ public final class CoarseRouter {
     }
 
     /**
-     * 同じセル内で1つ上・1つ下の床への移動。床は高さ昇順に並んでいるので、隣接インデックスが
-     * そのまま「次に近い階層」になる。未知セル（床数0）には床が無いので発生しない。
+     * Moves to the floor one above or one below within the same cell. Floors are sorted by ascending
+     * height, so the adjacent index is the "next closest layer". Unknown cells (0 floors) have no floors, so this doesn't occur.
      */
     private static void relaxVertical(CoarseMap map, double[] cost, int[] previous, boolean[] closed,
                                       PriorityQueue<Candidate> open, int x, int z, int floor,
@@ -727,9 +755,10 @@ public final class CoarseRouter {
     }
 
     /**
-     * ゴールに届かなかったときの到達点を選ぶ。係数の小さい（＝実際に進んだ距離を重く見る）ものから順に、
-     * 始点からXZ平面上で{@link #MIN_DIST_CELLS}以上離れている候補を採用する。どれも届かない場合は
-     * 始点自身を返し、空のルート＝「提示できるルートなし」として扱う。
+     * Chooses the endpoint when the goal isn't reached. In order from the smallest coefficient (= weighing
+     * actual distance travelled most), takes the candidate at least {@link #MIN_DIST_CELLS} from the
+     * start on the XZ plane. If none qualifies, returns the start itself, treated as an empty route =
+     * "no route to present".
      */
     private static int selectFallback(CoarseMap map, int[] bestSoFar, int startIndex) {
         int startX = stateChunkX(map, startIndex);
@@ -745,37 +774,39 @@ public final class CoarseRouter {
         return startIndex;
     }
 
-    /** 長距離ルート（{@link #findRoute}）が未知のセルに付ける倍率。奈落は橋で通す前提（{@link BridgePolicy#ALLOW}）。 */
+    /** Multiplier the long-distance route ({@link #findRoute}) applies to unknown cells. Void is assumed bridgeable ({@link BridgePolicy#ALLOW}). */
     public static double unknownMultiplier(CoarseMap map) {
         return calibratedUnknownMultiplier(map, BridgePolicy.ALLOW);
     }
 
     /**
-     * {@link #UNKNOWN_MULTIPLIER}を、この{@code map}で<b>既に分かっている</b>陸:奈落比から
-     * 較正する。{@code findRoute}が引く経路（好みを含む値）だけが対象——{@link #costToGo}の
-     * ガイドは下限の契約を守るため触らない（呼び出し側で{@code lowerBound}のときはこの戻り値を
-     * 使わせない）。
+     * Calibrates {@link #UNKNOWN_MULTIPLIER} from the land:void ratio <b>already known</b> in this
+     * {@code map}. Applies only to routes drawn by {@code findRoute} (values including preferences); the
+     * guide of {@link #costToGo} is left alone to keep its lower-bound contract (callers don't use this
+     * return value when {@code lowerBound}).
      *
-     * <p><b>固定の次元別定数ではなく、その場のマップの実測から出す。</b>ジ・エンドの実機地形
-     * ダンプ3件（{@code EndUnknownVoidRatioBenchTest}）を集計すると、既知セルの奈落比は
-     * 35〜53%（全体で約42%）——「未知はほぼ陸」という前提で付けた1.6倍は体系的に楽観的すぎる。
-     * かといって「エンドだけ倍率を上げる」と決め打つと、同じジ・エンドでも島の密集地と
-     * 開けた奈落地帯で実態が違う（このテストのサンプルだけでも35%〜53%と幅がある）のに
-     * 反映できない。<b>既知の内訳をそのまま使えば、次元を問わず自己較正する。</b>
+     * <p><b>Derived from the live map's measurements, not a fixed per-dimension constant.</b>
+     * Aggregating three real End terrain dumps ({@code EndUnknownVoidRatioBenchTest}), the void ratio of
+     * known cells is 35-53% (about 42% overall): the 1.6x set on the premise "unknown is mostly land"
+     * is systematically too optimistic. But hard-coding "raise the multiplier only in The End" can't
+     * reflect that dense island clusters and open void areas differ even within The End (this test's
+     * samples alone range from 35% to 53%). <b>Using the known breakdown as-is self-calibrates in any dimension.</b>
      *
-     * <p>既知セルが少ないうちは{@link #UNKNOWN_PRIOR_WEIGHT_CELLS}ぶんの「元の1.6倍」が効いて
-     * 実測へ寄りきらない（段差なしで過学習を抑える理由はそちら）。較正後の値が1.6を下回ることは
-     * ない——「未知は多少高くつくとみなす」という元の設計意図（通れないと決めつけない）は
-     * 崩さない。上限も{@link #VOID_BRIDGE_MULTIPLIER}（既知が全部奈落のとき）で頭打ちになる。
+     * <p>While known cells are few, {@link #UNKNOWN_PRIOR_WEIGHT_CELLS} worth of "the original 1.6x"
+     * keeps it from fully shifting to the measurement (see there for why this curbs overfitting without
+     * a step). The calibrated value never drops below 1.6, preserving the original design intent "treat
+     * the unknown as somewhat costly" (without assuming it's impassable). It also tops out at
+     * {@link #VOID_BRIDGE_MULTIPLIER} (when all known cells are void).
      *
-     * <p><b>代償は探索の広さ。</b>{@link #heuristic}は倍率1.0を前提にした幾何学的下限なので、
-     * 未知が10倍近くまで上がるほどhが実コストから離れ、層1の展開セル数が増える。層1は
-     * チャンク単位で最悪でも地図全体のDijkstraに落ちるだけなので、予算を焼く心配は無い。
+     * <p><b>The price is search breadth.</b> {@link #heuristic} is a geometric lower bound assuming a
+     * multiplier of 1.0, so the closer unknown gets to 10x, the further h drifts from actual cost and
+     * the more cells layer 1 expands. Layer 1 is per chunk and at worst degrades to Dijkstra over the
+     * whole map, so there's no risk of burning the budget.
      */
     private static double calibratedUnknownMultiplier(CoarseMap map, BridgePolicy bridgePolicy) {
         double voidMultiplier = bridgeMultiplier(CoarseMap.VOID, bridgePolicy);
         if (Double.isInfinite(voidMultiplier)) {
-            // AVOIDでは奈落そのものが通行不能。混ぜる相手が無いので素通しする
+            // In AVOID the void itself is impassable. Nothing to mix with, so pass through
             return UNKNOWN_MULTIPLIER;
         }
         int[] counts = map.kindCounts();
@@ -786,15 +817,15 @@ public final class CoarseRouter {
     }
 
     /**
-     * 1セル進むコスト。
+     * Cost of advancing one cell.
      *
-     * @param lowerBound 実コストの<b>下限</b>として使う値を求める（{@link #costToGo}のガイド用）。
-     *                   {@code false}なら好みを含んだ計画用の値（{@link #findRoute}用）。
-     *                   違いは{@link #costToGo}のjavadoc参照
-     * @param unknownMultiplier {@code lowerBound}が{@code false}のときだけ使う{@code NO_DATA}の
-     *                          値段（{@link #calibratedUnknownMultiplier}）。{@code lowerBound}が
-     *                          {@code true}のときは無視される（下限は常に1.0）ので、
-     *                          {@link #costToGo}の呼び出し側は任意の値を渡してよい
+     * @param lowerBound Compute a value used as a <b>lower bound</b> on actual cost (for {@link #costToGo}'s guide).
+     *                   If {@code false}, the planning value including preferences (for {@link #findRoute}).
+     *                   See {@link #costToGo}'s javadoc for the difference
+     * @param unknownMultiplier Price of {@code NO_DATA}, used only when {@code lowerBound} is
+     *                          {@code false} ({@link #calibratedUnknownMultiplier}). Ignored when
+     *                          {@code lowerBound} is {@code true} (the lower bound is always 1.0), so
+     *                          {@link #costToGo}'s callers may pass any value
      */
     private static double horizontalStepCost(CoarseMap map, int fromX, int fromZ, int fromFloor,
                                              int toX, int toZ, int toFloor, boolean diagonal,
@@ -807,13 +838,13 @@ public final class CoarseRouter {
         }
         double base = diagonal ? DIAGONAL_COST : STRAIGHT_COST;
         double multiplier = switch (kind) {
-            // 「セルの半分が水」でも、乾いた帯を通って16ブロック横断できる列は珍しくない。
-            // 割合ぶんまで薄めても下限ではなく、実測で海岸のガイドが実残りコストの2.02倍まで
-            // 上振れしていた（GuideAdmissibilityTest）。溶岩まじりの25%も同じ形
+            // Even when "half the cell is water", it's common for a row to be crossable for 16 blocks
+            // along a dry strip. Diluting by the fraction still isn't a lower bound; measured, the coast's
+            // guide overshot the actual remaining cost by up to 2.02x (GuideAdmissibilityTest). Same for the 25% of lava-mixed
             case CoarseMap.WATER -> lowerBound ? 1.0 : waterMultiplier;
             case CoarseMap.LAVA_MIXED -> lowerBound ? 1.0 : bridgeMultiplier;
-            // 「分からない」は下限を上げる理由にならない。計画側の倍率をそのまま下限にすると、
-            // 読み取り範囲の外側が一律に高く見えて経路が範囲の内側へ引き寄せられる
+            // "Unknown" isn't a reason to raise the lower bound. Using the planning multiplier as the lower
+            // bound makes everything outside the read range look uniformly expensive, pulling routes inside it
             case CoarseMap.NO_DATA -> lowerBound ? 1.0 : unknownMultiplier;
             case CoarseMap.LAVA, CoarseMap.VOID -> bridgeMultiplier;
             default -> 1.0;
@@ -821,9 +852,9 @@ public final class CoarseRouter {
 
         double heightPenalty = 0.0;
         if (lowerBound) {
-            // 下限なので<b>セル内でいちばん低い所へ、いちばん高い所から</b>入る想定で測る。
-            // 代表高さ(チャンク平均)の差で測ると、鞍部を越えられる尾根セルが平均の高さぶん
-            // 登らされることになり、下限を破る
+            // Since this is a lower bound, measure as entering <b>the lowest point in the cell from the highest</b>.
+            // Measuring by the difference of representative heights (chunk average) makes a ridge cell whose
+            // saddle can be crossed climb by its average height, breaking the lower bound
             short fromTop = stateMaxHeight(map, fromX, fromZ, fromFloor);
             short toBottom = stateMinHeight(map, toX, toZ, toFloor);
             if (fromTop != CoarseMap.UNKNOWN_HEIGHT && toBottom != CoarseMap.UNKNOWN_HEIGHT) {
@@ -832,8 +863,8 @@ public final class CoarseRouter {
         } else {
             short fromHeight = stateHeight(map, fromX, fromZ, fromFloor);
             short toHeight = stateHeight(map, toX, toZ, toFloor);
-            // 片方でも高さが分からなければ段差は測れない。分からないことを段差0として扱うと、
-            // 未知の領域が「平坦な近道」に見えてしまう
+            // If either height is unknown, the step can't be measured. Treating unknown as a 0 step would
+            // make unknown regions look like "flat shortcuts"
             if (fromHeight != CoarseMap.UNKNOWN_HEIGHT && toHeight != CoarseMap.UNKNOWN_HEIGHT) {
                 heightPenalty = Math.abs(toHeight - fromHeight) * HEIGHT_COST_PER_BLOCK;
             }
@@ -846,11 +877,12 @@ public final class CoarseRouter {
     }
 
     /**
-     * 別の陸塊へ移るときだけ、その島の小ささに応じて課す割増。
+     * Surcharge applied only when moving to a different landmass, based on how small that island is.
      *
-     * <p><b>島に入る一歩でだけ課金する</b>のが要点。セルごとに課すと、小さい島を横切るあいだ
-     * 何度も払うことになり「小さい島は通り抜けるのも高い」という別の歪みが出る。
-     * 知りたいのは「どの島へ降りるか」だけなので、陸塊IDが変わる辺で1回だけ見る。
+     * <p>The key point is <b>charging only on the step into the island</b>. Charging per cell would mean
+     * paying repeatedly while crossing a small island, creating a different distortion: "small islands
+     * are expensive even to pass through". All we want is "which island to land on", so it's checked
+     * once on the edge where the landmass ID changes.
      */
     private static double smallIslandPenalty(CoarseMap map, int fromX, int fromZ, int toX, int toZ) {
         int toIsland = map.islandIdAt(toX, toZ);
@@ -865,8 +897,8 @@ public final class CoarseRouter {
     }
 
     /**
-     * 足場を置かないと通れないセル（溶岩・奈落）の倍率。それ以外のセルには1.0を返す
-     * （呼び出し側が他の倍率を使う）。{@link ActionCosts#INFEASIBLE}なら通行不能。
+     * Multiplier for cells that can't be crossed without placing blocks (lava, void). Returns 1.0 for
+     * other cells (callers use other multipliers). {@link ActionCosts#INFEASIBLE} means impassable.
      */
     private static double bridgeMultiplier(byte kind, BridgePolicy bridgePolicy) {
         if (kind == CoarseMap.LAVA) {
@@ -876,20 +908,20 @@ public final class CoarseRouter {
             return bridgePolicy == BridgePolicy.AVOID ? ActionCosts.INFEASIBLE : LAVA_MIXED_MULTIPLIER;
         }
         if (kind == CoarseMap.VOID) {
-            // 奈落を通行不能にするのは{@link BridgePolicy#AVOID}だけ。ALLOWでも橋で通す。
+            // Only {@link BridgePolicy#AVOID} makes the void impassable. ALLOW bridges it too.
             //
-            // 溶岩と非対称なのは、<b>溶岩の橋には設定のスイッチがあるのに奈落には無い</b>から
-            // （層3の{@code addBridge}は奈落を{@code canPlaceBlocks}だけで判断する）。
-            // ALLOWで奈落まで通行不能にすると、層3の区間分割（{@code solveCoarseGuided}）が
-            // ジ・エンドで区間を1つも作れず、島間を1回の探索で渡ろうとして予算を焼く——
-            // {@code PathfindingExecutor}に「一律ALLOWにすると溶岩の海の縁で同じことが起きる」と
-            // 実機の記録つきで書いてある、その奈落版になる。
+            // It's asymmetric with lava because <b>lava bridging has a config switch but void doesn't</b>
+            // (layer 3's {@code addBridge} decides void only by {@code canPlaceBlocks}).
+            // Making void impassable at ALLOW leaves layer 3's segmentation ({@code solveCoarseGuided})
+            // unable to create any segment in The End, so it tries to cross between islands in one search
+            // and burns the budget. This is the void version of what {@code PathfindingExecutor} documents,
+            // with real-game records, as "a blanket ALLOW causes the same thing at the edge of a lava sea".
             return bridgePolicy == BridgePolicy.AVOID ? ActionCosts.INFEASIBLE : VOID_BRIDGE_MULTIPLIER;
         }
         return 1.0;
     }
 
-    /** 踏み込み先の床の起伏が大きいときの追加コスト。起伏が分からなければ平坦扱い（0）。 */
+    /** Extra cost when the entered floor has large relief. Treated as flat (0) if relief is unknown. */
     private static double cliffPenalty(CoarseMap map, int chunkX, int chunkZ, int floor) {
         short min = stateMinHeight(map, chunkX, chunkZ, floor);
         short max = stateMaxHeight(map, chunkX, chunkZ, floor);
@@ -904,10 +936,10 @@ public final class CoarseRouter {
     }
 
     /**
-     * 残りコストの下限。XZ平面上の距離だけを見る——垂直方向（階層をまたぐコスト）を無視するのは
-     * 過小評価にしかならないので、下限としての正しさ（admissibility）は保たれる。
-     * {@code waterMultiplier}(ボート所持時は{@link #BOAT_MULTIPLIER}<1.0)を掛けておかないと、
-     * 経路が丸ごとボート水域だった場合の実コストがこの下限を下回り非許容になる。
+     * Lower bound on remaining cost. Looks only at distance on the XZ plane; ignoring the vertical
+     * direction (cost of crossing layers) can only underestimate, so correctness as a lower bound
+     * (admissibility) is preserved. Without applying {@code waterMultiplier} ({@link #BOAT_MULTIPLIER} < 1.0
+     * when a boat is available), the actual cost of a route entirely in boat water falls below this bound, making it inadmissible.
      */
     private static double heuristic(CoarseMap map, int x, int z, int goalX, int goalZ, double waterMultiplier) {
         int dx = Math.abs(goalX - x);
@@ -919,9 +951,10 @@ public final class CoarseRouter {
     }
 
     /**
-     * 経路を中間目標へ間引く。全セルを返すと詳細探索が数チャンクごとに呼ばれることになり、
-     * 粗い線をなぞるだけの案内になってしまう。水平・垂直どちらかの間隔を超えたら区切る——
-     * 階層を何段も登る区間は水平に進まないので、垂直側の間隔が無いと丸ごと1区間に潰れる。
+     * Thins the route into intermediate targets. Returning every cell would call the detail search
+     * every few chunks, reducing guidance to tracing a coarse line. Splits when either the horizontal or
+     * vertical spacing is exceeded: a stretch climbing many layers doesn't advance horizontally, so
+     * without vertical spacing it would collapse into a single segment.
      */
     private static Route buildRoute(CoarseMap map, int[] previous, int endIndex, int startIndex,
                                     boolean reachedGoal, int startY) {
@@ -940,9 +973,9 @@ public final class CoarseRouter {
         List<BlockPos> waypoints = new ArrayList<>();
         int lastX = stateChunkX(map, states.get(0));
         int lastZ = stateChunkZ(map, states.get(0));
-        // 高さが分からない状態のフォールバックは、直前に分かった高さを引き継ぐ（無ければ出発点）。
-        // 固定の0だと、ネザーのように地形の主要な高さ帯が0から遠い次元で、詳細探索が
-        // 奈落の底へ経路を引こうとしてノード上限を焼き切る
+        // Fallback for states with unknown height inherits the last known height (or the start if none).
+        // A fixed 0 would, in dimensions like the Nether whose main terrain height band is far from 0,
+        // make the detail search try to route to the bottom of the void and burn through the node limit
         int fallbackHeight = startY;
         int lastWaypointHeight = startY;
         for (int i = 1; i < states.size(); i++) {
@@ -968,7 +1001,7 @@ public final class CoarseRouter {
         return new Route(List.copyOf(waypoints), reachedGoal);
     }
 
-    /** セルの中心。高さが分からない状態は{@code fallbackHeight}を使う。 */
+    /** Center of the cell. States with unknown height use {@code fallbackHeight}. */
     private static BlockPos toBlockPos(int chunkX, int chunkZ, short height, int fallbackHeight) {
         return new BlockPos(chunkX * CELL_BLOCKS + CELL_BLOCKS / 2,
                 height == CoarseMap.UNKNOWN_HEIGHT ? fallbackHeight : height,
@@ -976,8 +1009,8 @@ public final class CoarseRouter {
     }
 
     /**
-     * {@code floor}が実在するか（{@code floorCount>0}）で、未知セルの「未知」状態と
-     * 既知の床を区別する。未知セルは常に{@code floor==0}の1状態しか持たない。
+     * Distinguishes an unknown cell's "unknown" state from a known floor by whether {@code floor} exists
+     * ({@code floorCount>0}). Unknown cells always have exactly one state, {@code floor==0}.
      */
     private static boolean isUnknownState(CoarseMap map, int chunkX, int chunkZ) {
         return map.floorCount(chunkX, chunkZ) == 0;

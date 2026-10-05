@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import net.minecraft.world.phys.Vec3;
 
-/** 継ぎ足しが手前へ戻ってきたときの切り落とし。 */
+/** Trimming when an extension comes back toward the earlier part. */
 class TurnBackTest {
 
     private static final List<Vec3> AHEAD = List.of(new Vec3(0, 64, 0), new Vec3(100, 64, 0), new Vec3(200, 64, 0));
@@ -25,7 +25,7 @@ class TurnBackTest {
 
     @Test
     void cutsTheExcursionWhereTheExtensionComesBack() {
-        // 末端(200,0)まで行って、(60,10)の近くへ戻ってから北へ抜ける。行って戻る区間を消し、(60,0)付近で繋ぐ
+        // Goes to the end (200,0), comes back near (60,10), then heads out north. Remove the out-and-back stretch and join near (60,0)
         List<Vec3> extension = List.of(new Vec3(200, 64, 0), new Vec3(200, 64, 30), new Vec3(60, 64, 10),
                 new Vec3(60, 64, 200));
 
@@ -33,7 +33,7 @@ class TurnBackTest {
 
         assertNotNull(cut);
         Vec3 joint = cut.aheadKept().get(cut.aheadKept().size() - 1);
-        assertTrue(joint.x < 100, "戻ってきた点より先で繋いでいる: " + joint);
+        assertTrue(joint.x < 100, "joins beyond the point it came back to: " + joint);
         assertEquals(new Vec3(60, 64, 200), cut.rest().get(cut.rest().size() - 1));
     }
 

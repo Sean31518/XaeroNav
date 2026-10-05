@@ -9,15 +9,15 @@ import java.util.Random;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link BinaryHeapOpenSet}の正しさの検証。A*探索1回ごとに数万回のinsert/update/removeLowestを
- * さばく心臓部で、ここが壊れると症状は「探索結果がたまに変な経路になる」としてしか表に出ない
- * （壊れたヒープでも大抵は動いているように見える）。decrease-key経路（{@link #update}）は
- * 通常の優先度付きキューには無い分岐なので、特に手厚く見る。
+ * Verifies the correctness of {@link BinaryHeapOpenSet}. It's the heart that handles tens of thousands of insert/update/removeLowest
+ * calls per A* search, and if it breaks the symptom only surfaces as "search results occasionally take a strange path"
+ * (even a broken heap mostly looks like it works). The decrease-key path ({@link #update}) is a branch
+ * ordinary priority queues don't have, so it's checked especially thoroughly.
  */
 class BinaryHeapOpenSetTest {
 
     private static PathNode node(int index, double combinedCost) {
-        // x, y, z, boating, estimatedCostToGoalは今回のテストでは使わないので識別用のindexだけ意味を持つ
+        // x, y, z, boating and estimatedCostToGoal aren't used in this test, so only the index matters, for identification
         PathNode node = new PathNode(index, 0, 0, false, 0.0);
         node.combinedCost = combinedCost;
         return node;
@@ -37,7 +37,7 @@ class BinaryHeapOpenSetTest {
         while (!heap.isEmpty()) {
             PathNode next = heap.removeLowest();
             assertTrue(next.combinedCost >= previous,
-                    "順序が逆転: " + previous + " の次に " + next.combinedCost + " が出た");
+                    "Order reversed: " + previous + " was followed by " + next.combinedCost + " coming out");
             previous = next.combinedCost;
             removed++;
         }
@@ -54,9 +54,9 @@ class BinaryHeapOpenSetTest {
         heap.insert(mid);
         heap.insert(expensive);
 
-        // 元は cheap(10) < mid(20) < expensive(30) の順で出るはずだが、expensiveのコストを
-        // 5まで下げてからupdate()する。これがsiftUpを正しく起動しないと、ヒープが古い位置に
-        // expensiveを残したまま矛盾した状態になる
+        // They should come out in the order cheap(10) < mid(20) < expensive(30), but expensive's cost
+        // is lowered to 5 before update(). If this doesn't trigger siftUp correctly, the heap ends up inconsistent,
+        // with expensive left in its old position
         expensive.combinedCost = 5.0;
         heap.update(expensive);
 
@@ -82,8 +82,8 @@ class BinaryHeapOpenSetTest {
 
     @Test
     void handlesGrowthPastInitialCapacity() {
-        // BinaryHeapOpenSetの初期配列サイズ(1024)を超えて配列の伸長(copyOf)が起きても
-        // ヒープ順序が壊れないことを確認する
+        // Checks that heap order isn't broken even when the array grows (copyOf)
+        // beyond BinaryHeapOpenSet's initial array size (1024)
         BinaryHeapOpenSet heap = new BinaryHeapOpenSet();
         int count = 5000;
         for (int i = 0; i < count; i++) {

@@ -5,38 +5,38 @@ import org.jspecify.annotations.Nullable;
 import net.minecraft.core.BlockPos;
 
 /**
- * 「目的地へいちばん近づいた所から、そのあと遠ざかった」ことの検出。ネザーの実機で
- * <b>約300ブロックの往復</b>が出たのを、次に起きたときログから追えるようにするためのもの。
+ * Detects "moved away again after getting closest to the destination". Exists so that the
+ * <b>roughly 300-block round trip</b> seen in-game in the Nether can be traced from the log next time it happens.
  *
- * <p>経路の形では判定できない。区間ごとには常に正しい経路が引かれていて、悪いのは
- * 「東の回廊へ入り、行き止まりで西へ引き返す」という<b>計画をまたいだ動き</b>だから
- * （実機2026-09-18: 目的地まで189→229→242ブロックと離れていった）。
+ * <p>It can't be judged from the route's shape. Each segment always gets a correct route; what's wrong is the
+ * <b>movement across plans</b>, "enter the eastern corridor, hit a dead end, turn back west"
+ * (in-game 2026-09-18: the distance to the destination grew 189→229→242 blocks).
  *
- * <p>溶岩の海や奈落を大きく迂回する経路は、目的地から遠ざかりながら正しく進んでいる。
- * だから{@link #RETREAT_BLOCKS}まではふつうの迂回として黙っている。
+ * <p>Routes that make large detours around lava seas or the void are progressing correctly while moving away from the destination.
+ * So up to {@link #RETREAT_BLOCKS} it stays quiet, treating it as an ordinary detour.
  *
- * <p>判定だけを持ち、ログは{@code PathfindingState}が出す（{@link StuckTracker}と同じ分け方）。
+ * <p>This only holds the judgment; {@code PathfindingState} writes the log (the same split as {@link StuckTracker}).
  */
 final class RetreatWatcher {
 
     /**
-     * 最接近からこれだけ遠ざかったら記録する（ブロック）。
+     * Record once this far from the closest approach (blocks).
      *
-     * <p>実機の往復は約300ブロックで、正しい迂回（溶岩の海の縁を回る）は実測で最大
-     * 60ブロック台だった（模型のネザー3本で最悪の後退が63/61/24）。その間に置いてある。
+     * <p>The in-game round trip was about 300 blocks, while correct detours (going around the edge of a lava sea) measured
+     * at most in the 60s (worst retreats of 63/61/24 on three model Nethers). This sits between the two.
      */
     static final double RETREAT_BLOCKS = 80.0;
 
-    /** 1回の後退で何度も書かないための間隔（ブロック）。 */
+    /** Interval (blocks) so a single retreat isn't written many times. */
     private static final double REPORT_STEP_BLOCKS = 32.0;
 
     private double closest = Double.MAX_VALUE;
     private @Nullable BlockPos closestAt;
-    /** 最後に記録したときの距離。まだ記録していなければ0。 */
+    /** The distance at the last record. 0 if nothing has been recorded yet. */
     private double reportedDistance;
 
     /**
-     * 記録に値する後退。{@code closest}は最接近したときの水平距離、{@code distance}は今の水平距離。
+     * A retreat worth recording. {@code closest} is the horizontal distance at the closest approach, {@code distance} the current horizontal distance.
      */
     record Retreat(BlockPos at, double distance, BlockPos closestAt, double closest) {
 
@@ -52,9 +52,9 @@ final class RetreatWatcher {
     }
 
     /**
-     * 今の位置を見せる。記録に値する後退が起きていればそれを返す。
+     * Reports the current position. Returns a retreat worth recording if one has occurred.
      *
-     * <p>近づいたときは最接近を更新して記録の間隔もリセットする——そこから先は別の後退として数える。
+     * <p>On getting closer, updates the closest approach and resets the recording interval; anything after that counts as a separate retreat.
      */
     @Nullable Retreat observe(BlockPos at, BlockPos goal) {
         double distance = horizontal(at, goal);
@@ -75,17 +75,17 @@ final class RetreatWatcher {
     }
 
     /**
-     * この案内は、<b>いちばん近づいた所よりさらに遠くへ連れて行く</b>か。
+     * Whether this guidance <b>takes you even farther than the closest point you've reached</b>.
      *
-     * <p>{@link #observe}が「起きたことを記録する」のに対し、こちらは「起こさせない」ために使う。
-     * 境界は同じ{@link #RETREAT_BLOCKS}——記録に値する後退は、案内として採ってもいけない。
+     * <p>Where {@link #observe} "records what happened", this is used to "keep it from happening".
+     * The boundary is the same {@link #RETREAT_BLOCKS}: a retreat worth recording must not be adopted as guidance either.
      *
-     * <p><b>末端だけを見てはいけない。</b>実機（2026-09-19 01:10）で80ブロック連れ戻されたとき、
-     * 経路の末端は最接近から55ブロックの所（帯の内側）だった。遠ざかったのは<b>途中で踏む位置</b>で、
-     * プレイヤーはそこを歩かされる。模型の「正しい迂回は最悪67ブロック」も経路上の全点の最大で
-     * 測った値なので、ここも同じ測り方に揃える。
+     * <p><b>Don't look only at the end.</b> When the player was dragged back 80 blocks in-game (2026-09-19 01:10), the end of
+     * the route was 55 blocks from the closest approach (inside the band). What moved away were <b>the positions stepped on along the way</b>,
+     * and the player is made to walk those. The model's "correct detours are at worst 67 blocks" was also measured as the maximum
+     * over all points on the route, so this uses the same measure.
      *
-     * <p>まだ一度も観測していなければ基準が無いので{@code false}——最初の1本を弾いてはいけない。
+     * <p>If nothing has been observed yet there's no reference, so {@code false}; the first route must not be rejected.
      */
     boolean leadsAway(Iterable<BlockPos> positions, BlockPos goal) {
         if (closestAt == null) {
@@ -100,12 +100,12 @@ final class RetreatWatcher {
         return false;
     }
 
-    /** いちばん近づいたときの水平距離。まだ一度も観測していなければ{@link Double#MAX_VALUE}。 */
+    /** Horizontal distance at the closest approach. {@link Double#MAX_VALUE} if nothing has been observed yet. */
     double closest() {
         return closest;
     }
 
-    /** いちばん近づいた位置。まだ一度も観測していなければ{@code null}。 */
+    /** The position of the closest approach. {@code null} if nothing has been observed yet. */
     @Nullable BlockPos closestAt() {
         return closestAt;
     }

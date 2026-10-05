@@ -13,27 +13,27 @@ import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * <b>実験用。</b>16³のセクションをクラスタにしたHPA*が、完璧なグラフから何を失うかを測る。
+ * <b>Experimental.</b> Measures what HPA* with 16³ sections as clusters loses compared to the perfect graph.
  *
- * <p>HPA*の経路は「クラスタの中は自由に動き、クラスタを跨ぐのは代表の出入口だけ」なので、
- * その距離は<b>跨ぐ辺のうち代表だけを残したグラフでの最短距離</b>と一致する。
- * ここはその辺の選び方だけを作る——クラスタ内の出入口間を前計算する本番の形とは値が同じで、
- * 計算の仕方だけが違う。
+ * <p>An HPA* route "moves freely inside a cluster and crosses between clusters only through representative entrances",
+ * so its distance equals <b>the shortest distance on the graph that keeps only the representatives among crossing edges</b>.
+ * This only builds that edge selection; the values match the production form, which precomputes distances between entrances
+ * within a cluster, and only the computation differs.
  *
- * <p>跨ぐ辺は（出るセクション, 入るセクション, 安い移動か）で組に分け、組の中で
- * 出発点が26近傍で繋がる塊を1つの出入口とみなす。代表は、跨ぐ方向でない軸の
- * セクション内座標が{@code spacing}の格子に乗る出発点。格子に1つも乗らない出入口は、
- * 重心に最も近い出発点を1つ残す（狭い通路の開口を落とさないため）。
+ * <p>Crossing edges are grouped by (section exited, section entered, whether it's a cheap move), and within each group,
+ * a cluster of start points connected in the 26-neighborhood is treated as one entrance. Representatives are start points
+ * whose in-section coordinates on the axes other than the crossing direction lie on a {@code spacing} grid. For entrances
+ * with no point on the grid, the start point closest to the centroid is kept (so narrow passage openings aren't dropped).
  */
 final class SectionCompression {
 
-    /** 移動量に対してこの倍率を超える値段の辺は、掘削・設置を含む「高い」出入口として別に扱う。 */
+    /** Edges priced above this multiple of the movement amount are treated separately as "expensive" entrances involving digging or placement. */
     private static final double CHEAP_FACTOR = 3.0;
 
     private record Group(long from, long to, boolean cheap) {
     }
 
-    /** 選んだ辺と、セクションあたりの代表の数。 */
+    /** The selected edges, and the number of representatives per section. */
     record Result(BitSet kept, double representativesPerSection, int crossingEdges, int keptCrossing,
                   IntOpenHashSet representatives) {
     }
@@ -46,9 +46,9 @@ final class SectionCompression {
     }
 
     /**
-     * @param landingMustBeRepresentative trueなら、跨いだ先の点も<b>その先のセクションの代表</b>で
-     *                                    なければ辺を残さない。セクションを互いに独立に組む本番では
-     *                                    着地点の距離が前計算されている保証が無いので、こちらが本番の制約
+     * @param landingMustBeRepresentative if true, an edge is kept only if the point it lands on is also <b>a representative of
+     *                                    the section it enters</b>. In production, where sections are built independently, there's no
+     *                                    guarantee the landing point's distances are precomputed, so this is the production constraint
      */
     static Result compress(ClosureGraph graph, int spacing, boolean landingMustBeRepresentative) {
         int m = (int) graph.edges();

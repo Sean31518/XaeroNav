@@ -11,21 +11,21 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>「謎にわたらせる」——外したら死ぬ高さの谷に、迂回できるのに橋を架ける。</b>
+ * <b>"Makes me cross for no reason": bridging a valley where a miss is fatal, even though it can be detoured.</b>
  *
- * <p>ユーザー報告（2026-08-29、実機のスクショ）:「下にブロックあるからいいとか思ってそう」。
- * まさにそのとおりだった——{@code addBridge}は{@code obstacleY}が実在の床を指してさえいれば、
- * その床が<b>何マス下か</b>を一切見ずに普通の橋として扱っていた:
+ * <p>User report (2026-08-29, in-game screenshot): "it seems to think there's a block below so it's fine".
+ * That was exactly it: as long as {@code obstacleY} pointed at a real floor, {@code addBridge} treated it as an
+ * ordinary bridge without ever looking at <b>how many blocks down</b> that floor was:
  *
  * <table>
- *   <tr><th>橋の下</th><th>掘削禁止</th><th>連続長の上限</th><th>追加コスト</th></tr>
- *   <tr><td>奈落</td><td>要求</td><td>{@code maxVoidBridgeRun}</td><td>{@code VOID_BRIDGE_PENALTY}</td></tr>
- *   <tr><td>溶岩</td><td>要求</td><td>{@code maxLavaBridgeRun}</td><td>{@code LAVA_BRIDGE_PENALTY}</td></tr>
- *   <tr><td><b>床が43マス下（即死）</b></td><td><b>無し</b></td><td>通常のみ</td><td><b>0</b></td></tr>
+ *   <tr><th>Below the bridge</th><th>No digging</th><th>Run-length cap</th><th>Extra cost</th></tr>
+ *   <tr><td>Void</td><td>Required</td><td>{@code maxVoidBridgeRun}</td><td>{@code VOID_BRIDGE_PENALTY}</td></tr>
+ *   <tr><td>Lava</td><td>Required</td><td>{@code maxLavaBridgeRun}</td><td>{@code LAVA_BRIDGE_PENALTY}</td></tr>
+ *   <tr><td><b>Floor 43 blocks down (instant death)</b></td><td><b>None</b></td><td>Normal only</td><td><b>0</b></td></tr>
  * </table>
  *
- * <p>落ちれば死ぬという結末は奈落と同じなのに、値段だけが「底のある1マスの窪み」と同じだった。
- * その23で跳躍（{@code addJumpGap}）には致死落差を入れたが、橋には入れ忘れていた。
+ * <p>The outcome of falling, death, is the same as the void, yet the price was the same as "a one-block dip with a bottom".
+ * #23 added the fatal drop to jumps ({@code addJumpGap}), but it was forgotten for bridges.
  */
 class FatalDropBridgeTest {
 
@@ -33,17 +33,17 @@ class FatalDropBridgeTest {
 
     private static final int GROUND_Y = 63;
     private static final int STAND_Y = 64;
-    /** 谷の底。{@code STAND_Y}から43マス下＝既定の致死落差(23)を大きく超える。 */
+    /** Bottom of the valley. 43 blocks below {@code STAND_Y}, far beyond the default fatal drop (23). */
     private static final int CHASM_FLOOR_Y = 20;
 
     private static final int CHASM_MIN_X = 30;
     private static final int CHASM_MAX_X = 36;
-    /** 谷はここまでしか伸びていない。これより南（Zが大きい側）へ回れば歩いて渡れる。 */
+    /** The valley only extends this far. Going around to the south of it (larger Z) lets you walk across. */
     private static final int CHASM_MAX_Z = 25;
 
     /**
-     * 平らな台地を、幅7ブロック・深さ43ブロックの谷が途中まで裂いている。
-     * 谷の南端（{@code CHASM_MAX_Z}）を回り込めば、橋を1本も架けずに向こう側へ行ける。
+     * A valley 7 blocks wide and 43 blocks deep splits a flat plateau partway.
+     * Going around the valley's south end ({@code CHASM_MAX_Z}) reaches the other side without a single bridge.
      */
     private static FakeCells terrain() {
         SearchBounds bounds = new SearchBounds(-16, 0, -16, 96, 110, 80);
@@ -74,7 +74,7 @@ class FatalDropBridgeTest {
     }
 
     /**
-     * <b>本体。</b>谷の南端を回れば歩いて行けるのだから、外したら死ぬ谷へ橋を架けてはいけない。
+     * <b>The main case.</b> You can walk around the valley's south end, so don't bridge a valley where a miss is fatal.
      */
     @Test
     void walksAroundAChasmDeepEnoughToKillInsteadOfBridgingIt() {
@@ -85,25 +85,25 @@ class FatalDropBridgeTest {
         PathResult result = solve(cells, start, goal);
         int maxZ = result.steps().stream().mapToInt(s -> s.pos().getZ()).max().orElse(0);
 
-        System.out.printf("致死落差の谷: complete=%s steps=%d 橋=%d maxZ=%d%n",
+        System.out.printf("Fatal-drop valley: complete=%s steps=%d bridges=%d maxZ=%d%n",
                 result.complete(), result.steps().size(), bridgeSteps(result), maxZ);
 
-        assertTrue(result.complete(), "南へ回れば歩いて行けるので必ず到達する: " + result.termination());
+        assertTrue(result.complete(), "Walking around to the south always gets there: " + result.termination());
         assertEquals(0, bridgeSteps(result),
-                "外したら死ぬ谷に橋を架けた（迂回できるのに）。橋=" + bridgeSteps(result));
-        assertTrue(maxZ > CHASM_MAX_Z, "谷の南端を回り込んでいない: maxZ=" + maxZ);
+                "Bridged a valley where a miss is fatal (even though it could detour). bridges=" + bridgeSteps(result));
+        assertTrue(maxZ > CHASM_MAX_Z, "Didn't go around the valley's south end: maxZ=" + maxZ);
     }
 
     /**
-     * <b>対照。</b>同じ地形で谷を浅く（落ちても死なない深さに）すると、迂回する理由が消えて
-     * 橋で渡る。これが無いと「そもそも常に迂回する」だけのテストと区別が付かない。
+     * <b>Control.</b> On the same terrain with a shallow valley (not deep enough to kill), the reason to detour
+     * disappears and it crosses by bridge. Without this, it can't be told apart from a test that "just always detours".
      */
     @Test
     void stillBridgesAShallowChasmWhereFallingIsSurvivable() {
         SearchBounds bounds = new SearchBounds(-16, 0, -16, 96, 110, 80);
         FakeCells cells = FakeCells.empty(bounds).fillWith(FakeCells.AIR).canPlaceBlocks(true)
                 .maxFallDamagePoints(6);
-        // 底は2マス下だけ。落ちても死なないので、遠回りするより架けた方が安い
+        // The bottom is only 2 blocks down. Falling won't kill you, so bridging is cheaper than detouring
         for (int x = -16; x <= 96; x++) {
             for (int z = -16; z <= 80; z++) {
                 boolean inChasm = x >= CHASM_MIN_X && x <= CHASM_MAX_X && z <= CHASM_MAX_Z;
@@ -115,24 +115,24 @@ class FatalDropBridgeTest {
 
         PathResult result = solve(cells, start, goal);
         int maxZ = result.steps().stream().mapToInt(s -> s.pos().getZ()).max().orElse(0);
-        System.out.printf("浅い窪み:     complete=%s steps=%d 橋=%d maxZ=%d%n",
+        System.out.printf("Shallow dip:       complete=%s steps=%d bridges=%d maxZ=%d%n",
                 result.complete(), result.steps().size(), bridgeSteps(result), maxZ);
 
         assertTrue(result.complete());
         assertTrue(maxZ <= CHASM_MAX_Z,
-                "浅い窪みなら回り込む理由が無い（この対照が崩れたら本体のテストは空振りしている）: maxZ=" + maxZ);
+                "No reason to detour around a shallow dip (if this control breaks, the main test is passing vacuously): maxZ=" + maxZ);
     }
 
     /**
-     * 迂回路が無ければ、致死落差の谷でも架けて渡る。<b>禁止ではなく高くしただけ</b>であることの固定
-     * ——詰みを増やす修正になっていないか。
+     * With no detour, even a fatal-drop valley gets bridged. Pins down that <b>it was made expensive, not forbidden</b>,
+     * so the fix doesn't add dead ends.
      */
     @Test
     void stillBridgesAFatalChasmWhenThereIsNoWayAround() {
         SearchBounds bounds = new SearchBounds(-16, 0, -16, 96, 110, 80);
         FakeCells cells = FakeCells.empty(bounds).fillWith(FakeCells.AIR).canPlaceBlocks(true)
                 .maxFallDamagePoints(6);
-        // 端から端まで裂けた谷。回り込む道が無い
+        // A valley split from end to end. There's no way around
         for (int x = -16; x <= 96; x++) {
             for (int z = -16; z <= 80; z++) {
                 boolean inChasm = x >= CHASM_MIN_X && x <= CHASM_MAX_X;
@@ -143,17 +143,17 @@ class FatalDropBridgeTest {
         BlockPos goal = new BlockPos(60, STAND_Y, 0);
 
         PathResult result = solve(cells, start, goal);
-        System.out.printf("迂回不能:     complete=%s steps=%d 橋=%d%n",
+        System.out.printf("No detour:         complete=%s steps=%d bridges=%d%n",
                 result.complete(), result.steps().size(), bridgeSteps(result));
 
-        assertTrue(result.complete(), "迂回できないなら架けて渡るしかない: " + result.termination());
-        assertTrue(bridgeSteps(result) > 0, "橋を架けずにどうやって渡ったのか");
+        assertTrue(result.complete(), "If it can't detour, bridging across is the only option: " + result.termination());
+        assertTrue(bridgeSteps(result) > 0, "How did it cross without bridging?");
 
-        // 架けるしかない場合でも、外せば死ぬことは色で伝える（PathSafetyCheckerがaddBridgeと
-        // 同じ判定を使う「対」になっているかの固定）
+        // Even when bridging is the only option, the color conveys that a miss is fatal (pins down that PathSafetyChecker
+        // is the "counterpart" using the same check as addBridge)
         PathResult annotated = PathSafetyChecker.annotate(cells, result);
         boolean warned = annotated.steps().stream()
                 .anyMatch(step -> step.bridging() && step.risk() == PathRisk.VOID_BELOW);
-        assertTrue(warned, "致死落差の上の橋に警告が付いていない（安全な橋と同じ色で描かれる）");
+        assertTrue(warned, "The bridge over a fatal drop has no warning (it would be drawn in the same color as a safe bridge)");
     }
 }

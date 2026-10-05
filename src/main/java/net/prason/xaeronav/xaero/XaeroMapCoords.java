@@ -5,18 +5,18 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 
 /**
- * {@code GuiMapRightClickMixin}・{@code GuiMapKeyMixin}が共有する、地図上の座標にまつわる小さな判定。
- * どちらも「地図上の1点（右クリック位置／マウスカーソル位置）から経路探索の目的地を作る」という
- * 同じ処理をXaeroの別々のフック（右クリックメニュー／キー入力）から行うため、判定ロジックが重複する。
+ * Small map-coordinate checks shared by {@code GuiMapRightClickMixin} and {@code GuiMapKeyMixin}.
+ * Both do the same thing, "build a pathfinding destination from a point on the map (right-click position /
+ * mouse cursor position)", from different Xaero hooks (right-click menu / key input), so the logic would be duplicated.
  *
- * <p>mixin適用後は対象クラス側（mixinパッケージの外）から呼ばれるため、Mixinのクラスローダーに
- * 弾かれないようmixinパッケージの外に置く必要がある。
+ * <p>After the mixins are applied these are called from the target classes (outside the mixin package), so they
+ * must live outside the mixin package to avoid being rejected by the Mixin class loader.
  */
 public final class XaeroMapCoords {
 
     /**
-     * 地図に高さの情報が無い座標であることを表す番兵値。Xaero自身も、この値のときは
-     * 座標表示からYを省いている。
+     * Sentinel value meaning the map has no height information for the coordinate. Xaero itself also
+     * omits Y from the coordinate display when it sees this value.
      */
     public static final int UNKNOWN_HEIGHT = 32767;
 
@@ -24,14 +24,14 @@ public final class XaeroMapCoords {
     }
 
     /**
-     * 地図側の次元情報（{@code null}なら未取得）が、プレイヤーが今いる次元と食い違っていないか。
-     * 別次元の地図を見ているときは、座標が縮尺変換された値になるうえ、そもそも歩いて行けない。
+     * Whether the map's dimension info ({@code null} if not yet known) disagrees with the dimension the player is in.
+     * When viewing another dimension's map, the coordinates are scale-converted, and you cannot walk there anyway.
      */
     public static boolean isSameDimensionAsPlayer(ResourceKey<Level> mapDim, Level playerLevel) {
         return mapDim == null || mapDim == playerLevel.dimension();
     }
 
-    /** 高さが分からない座標はプレイヤーと同じ高さを狙う（探索範囲は上下にも広がるため近くまでは届く）。 */
+    /** For coordinates with unknown height, aim at the player's height (the search also spreads vertically, so it gets close). */
     public static int resolveGoalY(int mapY, Player player) {
         return mapY == UNKNOWN_HEIGHT ? player.blockPosition().getY() : mapY;
     }

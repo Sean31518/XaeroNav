@@ -23,37 +23,38 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.prason.xaeronav.pathfinding.world.BlockRegistryCompat;
 
 /**
- * 掘って通ってよいブロックの定義。
+ * Defines which blocks may be dug through.
  *
- * <p><b>「掘ってはいけないもの」ではなく「掘ってよいもの」を数える。</b>知らないブロック——modが
- * 足した機械・別の追加mod・このバージョンにまだ無いバニラブロック——が既定で掘ってよい側に落ちると、
- * 案内はプレイヤーの持ち物や建築物を壊す指示になる。逆に落ちたときの損は「そこを避けて遠回りする」
- * だけで、経路が消えてもXaeroの地図が読める範囲では迂回路が見つかる。非対称なので許可制を採る。
+ * <p><b>It counts "what may be dug", not "what must not be dug".</b> If unknown blocks (machines added by mods, other
+ * add-on mods, vanilla blocks not yet in this version) defaulted to diggable, the guidance would tell the player to break
+ * their belongings or buildings. Conversely, the cost of defaulting the other way is only "go around it", and even if
+ * the path disappears, a detour is found within the range Xaero's map can read. Because it's asymmetric, an allowlist is used.
  *
- * <p>許可するのは<b>自然生成の地形</b>だけ。加工されたブロック（丸石・石レンガ・板材・ネザーレンガ・
- * 深層岩レンガ…）は誰かが置いたものなので、要塞でも古代都市でも自分の家でも掘らせない。この線引きは
- * 副産物として、虫食い石（シルバーフィッシュ）・怪しい砂利（考古学）・スポナーのような「壊すと
- * 事故になる自然物」も自動的に外す——どれも素の石や砂とは別のブロックだから。
+ * <p>Only <b>naturally generated terrain</b> is allowed. Processed blocks (cobblestone, stone bricks, planks, nether
+ * bricks, deepslate bricks...) were placed by someone, so they're never dug, whether in a stronghold, an ancient city,
+ * or your own house. As a side effect, this line also automatically excludes "natural blocks that cause accidents
+ * when broken", such as infested stone (silverfish), suspicious gravel (archaeology), and spawners, since all of them
+ * are separate blocks from plain stone and sand.
  *
- * <p>設定（{@code XaeroNavConfig#additionalDiggableBlocks} /
- * {@code additionalForbiddenBlocks}）から{@link #reloadFromConfig}で両側の追加分を反映する。
+ * <p>Additions on both sides from the config ({@code XaeroNavConfig#additionalDiggableBlocks} /
+ * {@code additionalForbiddenBlocks}) are applied by {@link #reloadFromConfig}.
  */
 public final class DiggableBlocks {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
     /**
-     * 自然地形を指すバニラのタグ。個別のブロック名を並べるより、modが追加した石・土がそのまま
-     * 乗ってくるぶん堅牢になる（modの世界生成用ブロックは、洞窟が生成されるように
-     * {@code #*_carver_replaceables}へ入れるのが通例）。
+     * Vanilla tags that denote natural terrain. More robust than listing individual block names, since stone and dirt
+     * added by mods come along as-is (mods' worldgen blocks are customarily added to
+     * {@code #*_carver_replaceables} so that caves generate through them).
      */
     //? if >=1.19 {
     private static final List<TagKey<Block>> TERRAIN_TAGS = List.of(
-            // 洞窟の掘削が置き換えてよいブロック＝そのまま「掘って通ってよい地形」。石・土・砂・
-            // テラコッタ・鉄/銅鉱石・砂利・砂岩・方解石・雪・氷塊、ネザー側はナイリウムとソウルサンド類
+            // Blocks that cave carving may replace = exactly "terrain that may be dug through". Stone, dirt, sand,
+            // terracotta, iron/copper ore, gravel, sandstone, calcite, snow, packed ice; on the Nether side, nylium and soul sand types
             //? if >=26.3 {
-            /*// 26.3の洞窟はbedrock以外の何でも掘る（#uncarvableだけ）ので、置換タグでは地形を数えられない。
-            // 同じ範囲を、石・土・草・泥・苔・砂・テラコッタ・ナイリウムのタグと、下のTERRAIN_BLOCKSの明示で近似する
+            /*// Caves in 26.3 carve anything but bedrock (only #uncarvable), so the replaceable tags can't count terrain.
+            // Approximate the same range with the stone, dirt, grass, mud, moss, sand, terracotta, and nylium tags, plus TERRAIN_BLOCKS listed explicitly below
             BlockTags.BASE_STONE_OVERWORLD,
             BlockTags.BASE_STONE_NETHER,
             BlockTags.SUBSTRATE_OVERWORLD,
@@ -64,14 +65,14 @@ public final class DiggableBlocks {
             BlockTags.OVERWORLD_CARVER_REPLACEABLES,
             BlockTags.NETHER_CARVER_REPLACEABLES,
             //?}
-            // 上の2つが拾わない粘土・鍾乳石・エンドストーン・滑らかな玄武岩を足す
+            // Add clay, dripstone, end stone, and smooth basalt, which the two above don't pick up
             BlockTags.SCULK_REPLACEABLE,
             BlockTags.LEAVES,
             BlockTags.WART_BLOCKS,
             BlockTags.SNOW,
             BlockTags.ICE,
             //? if >=26.2 {
-            /*// 26.2は鉄・銅・金の鉱石以外の定数を消したが、タグそのものは残っている
+            /*// 26.2 removed the constants other than iron, copper, and gold ores, but the tags themselves remain
             vanillaBlockTag("coal_ores"), BlockTags.IRON_ORES, BlockTags.COPPER_ORES, BlockTags.GOLD_ORES,
             vanillaBlockTag("redstone_ores"), vanillaBlockTag("lapis_ores"),
             vanillaBlockTag("diamond_ores"), vanillaBlockTag("emerald_ores")
@@ -87,8 +88,8 @@ public final class DiggableBlocks {
     }
     *///?}
     //?} else if >=1.17 {
-    /*// 洞窟の置換タグ（*_carver_replaceables）と#sculk_replaceableは1.19から。それより前は同じ範囲を
-    // 石・土・砂・テラコッタ・ナイリウム等のタグで近似する
+    /*// The cave replaceable tags (*_carver_replaceables) and #sculk_replaceable exist from 1.19. Before that, approximate the same range
+    // with the stone, dirt, sand, terracotta, nylium, etc. tags
     private static final List<TagKey<Block>> TERRAIN_TAGS = List.of(
             BlockTags.BASE_STONE_OVERWORLD,
             BlockTags.BASE_STONE_NETHER,
@@ -105,7 +106,7 @@ public final class DiggableBlocks {
     );
     *///?}
 
-    /** タグに入っていない自然地形。 */
+    /** Natural terrain not included in the tags. */
     //? if >=1.19 {
     private static final Set<Block> TERRAIN_BLOCKS = Set.of(
             Blocks.NETHER_QUARTZ_ORE, Blocks.ANCIENT_DEBRIS, Blocks.GILDED_BLACKSTONE,
@@ -113,16 +114,16 @@ public final class DiggableBlocks {
             Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN,
             Blocks.POINTED_DRIPSTONE, Blocks.AMETHYST_BLOCK,
             Blocks.SCULK, Blocks.SCULK_VEIN,
-            // カサと幹の非対称は地上の木と同じ——葉に当たるカサは掘れて、原木（#logs）は壁のまま
+            // Cap/stem asymmetry is the same as surface trees: the cap, which acts as leaves, is diggable, while stems (#logs) stay walls
             Blocks.MUSHROOM_STEM, Blocks.BROWN_MUSHROOM_BLOCK, Blocks.RED_MUSHROOM_BLOCK,
             Blocks.MELON, Blocks.PUMPKIN,
-            // 竹林・ツツジ・コーラスプラントは当たり判定を持つので、掘れないと林がそのまま壁になる
+            // Bamboo, azaleas, and chorus plants have collision, so if they couldn't be dug, groves would become walls
             Blocks.BAMBOO, Blocks.BAMBOO_SAPLING, Blocks.AZALEA, Blocks.FLOWERING_AZALEA,
             Blocks.CHORUS_PLANT, Blocks.CHORUS_FLOWER,
             Blocks.MANGROVE_ROOTS, Blocks.DIRT_PATH, Blocks.FARMLAND
             //? if >=26.3 {
             /*,
-            // 置換タグが拾っていた分（#overworld_carver_replaceables・#nether_carver_replaceablesの残り）
+            // What the replaceable tags used to pick up (the rest of #overworld_carver_replaceables and #nether_carver_replaceables)
             Blocks.GRAVEL, Blocks.CLAY, Blocks.SANDSTONE, Blocks.RED_SANDSTONE,
             Blocks.SOUL_SAND, Blocks.SOUL_SOIL, Blocks.END_STONE, Blocks.SMOOTH_BASALT,
             Blocks.CALCITE, Blocks.DRIPSTONE_BLOCK, Blocks.PODZOL, Blocks.MYCELIUM
@@ -134,7 +135,7 @@ public final class DiggableBlocks {
             Blocks.GLOWSTONE, Blocks.SHROOMLIGHT, Blocks.MAGMA_BLOCK,
             Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN,
             Blocks.POINTED_DRIPSTONE, Blocks.DRIPSTONE_BLOCK, Blocks.AMETHYST_BLOCK, Blocks.CALCITE,
-            // 1.19以降は#*_carver_replaceablesが拾う分を、1.18.2では明示して揃える
+            // On 1.18.2, list explicitly what #*_carver_replaceables picks up from 1.19 on, to match
             Blocks.GRAVEL, Blocks.CLAY, Blocks.SANDSTONE, Blocks.RED_SANDSTONE,
             Blocks.SOUL_SAND, Blocks.SOUL_SOIL, Blocks.END_STONE, Blocks.SMOOTH_BASALT,
             Blocks.MUSHROOM_STEM, Blocks.BROWN_MUSHROOM_BLOCK, Blocks.RED_MUSHROOM_BLOCK,
@@ -162,8 +163,8 @@ public final class DiggableBlocks {
     );
     *///?}
 
-    // 掘削コスト計算はワーカースレッドから走るため、更新は必ず新しいSetへの差し替えで行う
-    // （その場で変更するとイテレーション中の探索スレッドと競合する）。
+    // Dig cost calculation runs on worker threads, so updates must always swap in a new Set
+    // (modifying in place would race with search threads that are iterating).
     private static volatile Set<Block> allowed = Set.of();
     private static volatile Set<Block> forbidden = Set.of();
 
@@ -179,9 +180,9 @@ public final class DiggableBlocks {
         if (allowed.contains(block)) {
             return true;
         }
-        // 中身を持つブロックは、壊せばその中身が失われる。チェスト・かまど・スポナーを個別に並べる
-        // 代わりにここで一括で外すことで、modが足した機械もまとめて対象外になる。タグ側にも
-        // 混ざりうる（#sandは怪しい砂を含む）ので、タグ判定より先に置く
+        // Blocks with contents lose those contents when broken. Excluding them all here, instead of listing chests,
+        // furnaces, and spawners individually, also excludes machines added by mods. They can also be mixed into tags
+        // (#sand includes suspicious sand), so this comes before the tag check
         if (
                 //? if >=1.17 {
                 state.hasBlockEntity()
@@ -204,7 +205,7 @@ public final class DiggableBlocks {
         return false;
     }
 
-    /** 設定ファイルの2つのブロックIDリスト（例: "minecraft:cobblestone"）を反映する。 */
+    /** Applies the config file's two block ID lists (e.g. "minecraft:cobblestone"). */
     public static synchronized void reloadFromConfig(Collection<? extends String> diggableIds,
                                                       Collection<? extends String> forbiddenIds) {
         allowed = resolve(diggableIds);
@@ -217,7 +218,7 @@ public final class DiggableBlocks {
             ResourceLocation location = ResourceLocation.tryParse(id);
             Block block = location == null ? null : BlockRegistryCompat.byId(location);
             if (block == null) {
-                LOGGER.warn("XaeroNav config: 未知のブロックIDを無視しました: {}", id);
+                LOGGER.warn("XaeroNav config: Ignored unknown block ID: {}", id);
                 continue;
             }
             blocks.add(block);

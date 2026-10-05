@@ -20,25 +20,25 @@ class TerrainClassificationTest(unittest.TestCase):
 
 
 class SectionOverlapsBandTest(unittest.TestCase):
-    """1.18以降のワールドはセクションYが負にもなる（岩盤の下）。"""
+    """Worlds from 1.18 on can have negative section Y (below bedrock)."""
 
     def test_negative_section_below_band_is_excluded(self):
-        # セクションY=-5 -> ブロックY -80..-65。バンドが0..255なら重ならない
+        # Section Y=-5 -> block Y -80..-65. Does not overlap a band of 0..255
         self.assertFalse(section_overlaps_band(-5, 0, 255))
 
     def test_negative_section_overlapping_band_is_included(self):
-        # セクションY=-1 -> ブロックY -16..-1。バンドが-8..8と重なる
+        # Section Y=-1 -> block Y -16..-1. Overlaps a band of -8..8
         self.assertTrue(section_overlaps_band(-1, -8, 8))
 
     def test_section_exactly_touching_band_edge_is_included(self):
-        # セクションY=0 -> ブロックY 0..15。バンド上限が0ちょうどでも1マスだけ重なる
+        # Section Y=0 -> block Y 0..15. Overlaps by exactly one block even when the band's upper bound is exactly 0
         self.assertTrue(section_overlaps_band(0, -64, 0))
 
     def test_section_just_outside_band_is_excluded(self):
         self.assertFalse(section_overlaps_band(1, -64, 15))
 
 
-# --- 以下はNBT/regionフィクスチャの組み立て用ヘルパー（本体には無い、テスト専用のエンコーダ） ---
+# --- Helpers below build NBT/region fixtures (test-only encoders, not in the main script) ---
 
 def _string_value(s):
     b = s.encode('utf-8')
@@ -75,13 +75,13 @@ def _list_value(tag_id, item_raw_values):
 
 
 def _encode_root(fields):
-    """`Nbt.root()`が読める形の、名前無しroot compoundを1つ作る。"""
+    """Builds one unnamed root compound in a form `Nbt.root()` can read."""
     _, payload = _compound_value(fields)
     return bytes([10]) + struct.pack('>H', 0) + payload
 
 
 def _pack_palette_indices(indices, bits):
-    """`section_blocks`のno-cross-boundary展開と対になる詰め方（1.16以降の形式）。"""
+    """Packing that mirrors the no-cross-boundary unpacking in `section_blocks` (1.16+ format)."""
     per_long = 64 // bits
     mask = (1 << bits) - 1
     longs = []
@@ -95,7 +95,7 @@ def _pack_palette_indices(indices, bits):
 
 
 def _section(y, palette_names, indices=None):
-    """`section`辞書と同じ形のcompound raw値を作る。indices省略時は単色（palette1件）扱い。"""
+    """Builds a compound raw value shaped like the `section` dict. Without indices it is single-colored (palette of 1)."""
     palette_items = [_compound_value({'Name': _string_value(n)}) for n in palette_names]
     block_states = {'palette': _list_value(10, [raw for _, raw in palette_items])}
     if indices is not None:
@@ -116,23 +116,23 @@ def _chunk_nbt(sections, status='minecraft:full'):
 
 
 def _region_with_single_chunk(cx, cz, compression, payload):
-    """`read_chunk`が読める最小のregionバイト列。実際の.mcaと違いtimestamp表は省く
-    （read_chunkはそれを読まない——このreader自身の契約をテストする）。"""
+    """The minimal region bytes `read_chunk` can read. Unlike a real .mca, the timestamp table is omitted
+    (read_chunk doesn't read it; this tests the reader's own contract)."""
     body = struct.pack('>I', len(payload) + 1) + bytes([compression]) + payload
-    # 4096バイト境界に詰める（read_chunkはパディングを読まないが、実ファイルの形に近づける）
+    # Pad to a 4096-byte boundary (read_chunk doesn't read the padding, but this is closer to a real file)
     if len(body) % 4096:
         body += b'\x00' * (4096 - len(body) % 4096)
     header = bytearray(4096)
     header_index = 4 * ((cx & 31) + (cz & 31) * 32)
-    sector_offset = 1  # header自身が1セクター(4096バイト)ぶん
+    sector_offset = 1  # the header itself takes 1 sector (4096 bytes)
     sector_count = len(body) // 4096
     struct.pack_into('>I', header, header_index, (sector_offset << 8) | sector_count)
     return bytes(header) + body
 
 
 class ReadChunkGoldenTest(unittest.TestCase):
-    """region/NBTの最小フィクスチャを自前で組み立てて、read_chunk/section_blocksの
-    往復が壊れていないことを固定する。"""
+    """Builds minimal region/NBT fixtures by hand and pins that the read_chunk/section_blocks
+    round trip isn't broken."""
 
     def test_uniform_section_round_trips_through_zlib(self):
         nbt = _chunk_nbt([_section(0, ['minecraft:stone'])])
@@ -151,10 +151,10 @@ class ReadChunkGoldenTest(unittest.TestCase):
 
     def test_packed_palette_unpacks_in_yzx_order(self):
         palette = ['minecraft:air', 'minecraft:stone', 'minecraft:water']
-        # x=0..15,z=0,y=0 だけ石、それ以外は空気。水は使わないが3色にしてbit幅を2にする
+        # Only x=0..15,z=0,y=0 is stone, the rest is air. Water isn't used, but 3 colors make the bit width 2
         indices = [0] * 4096
         for x in range(16):
-            indices[x] = 1  # y*256 + z*16 + x, y=z=0なのでx＝そのままの添字
+            indices[x] = 1  # y*256 + z*16 + x, and y=z=0 so the index is just x
         nbt = _chunk_nbt([_section(0, palette, indices)])
         region = _region_with_single_chunk(0, 0, 2, zlib.compress(nbt))
         chunk = read_chunk(region, 0, 0)
@@ -162,15 +162,15 @@ class ReadChunkGoldenTest(unittest.TestCase):
         self.assertEqual(4096, len(blocks))
         self.assertEqual(['minecraft:stone'] * 16, blocks[0:16])
         self.assertEqual('minecraft:air', blocks[16])
-        self.assertEqual('minecraft:air', blocks[256])  # z=1行目は空気のまま
+        self.assertEqual('minecraft:air', blocks[256])  # row z=1 stays air
 
     def test_missing_chunk_returns_none(self):
-        region = bytes(4096 + 4096)  # header全ゼロ＝どのチャンクも未生成
+        region = bytes(4096 + 4096)  # header all zeros = no chunk generated
         self.assertIsNone(read_chunk(region, 0, 0))
 
     def test_unsupported_compression_type_raises_instead_of_silently_misreading(self):
         nbt = _chunk_nbt([_section(0, ['minecraft:stone'])])
-        # 3=非圧縮、4=LZ4のつもりで生のNBTをそのまま置く。対応外なので明示的に落ちてほしい
+        # Raw NBT placed as if 3=uncompressed, 4=LZ4. Unsupported, so it should fail explicitly
         region = _region_with_single_chunk(0, 0, 3, nbt)
         with self.assertRaises(ValueError):
             read_chunk(region, 0, 0)

@@ -5,10 +5,10 @@ import net.prason.xaeronav.pathfinding.astar.CostToGo;
 import net.prason.xaeronav.pathfinding.astar.Heuristic;
 
 /**
- * 窓（読み込み範囲）の外の、目的地までの残りコストの推定。窓の境界の種にだけ使う。
+ * Estimate of the remaining cost to the goal outside the window (the loaded range). Used only to seed the window boundary.
  *
- * <p><b>分からない点は{@link Double#POSITIVE_INFINITY}を返すこと。</b>質の悪い値は何も無いより有害で
- * （実測: エンドで層1を外の値にすると1.197倍、何も置かなければ1.009倍）、0を返すとそこへ探索を吸い寄せる。
+ * <p><b>Return {@link Double#POSITIVE_INFINITY} for points that are unknown.</b> A bad value is worse than nothing
+ * (measured: in the End, outside values on layer 1 give 1.197x, nothing at all gives 1.009x), and returning 0 pulls the search toward it.
  */
 @FunctionalInterface
 public interface FarField {
@@ -16,16 +16,16 @@ public interface FarField {
     FarField UNKNOWN = (x, y, z) -> Double.POSITIVE_INFINITY;
 
     /**
-     * 目的地までの幾何下限。推定の材料が無いときの外の値。
+     * Geometric lower bound to the goal. The outside value when there is nothing to estimate from.
      *
-     * <p>{@link #UNKNOWN}を窓の縁に置くと、目的地が窓の外にある限り種が1つも無く、ガイドが丸ごと使えない
-     * （実測: エンドで目的地が窓の外に出るルートが1.022→1.235倍、従来の区間へ落ちた）。
+     * <p>Putting {@link #UNKNOWN} on the window edge leaves no seeds at all while the goal is outside the window, and the guide is unusable
+     * (measured: in the End, routes whose goal leaves the window went from 1.022 to 1.235x, falling back to the old leg search).
      */
     static FarField straightLineTo(BlockPos goal) {
         return straightLineTo(goal, 1.0);
     }
 
-    /** 目的地までの幾何下限の{@code scale}倍。 */
+    /** {@code scale} times the geometric lower bound to the goal. */
     static FarField straightLineTo(BlockPos goal, double scale) {
         return new FarField() {
             @Override
@@ -41,21 +41,21 @@ public interface FarField {
     }
 
     /**
-     * 目的地が窓の中にあるときは使わない（{@link #UNKNOWN}として扱う）か。
+     * Whether to stay unused (treated as {@link #UNKNOWN}) while the goal is inside the window.
      *
-     * <p>幾何下限は窓の外の地形を何も知らないので、目的地が窓の中にあっても縁の点に「そこから直線で着く」という
-     * 過小な値を置き、探索を縁へ吸い寄せる。
+     * <p>The geometric lower bound knows nothing about terrain outside the window, so even with the goal inside the window it puts an
+     * underestimate of "straight there from here" on edge points and pulls the search toward the edge.
      */
     default boolean onlyWhenGoalOutside() {
         return false;
     }
 
-    /** 目的地が窓の中にあるときに縁へ置く推定。 */
+    /** The estimate placed on the edge while the goal is inside the window. */
     default FarField whenGoalInside() {
         return onlyWhenGoalOutside() ? UNKNOWN : this;
     }
 
-    /** 目的地が窓の外なら{@code outside}、中なら{@code inside}を縁へ置く。 */
+    /** Places {@code outside} on the edge if the goal is outside the window, {@code inside} if it is inside. */
     static FarField byGoal(FarField outside, FarField inside) {
         return new FarField() {
             @Override
@@ -78,12 +78,12 @@ public interface FarField {
     double at(int x, int y, int z);
 
     /**
-     * {@code (x, y, z)}（窓の中心に立つプレイヤー）より、この推定で目的地から遠い点を{@link Double#POSITIVE_INFINITY}にする。
+     * Sets points farther from the goal than {@code (x, y, z)} (the player at the window center), by this estimate, to {@link Double#POSITIVE_INFINITY}.
      *
-     * <p>窓の中は実コスト、外は推定なので、推定が実際より安い地形（ジ・エンドの奈落の渡り）では、窓の中で渡るより
-     * 「後ろの縁から窓の外へ出て、推定の安い値段で渡り直す」方が安く見える。実機では島の突端に着くたびに来た道の縁へ
-     * 案内が戻った（層1の値で、西の縁913+18265に対し東へ実際に渡る4366+15874）。推定そのものの上で遠ざかる縁は
-     * 正しい出口になりえない——推定の最短経路が回り込むなら、その先の縁は値が下がっていくので残る。
+     * <p>Inside the window the cost is real and outside it is estimated, so in terrain where the estimate is cheaper than reality (crossing End voids),
+     * "leave the window by the back edge and re-cross at the cheap estimated price" looks cheaper than crossing inside the window. In the real game, every time the player reached
+     * the tip of an island the guidance turned back to the edge they came from (on layer 1 values: west edge 913+18265 vs. actually crossing east 4366+15874). An edge that moves away
+     * on the estimate itself can't be a correct exit: if the estimated shortest path goes around, the edges beyond it keep decreasing in value and remain.
      */
     static FarField forwardOf(FarField far, int x, int y, int z) {
         double limit = far.at(x, y, z);
@@ -110,8 +110,8 @@ public interface FarField {
     }
 
     /**
-     * 「情報が無ければ0」の約束で作られたガイド（{@code CoarseRouter#costToGo}など）を包む。
-     * 0以下は不明として扱う——目的地そのものは窓の中で別に種になるので、ここで0を失っても困らない。
+     * Wraps a guide built on the "0 if no information" convention ({@code CoarseRouter#costToGo} etc.).
+     * 0 or less is treated as unknown; the goal itself is seeded separately inside the window, so losing 0 here does no harm.
      */
     static FarField of(CostToGo guide) {
         return (x, y, z) -> {

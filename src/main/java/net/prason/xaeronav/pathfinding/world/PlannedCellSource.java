@@ -8,11 +8,11 @@ import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 既に計画済みの区間を歩き終えた時点の地形。経路を継ぎ足す探索は、その末端へ着くまでに
- * <b>掘ってあるはず・置いてあるはず</b>の変化を見なければならない——見ないと、まだ塞がっている
- * セルを通る前提や、既に空いているセルを掘り直す前提の経路が出る。
+ * The terrain as of finishing walking the already-planned stretch. A search extending the path must account for the changes
+ * <b>that should have been dug or placed</b> by the time it reaches that end; otherwise, paths come out that assume passing through cells
+ * still blocked, or re-digging cells already open.
  *
- * <p>ワールドは書き換えない。構築時に委譲先も読まない（差分だけを持つ）。
+ * <p>Doesn't modify the world. Doesn't read the delegate at construction time either (holds only the differences).
  */
 public final class PlannedCellSource implements CellSource {
     private static final long REMOVED = CellData.PRESENT | CellData.PASSABLE_EMPTY | CellData.REPLACEABLE;

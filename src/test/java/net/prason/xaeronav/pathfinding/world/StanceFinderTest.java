@@ -7,11 +7,11 @@ import org.junit.jupiter.api.Test;
 import net.minecraft.core.BlockPos;
 
 /**
- * 探索の始点・終点の寄せ直し。
+ * Resnapping the search's start and end points.
  *
- * <p>A*が作る移動はすべて「足場のあるセル・水・梯子」で終わるので、そうでない座標を渡すと
- * 経路が1本も伸びない。始点（落下中のプレイヤー）も終点（地図のクリック座標）も探索の外から
- * 降ってくる値で、そのままでは成立しないことが珍しくない。
+ * <p>Every move A* produces ends at "a cell with a foothold, water, or a ladder", so passing any other coordinate
+ * means not a single path grows. Both the start (a falling player) and the end (a map click coordinate) are values
+ * that come from outside the search, and it's not unusual for them to be invalid as-is.
  */
 class StanceFinderTest {
 
@@ -23,10 +23,10 @@ class StanceFinderTest {
                 ...
                 ###""");
 
-        // 空中に浮いた始点。このあと着地する場所から先の経路が出てほしい
+        // A start floating in mid-air. We want the path from where it will land onward
         BlockPos resolved = StanceFinder.resolveStart(cells, new BlockPos(1, 63, 0));
 
-        assertEquals(new BlockPos(1, 61, 0), resolved, "床の上まで下ろす");
+        assertEquals(new BlockPos(1, 61, 0), resolved, "lowered onto the floor");
     }
 
     @Test
@@ -41,7 +41,7 @@ class StanceFinderTest {
 
     @Test
     void startEmbeddedInTheFloorIsLiftedOneBlock() {
-        // 半ブロックの中・地面にめり込んだ位置。真下に下ろすのではなく1マス上を見る
+        // Inside a half block / sunk into the ground. Look one block up rather than lowering straight down
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ...
                 ...
@@ -53,7 +53,7 @@ class StanceFinderTest {
 
     @Test
     void goalBuriedInDiggableGroundIsKeptAsIs() {
-        // 地中の目的地。掘れば辿り着けるので寄せない — そこまでの坑道を出すのが正しい
+        // An underground destination. It can be reached by digging, so don't move it; producing the tunnel there is correct
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ...
                 ###
@@ -61,13 +61,13 @@ class StanceFinderTest {
                 ###""");
 
         assertEquals(new BlockPos(1, 61, 0), StanceFinder.resolveGoal(cells, new BlockPos(1, 61, 0)),
-                "掘って到達できる座標は動かさない");
+                "coordinates reachable by digging aren't moved");
     }
 
     @Test
     void goalFloatingInTheAirIsPulledDownToTheGround() {
-        // 地図のクリックやウェイポイントは空中を指すことがある。到達不能として扱うと、
-        // 目の前まで来ているのに「経路なし」になってしまう
+        // Map clicks and waypoints can point into the air. Treating them as unreachable would give
+        // "no path" even when you've come right up to it
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ...
                 ...
@@ -75,7 +75,7 @@ class StanceFinderTest {
                 ###""");
 
         assertEquals(new BlockPos(1, 61, 0), StanceFinder.resolveGoal(cells, new BlockPos(1, 63, 0)),
-                "足場のある高さまで寄せる");
+                "moved to a height with a foothold");
     }
 
     @Test
@@ -86,7 +86,7 @@ class StanceFinderTest {
                 BBB
                 BBB""");
 
-        // (1,61) は岩盤の中で、掘っても辿り着けない。上の空間へ寄せる
+        // (1,61) is inside bedrock and can't be reached even by digging. Move it to the space above
         assertEquals(new BlockPos(1, 62, 0), StanceFinder.resolveGoal(cells, new BlockPos(1, 61, 0)));
     }
 
@@ -98,7 +98,7 @@ class StanceFinderTest {
                 .~.
                 ###""");
 
-        // 水中は足場が無くても立てる（泳ぐ）扱い。ここを外すと海の上の目的地が全部寄ってしまう
+        // Underwater counts as standable even without a foothold (swimming). Without this, every destination over the ocean would get moved
         assertEquals(new BlockPos(1, 61, 0), StanceFinder.resolveGoal(cells, new BlockPos(1, 61, 0)));
     }
 }

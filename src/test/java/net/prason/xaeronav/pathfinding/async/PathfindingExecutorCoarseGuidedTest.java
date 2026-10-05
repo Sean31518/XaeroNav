@@ -17,28 +17,28 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * {@link PathfindingExecutor#submitCoarseGuided}の2つの性質を確認する（層3の
- * 局所障害対策）。
+ * Checks two properties of {@link PathfindingExecutor#submitCoarseGuided} (layer 3's
+ * countermeasure against local obstacles).
  *
  * <ol>
- * <li>粗い経由地が役に立つ地形では、単一の詳細探索が予算切れになる状況でも目的地まで届く
- * <li>粗い経由地が到達不能な点を指す地形でも、チェーンが破綻せず目的地まで届く
+ * <li>On terrain where coarse waypoints help, it reaches the goal even where a single detailed search runs out of budget
+ * <li>On terrain where a coarse waypoint points at an unreachable spot, the chain doesn't break down and still reaches the goal
  * </ol>
  *
- * <p>層3が常に有利なわけではない。平地では展開ノード数がほぼ同じ（実測: 直接201 / チェーン203）で
- * 分割そのものの利得は無く、区間ごとに予算を取り直せるぶんだけ僅かに遠くまで届く。
+ * <p>Layer 3 isn't always an advantage. On flat ground the expanded node counts are about the same (measured: direct 201 / chain 203),
+ * so splitting itself gains nothing; it reaches slightly farther only because each segment gets a fresh budget.
  */
 class PathfindingExecutorCoarseGuidedTest {
 
     /**
-     * 横に長い湖。ヒューリスティックは陸のスプリント速度で残りを見積もるので直進＝遊泳を強く推すが、
-     * 遊泳の実コストは約1.56倍あり、その差のぶん詳細探索は水域を無駄に広く展開する。粗い地図は湖を
-     * {@code WATER}として認識して北へ迂回する経由地を置くため、区間ごとの探索は陸の上だけを短く辿れる。
+     * A long lake running sideways. The heuristic estimates the remainder at land sprint speed, so it strongly favors going straight = swimming,
+     * but swimming actually costs about 1.56x, and by that margin the detailed search expands needlessly wide over the water. The coarse map
+     * recognizes the lake as {@code WATER} and places waypoints detouring north, so each segment's search can trace a short path over land only.
      *
-     * <p>cost-to-goガイドは明示的に無効化する——このテストが確かめたいのは「waypoint分割そのものの
-     * 利得」で、段階4で追加したガイドが効くと直接探索もこの予算で届くようになり
-     * （ガイド自体が湖を回避する見積もりを返すため）、比較の前提が崩れる。ガイドの効果は
-     * 別テストで確認する。
+     * <p>The cost-to-go guide is explicitly disabled. What this test wants to verify is "the gain from waypoint splitting
+     * itself"; if the guide added in stage 4 kicks in, the direct search also reaches the goal on this budget
+     * (because the guide itself returns estimates that avoid the lake), and the premise of the comparison breaks. The guide's effect
+     * is checked in a separate test.
      */
     @Test
     void reachesTheGoalOnABudgetThatDefeatsASingleSearch() throws Exception {
@@ -56,15 +56,15 @@ class PathfindingExecutorCoarseGuidedTest {
         }
         BlockPos start = new BlockPos(0, 63, 0);
         BlockPos goal = new BlockPos(200, 63, 0);
-        // 直接探索には足りず（実測で635要る）、チェーンには足りる（200でも届く）予算
+        // A budget too small for the direct search (measured: needs 635) but enough for the chain (reaches even at 200)
         SearchLimits limits = new SearchLimits(400, 30_000, 1.5);
 
         PathfindingExecutor executor = new PathfindingExecutor();
-        // 対照は<b>素の探索</b>（submitRaw）で取る。submitは詰み回避の再挑戦
-        // （上限の緩和・重みを上げる retryGreedier）を通すので、同じ予算でも実質もっと使える——
-        // 対照が届いてしまい「チェーンだから届いた」が言えなくなる
+        // The control uses the <b>raw search</b> (submitRaw). submit goes through the dead-end-avoidance retries
+        // (relaxing limits, retryGreedier raising the weight), so it effectively gets more out of the same budget;
+        // the control would reach the goal and we could no longer say "it reached because of the chain"
         PathResult direct = executor.submitRaw(cells, start, goal, limits).get(60, TimeUnit.SECONDS);
-        assertFalse(direct.complete(), "この予算では直接探索が届いてしまい、チェーンの利得を確かめられない");
+        assertFalse(direct.complete(), "The direct search reaches the goal on this budget, so the chain's gain can't be verified");
 
         PathResult chain = executor.submitCoarseGuided(cells, bounds, start, goal, limits, false)
                 .get(60, TimeUnit.SECONDS);
@@ -73,44 +73,44 @@ class PathfindingExecutorCoarseGuidedTest {
     }
 
     /**
-     * cost-to-goガイド（{@code XaeroNavConfig#costToGoGuideEnabled}）を有効にすると、壁で
-     * 大きく迂回が要る地形で<b>直接探索</b>（waypoint分割無し）だけでも目的地へ届きやすくなる。
-     * 幾何学的な直線距離のヒューリスティックは壁の存在を知らず、まず壁へ向かって展開してから
-     * 引き返す無駄を払う——層1の粗い地図はチャンク単位の起伏として壁を大まかに捉えているので、
-     * その見積もりを併用すると引き返しが減る。
+     * Enabling the cost-to-go guide ({@code XaeroNavConfig#costToGoGuideEnabled}) makes even the <b>direct search</b>
+     * (no waypoint splitting) more likely to reach the goal on terrain where a wall forces a large detour.
+     * The geometric straight-line heuristic doesn't know the wall exists, so it pays for expanding toward the wall first
+     * and then backtracking. Layer 1's coarse map roughly captures the wall as per-chunk relief,
+     * so combining its estimate reduces the backtracking.
      *
-     * <p>{@code reachesTheGoalOnABudgetThatDefeatsASingleSearch}と同じ湖の地形では試さない——
-     * 湖は迂回してもコストの差が小さく（水を渡っても致命的に高いわけではない）、粗い地図の
-     * チャンク粒度の粗さがかえってノイズになり、この地形では逆にガイド併用の方が展開数が
-     * 増えることを実測した（1997→2375）。壁のように「迂回しないと届かない・届いても
-     * 大幅に高くつく」地形でこそ効く、という条件付きの改善であることに注意。
+     * <p>Not tested on the same lake terrain as {@code reachesTheGoalOnABudgetThatDefeatsASingleSearch}.
+     * For the lake, the cost difference of detouring is small (crossing the water isn't fatally expensive), and the coarse map's
+     * chunk granularity instead becomes noise; measurements showed that on that terrain combining the guide actually increases
+     * the expansion count (1997->2375). Note that this is a conditional improvement that helps on terrain like a wall, where you
+     * "can't reach it without detouring, or it costs far more even if you do".
      */
     @Test
     void costToGoGuideLetsADirectSearchSucceedOnTheSameBudgetThatDefeatedItWithoutTheGuide() throws Exception {
         BlockPos start = new BlockPos(0, 64, 0);
         BlockPos goal = new BlockPos(200, 64, 0);
-        // 素の直接探索は7932ノード要る（幾何学的な直線距離は壁の存在を知らず、z<64側へ
-        // 突っ込んでから引き返す展開をする）。層1は壁をNO_DATAではなく起伏として大まかに
-        // 捉え、迂回側を早くから示すのでガイド併用は6921ノードで届く。
+        // The raw direct search needs 7932 nodes (the geometric straight-line distance doesn't know the wall exists, so it
+        // expands into the z<64 side and then backtracks). Layer 1 roughly captures the wall as relief rather than NO_DATA
+        // and points to the detour side early, so with the guide it reaches the goal in 6921 nodes.
         //
-        // 予算は両者の間に置く必要があるので、探索の展開順を変える修正を入れたら測り直すこと。
-        // {@code AStarPathfinder#LINE_TIE_BREAK_TICKS}（fを刻みに量子化して引き分けだけ解く）は
-        // ここをほとんど動かさない（無効時 7840/6927）——fに直接加算する実装だと 9013/8474 まで
-        // 膨らみ、この予算では両方失敗していた
+        // The budget has to sit between the two, so re-measure after any change that alters the search's expansion order.
+        // {@code AStarPathfinder#LINE_TIE_BREAK_TICKS} (quantizes f into steps and only breaks ties) barely
+        // moves this (7840/6927 when disabled); an implementation adding directly to f inflated it to 9013/8474,
+        // and both failed on this budget
         SearchLimits limits = new SearchLimits(7_200, 30_000, 1.5);
 
-        // 対照は素の探索で取る（上の reachesTheGoalOnABudgetThatDefeatsASingleSearch と同じ理由）
+        // The control uses the raw search (same reason as reachesTheGoalOnABudgetThatDefeatsASingleSearch above)
         PathResult unguided = new PathfindingExecutor().submitRaw(wallCells(), start, goal, limits)
                 .get(60, TimeUnit.SECONDS);
-        assertFalse(unguided.complete(), "この予算ではガイド無しでも届いてしまい、比較にならない");
+        assertFalse(unguided.complete(), "Reaches the goal on this budget even without the guide, so there's nothing to compare");
 
         PathResult guided = new PathfindingExecutor().submit(wallCells(), start, goal, limits, true)
                 .get(60, TimeUnit.SECONDS);
 
-        assertTrue(guided.complete(), "ガイド併用でも直接探索がこの予算で届かなかった");
+        assertTrue(guided.complete(), "The direct search with the guide didn't reach the goal on this budget");
     }
 
-    /** {@code z&gt;=64}だけ開いた掘れない壁。迂回は64ブロック以上の横移動になる。 */
+    /** An undiggable wall open only at {@code z&gt;=64}. The detour is 64+ blocks of sideways movement. */
     private static final SearchBounds WALL_BOUNDS = new SearchBounds(-16, 0, -112, 216, 100, 112);
 
     private static FakeCells wallCells() {
@@ -131,10 +131,10 @@ class PathfindingExecutorCoarseGuidedTest {
     }
 
     /**
-     * チャンクを丸ごと埋める垂直な壁。粗い地図は溶岩以外に「通行不能」を表現できず、この壁は
-     * {@code min=max}＝起伏0の平坦な台地に見えるため、経由地が壁の天面という到達不能な点に落ちる。
-     * 届かない経由地は飛ばして次を狙うので、最後の区間（本来の目的地）で直接探索と同じ結果に
-     * 落ち着く——1つ届かないだけでチェーンごと捨てていた頃は、10倍の予算を与えても未到達だった。
+     * A vertical wall filling whole chunks. The coarse map can't represent "impassable" except for lava, and this wall
+     * looks like a flat plateau with {@code min=max}, i.e. zero relief, so a waypoint lands on top of the wall, an unreachable spot.
+     * Unreachable waypoints are skipped in favor of the next one, so the last segment (the actual goal) ends up with the same
+     * result as the direct search. Back when a single unreachable waypoint discarded the whole chain, it failed even with 10x the budget.
      */
     @Test
     void skipsUnreachableWaypointsInsteadOfAbandoningTheChain() throws Exception {
@@ -149,17 +149,17 @@ class PathfindingExecutorCoarseGuidedTest {
     }
 
     private static void assertReachesGoal(PathResult result, BlockPos goal) {
-        assertTrue(result.complete(), "経由地チェーンが目的地まで届かなかった");
+        assertTrue(result.complete(), "The waypoint chain didn't reach the goal");
         List<PathStep> steps = result.steps();
         PathStep last = steps.get(steps.size() - 1);
-        assertEquals(goal.getX(), last.pos().getX(), "経路の終端が目的地に届いていない");
-        assertEquals(goal.getZ(), last.pos().getZ(), "経路の終端が目的地に届いていない");
-        // 区間の継ぎ目で経路が飛んでいないこと（連結を間違えるとここが跳ぶ）
+        assertEquals(goal.getX(), last.pos().getX(), "The end of the path doesn't reach the goal");
+        assertEquals(goal.getZ(), last.pos().getZ(), "The end of the path doesn't reach the goal");
+        // The path must not jump at segment seams (a wrong join makes it jump here)
         for (int i = 1; i < steps.size(); i++) {
             BlockPos previous = steps.get(i - 1).pos();
             BlockPos current = steps.get(i).pos();
             assertTrue(previous.distSqr(current) <= 4.0,
-                    "区間の継ぎ目で経路が飛んでいる: " + previous + " -> " + current);
+                    "The path jumps at a segment seam: " + previous + " -> " + current);
         }
     }
 }

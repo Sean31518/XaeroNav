@@ -32,7 +32,7 @@ import net.prason.xaeronav.client.XaeroNavCommands;
 import net.prason.xaeronav.client.XaeroNavKeys;
 import net.prason.xaeronav.client.gui.XaeroNavConfigScreen;
 
-/^* Forge 56以降のイベントを、ローダー非依存の処理へ繋ぐだけの層。クライアントでだけ読み込まれる。 ^/
+/^* A thin layer that wires Forge 56+ events to the loader-independent logic. Loaded only on the client. ^/
 final class ForgeClientSetup {
 
     private ForgeClientSetup() {
@@ -41,7 +41,7 @@ final class ForgeClientSetup {
     static void register(FMLJavaModLoadingContext context) {
         FMLClientSetupEvent.getBus(context.getModBusGroup()).addListener(event -> {
             XaeroNavClient.reloadBlockLists();
-            // Modsの一覧からもキーバインド（XaeroNavKeys.OPEN_CONFIG_SCREEN）と同じ画面を開けるようにする
+            // Also let the Mods list open the same screen as the keybinding (XaeroNavKeys.OPEN_CONFIG_SCREEN)
             context.registerExtensionPoint(ConfigScreenHandler.ConfigScreenFactory.class,
                     () -> new ConfigScreenHandler.ConfigScreenFactory(XaeroNavConfigScreen::new));
         });
@@ -54,7 +54,7 @@ final class ForgeClientSetup {
         //?}
                 ResourceLocation.fromNamespaceAndPath(XaeroNav.MOD_ID, "hud"),
                 (graphics, deltaTracker) -> XaeroNavClient.HUD.render(graphics)));
-        // LevelRendererの生成時に1回だけ発火し、FMLClientSetupEventより早い。だからここで登録しておく
+            // Fires once when the LevelRenderer is created, earlier than FMLClientSetupEvent, so register here
         AddFramePassEvent.BUS.addListener(event -> event.addPass(
                 ResourceLocation.fromNamespaceAndPath(XaeroNav.MOD_ID, "path"), new PathPass()));
 
@@ -67,8 +67,8 @@ final class ForgeClientSetup {
     }
 
     /^*
-     * ワールドの経路を描くパス。Forgeは追加のパスをバニラの全パスの後に置き、その間もmodelViewには
-     * 視点の回転が積まれたままなので、渡す行列は単位行列でよい（Fabricの{@code END_MAIN}と同じ）。
+     * Pass that draws the world path. Forge places extra passes after all vanilla passes, and modelView still
+     * holds the camera rotation in between, so the matrix passed in can be identity (same as Fabric's {@code END_MAIN}).
      ^/
     private static final class PathPass implements FramePassManager.PassDefinition {
 
@@ -78,7 +78,7 @@ final class ForgeClientSetup {
         ^///?} else {
         public void extracts(LevelTargetBundle bundle, FramePass pass, DeltaTracker deltaTracker) {
         //?}
-            // Fabulous!以外ではmainしか無い。描く先もmainだけ（NavRenderTypes）
+            // Outside Fabulous! there is only main. We draw only to main too (NavRenderTypes)
             bundle.main = pass.readsAndWrites(bundle.main);
         }
 

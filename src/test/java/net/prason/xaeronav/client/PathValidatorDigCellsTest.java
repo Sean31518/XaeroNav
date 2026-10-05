@@ -7,16 +7,16 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import org.junit.jupiter.api.Test;
 
 /**
- * 「経路が掘る予定のセルは、塞がっていても空いていても通れる前提」の番人。
+ * Guards the rule that "cells the path plans to dig are assumed passable whether blocked or open".
  *
- * <p>塞がっているのを蹴ると、掘って登る経路が検査のたびに蹴られ、探索は同じ経路を出し直すので
- * 全引き直しが永久に続く（実機ログで110秒・34回、砂利のセル1つが原因）。空いているのを蹴ると、
- * プレイヤーが指示どおりに掘るたびに数百手の経路が捨てられる（実機のネザー: 723手→39手）。
- * ただし掘った後に溶岩が流れ込んだセルは通れない——ネザーでは掘る予定でないセルへの流れ込みが
- * 実機ログに何度も出ている。
+ * <p>Rejecting blocked ones makes dig-and-climb paths get rejected on every check, and since the search outputs the
+ * same path again, full replans continue forever (110 seconds and 34 times in a real-game log, caused by a single
+ * gravel cell). Rejecting open ones throws away paths of hundreds of steps every time the player digs as instructed
+ * (real-game Nether: 723 steps -> 39 steps). However, a cell that lava flowed into after digging is not passable;
+ * in the Nether, lava flowing into cells not planned for digging shows up repeatedly in real-game logs.
  *
- * <p>{@code stepFailure}そのものは{@code Level}（＝Minecraftのレジストリ起動）を要求するので、
- * 判定の核だけを見る。
+ * <p>{@code stepFailure} itself requires a {@code Level} (i.e. bootstrapping Minecraft's registries), so this
+ * looks only at the core of the decision.
  */
 class PathValidatorDigCellsTest {
 

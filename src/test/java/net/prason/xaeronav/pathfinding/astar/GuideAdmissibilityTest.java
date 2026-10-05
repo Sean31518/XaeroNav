@@ -20,20 +20,20 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>層1のcost-to-goガイドが、実コストの下限になっていることを測る。</b>
+ * <b>Measures that layer 1's cost-to-go guide is a lower bound on the actual cost.</b>
  *
- * <p>{@code AStarPathfinder}は幾何学的なHeuristicとガイドの<b>max</b>を取るので、ガイドが実コストを
- * 上回った瞬間に<b>本当は安い道を探索が避ける</b>。経路の質の比（{@code PathOptimalityTest}）は
- * 結果しか見えないが、ここは<b>原因そのもの</b>を見る——比は他の要因でも動くので、ガイドを触った
- * ときに効いたかどうかを比で判断すると必ず読み違える。
+ * <p>{@code AStarPathfinder} takes the <b>max</b> of the geometric Heuristic and the guide, so the moment the guide
+ * exceeds the actual cost, <b>the search avoids a path that is actually cheap</b>. The path-quality ratio ({@code PathOptimalityTest})
+ * only sees the outcome, but this looks at <b>the cause itself</b>. The ratio moves for other reasons too, so judging whether a
+ * guide change helped by the ratio will always mislead.
  *
- * <p>測り方は「最適経路の各点で、ガイドの見積もりがそこからの実残りコストを超えていないか」。
- * 基準の経路は厳密な最適ではない（{@code PathOptimalityTest}のjavadoc参照）が、
- * <b>実在する経路のコストである以上、真の最適の上限</b>なので、これを超えるガイドは
- * 確実に下限を破っている——見逃しはあっても誤検知は無い、片側だけの検査。
+ * <p>The measurement is "at each point of the optimal path, does the guide's estimate stay within the actual remaining cost from there".
+ * The reference path isn't strictly optimal (see the {@code PathOptimalityTest} javadoc), but
+ * <b>since it's the cost of a path that actually exists, it's an upper bound on the true optimum</b>, so a guide exceeding it
+ * definitely breaks the lower bound. It's a one-sided check: it may miss cases but has no false positives.
  *
- * <p><b>ゴール手前は測らない</b>（{@link #MIN_REMAINING_TICKS}）。残りが数tickの点では、
- * わずかな絶対誤差が比を跳ね上げるだけで、探索の判断には影響しない。
+ * <p><b>The stretch just before the goal isn't measured</b> ({@link #MIN_REMAINING_TICKS}). At points with only a few ticks left,
+ * a tiny absolute error just inflates the ratio without affecting the search's decisions.
  */
 @Tag("slow")
 class GuideAdmissibilityTest {
@@ -42,15 +42,15 @@ class GuideAdmissibilityTest {
 
     private static final long SEED = 20260906L;
 
-    /** 基準の探索に渡す予算。 */
+    /** Budget passed to the reference search. */
     private static final int UNLIMITED_NODE_BUDGET = 3_000_000;
 
-    /** これより残りが少ない点は測らない。約10ブロックぶんの疾走。 */
+    /** Points with less remaining than this aren't measured. About 10 blocks of sprinting. */
     private static final double MIN_REMAINING_TICKS = 40.0;
 
     /**
-     * 線は<b>1.00</b>——「下限である」がそのまま線になる。実測は0.65〜0.98で、
-     * 詰めた余裕がそのまま安全域になっている。
+     * The threshold is <b>1.00</b>: "is a lower bound" is the threshold itself. Measured values are 0.65-0.98,
+     * and the margin we tightened becomes the safety zone as-is.
      */
     private static final double LIMIT = 1.00;
 
@@ -58,21 +58,21 @@ class GuideAdmissibilityTest {
     }
 
     /**
-     * 起伏と水を厚めに取る。ガイドが下限を破るのは<b>セルの要約統計が、そのセルを通る最良の道の
-     * 下限になっていない</b>ときで、それが起きるのは尾根（代表高さが鞍部より高い）と
-     * 水際（過半数が水でも乾いた帯を通れる）だから。
+     * Relief and water are weighted heavily. The guide breaks the lower bound when <b>a cell's summary statistics aren't a lower bound
+     * on the best path through that cell</b>, and that happens on ridges (the representative height is above the saddle) and
+     * at shorelines (a dry strip can be crossed even if most of the cell is water).
      */
     private static List<Terrain> terrains() {
         return List.of(
-                new Terrain("地上/平原丘陵", "/overworld_terrain_columns.txt.gz", false, 12, 40, 120),
-                new Terrain("地上/山岳", "/overworld_mountains.txt.gz", false, 12, 40, 120),
-                new Terrain("地上/海岸", "/overworld_coast.txt.gz", false, 12, 40, 120),
-                new Terrain("地上/広域", "/overworld_wide.txt.gz", false, 8, 120, 260),
-                new Terrain("ネザー", "/nether_terrain_columns.txt.gz", true, 8, 60, 160),
-                new Terrain("エンド", "/end_terrain_columns.txt.gz", false, 8, 60, 160));
+                new Terrain("overworld/plains+hills", "/overworld_terrain_columns.txt.gz", false, 12, 40, 120),
+                new Terrain("overworld/mountains", "/overworld_mountains.txt.gz", false, 12, 40, 120),
+                new Terrain("overworld/coast", "/overworld_coast.txt.gz", false, 12, 40, 120),
+                new Terrain("overworld/wide", "/overworld_wide.txt.gz", false, 8, 120, 260),
+                new Terrain("nether", "/nether_terrain_columns.txt.gz", true, 8, 60, 160),
+                new Terrain("end", "/end_terrain_columns.txt.gz", false, 8, 60, 160));
     }
 
-    /** {@code PathOptimalityTest}と同じ「道具を持って普通に歩いている状態」。 */
+    /** Same "walking normally with tools in hand" state as {@code PathOptimalityTest}. */
     private static FakeCells walkingPlayer(SearchBounds bounds, boolean ceiling) {
         FakeCells cells = FakeCells.empty(bounds).canPlaceBlocks(true).maxBridgeRunBlocks(96)
                 .maxFallDamagePoints(6);
@@ -98,7 +98,7 @@ class GuideAdmissibilityTest {
                     continue;
                 }
                 measured++;
-                // 実機と同じ作り方（`PathfindingExecutor#buildCostToGoGuide`と同じ引数）
+                // Built the same way as in the real game (same arguments as `PathfindingExecutor#buildCostToGoGuide`)
                 CoarseMap map = LiveCoarseSampler.sample(cells, cells.bounds(), route[0].getY(), NEVER);
                 CostToGo guide = CoarseRouter.costToGo(map, route[1], false,
                         CoarseRouter.BridgePolicy.BRIDGE);
@@ -109,20 +109,20 @@ class GuideAdmissibilityTest {
                         double ratio = guide.estimate(at.getX(), at.getY(), at.getZ()) / remaining;
                         if (ratio > worst) {
                             worst = ratio;
-                            worstAt = at.toShortString() + "（残り" + Math.round(remaining) + "tick）";
+                            worstAt = at.toShortString() + " (" + Math.round(remaining) + " ticks left)";
                         }
                     }
                     remaining -= step.cost();
                     at = step.pos();
                 }
             }
-            report.add(String.format(Locale.ROOT, "%-12s %2d本 最悪%.3f倍 %s",
+            report.add(String.format(Locale.ROOT, "%-12s %2d paths worst %.3fx %s",
                     terrain.name(), measured, worst, worstAt));
             if (measured == 0) {
-                failures.add(terrain.name() + ": 経路が1本も出ない（地形か座標がおかしい）");
+                failures.add(terrain.name() + ": not a single path found (terrain or coordinates are wrong)");
             } else if (worst > LIMIT) {
                 failures.add(String.format(Locale.ROOT,
-                        "%s: ガイドが実残りコストを%.3f倍まで上回っている %s",
+                        "%s: guide exceeds the actual remaining cost by up to %.3fx %s",
                         terrain.name(), worst, worstAt));
             }
         }

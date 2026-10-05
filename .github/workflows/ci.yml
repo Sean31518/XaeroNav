@@ -5,24 +5,24 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    # 通常のPRではruntimeを正典ノードだけに絞るぶん、全ノードのXaeroフック疎通を
-    # 週1回は確認する
+    # Regular PRs narrow runtime to the canonical node only, so check Xaero hook connectivity on
+    # all nodes once a week
     - cron: "0 3 * * 1"
 
-# 読むだけ。ビルドがリポジトリへ書き戻すことは無い
+# Read-only. The build never writes back to the repository
 permissions:
   contents: read
 
-# 同じブランチへ続けてpushしたとき、古い実行を打ち切る。
-# NeoForgeの初回セットアップだけで5分前後かかるので、積み残すと待ち時間が伸びる一方になる
+# Cancel older runs when pushing to the same branch in succession.
+# NeoForge's first-time setup alone takes about 5 minutes, so letting runs pile up only grows the wait
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ノード一覧の取得と、runtimeを全ノードへ広げるかどうかの判定だけを行う軽いジョブ。
-  # ここを先に独立させることで、下のbuildジョブをノードごとのmatrixに割れる
-  # （printNodesはGradleの設定フェーズだけで数秒、フルビルドを待つ必要が無い）。
+  # A lightweight job that only fetches the node list and decides whether to widen runtime to all nodes.
+  # Splitting this out first lets the build job below be a per-node matrix
+  # (printNodes takes only a few seconds in Gradle's configuration phase; no need to wait for a full build).
   discover:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -42,20 +42,20 @@ jobs:
           distribution: temurin
           java-version: 25
 
-      # ノード発見だけのジョブから専用キャッシュを書き出しても、後続ビルドには
-      # ほぼ再利用できず保存・退避コストだけが増える。
+      # Writing a dedicated cache from a node-discovery-only job is barely reusable by later builds
+      # and only adds save/eviction cost.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-read-only: true
 
-      # runtimeを全ノードへ広げる条件: mainへのpush・週次スケジュール・
-      # ノード定義、Xaero mixin、またはruntime probeの実行経路を触ったPR。
-      # それ以外の通常PRは正典ノードだけに絞り、MCバージョンノードが増えても
-      # runtimeジョブの総数が線形に膨らまないようにする。
+      # Conditions for widening runtime to all nodes: a push to main, the weekly schedule, or
+      # a PR touching node definitions, Xaero mixins, or the runtime probe's execution path.
+      # Other regular PRs are narrowed to the canonical node, so the total number of runtime
+      # jobs doesn't grow linearly as MC version nodes are added.
       #
-      # Forge server smokeは、outer entrypointから直接参照するクラスだけでなく、その先の
-      # 共通クラスにclient型が混入しても壊れる。Java/resource変更は一律対象にして、将来の
-      # 依存関係変更をこの正規表現へ追加し忘れて取りこぼさないようにする
+      # The Forge server smoke breaks not only through classes referenced directly from the outer
+      # entrypoint but also when client types leak into common classes further down. All Java/resource
+      # changes are included so future dependency changes aren't missed by forgetting to add them to this regex
       - name: Decide whether to run the full runtime matrix
         id: full
         run: |
@@ -79,12 +79,12 @@ jobs:
           echo "full=$FULL" >> "$GITHUB_OUTPUT"
           echo "server_required=$SERVER" >> "$GITHUB_OUTPUT"
 
-      # ノードの定義はsettings.gradle.ktsにしか無い状態を保つ
+      # Keep node definitions only in settings.gradle.kts
       - id: nodes
         run: |
           CANON=$(grep '^canonical_test_node' stonecutter.properties.toml | cut -d'"' -f2)
-          # 全ノードを構成すると、借りたGradleのキャッシュに無いノードのMinecraftを1つずつ作り直して20分を超える。
-          # 一覧はsettings.gradle.ktsが構成しないノードも持っているので、正典ノードだけを構成すれば足りる
+          # Configuring all nodes rebuilds Minecraft one by one for nodes missing from the borrowed Gradle cache, taking over 20 minutes.
+          # The list also contains nodes settings.gradle.kts doesn't configure, so configuring only the canonical node is enough
           NODES=$(./gradlew printNodes "-Pxaeronav.onlyNodes=$CANON" --console=plain | tee /dev/stderr | grep '^\[{')
           echo "nodes=$NODES" >> "$GITHUB_OUTPUT"
           echo "canonical_node=$CANON" >> "$GITHUB_OUTPUT"
@@ -93,14 +93,14 @@ jobs:
           else
             RUNTIME=$(echo "$NODES" | jq -c --arg c "$CANON" '[.[] | select(.node == $c)]')
           fi
-          # mc-runtime-testは26.3向けの配布物をまだ出していない（4.5.1は26.2まで）。出たら外す
+          # mc-runtime-test hasn't published a build for 26.3 yet (4.5.1 goes up to 26.2). Remove once it does
           RUNTIME=$(echo "$RUNTIME" | jq -c '[.[] | select(.minecraft != "26.3")]')
           echo "runtime_nodes=$RUNTIME" >> "$GITHUB_OUTPUT"
           SERVER=$(echo "$NODES" | jq -c '[.[] | select(.loader == "forge")]')
           echo "server_nodes=$SERVER" >> "$GITHUB_OUTPUT"
 
-  # 全ノードの配布jarをコンパイルする。フォーマット確認とテスト（slowTestを含む）は、
-  # ソースを共有する正典ノードでだけ行う（stonecutter.properties.tomlのcanonical_test_node）。
+  # Compile the distribution jars of all nodes. Format checks and tests (including slowTest) run
+  # only on the canonical node that shares the sources (canonical_test_node in stonecutter.properties.toml).
   build:
     needs: discover
     runs-on: ubuntu-latest
@@ -119,10 +119,10 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
-      # xaeronav.onlyNodesで、このジョブが使うノード（と正典ノード）だけを構成する（settings.gradle.kts参照）。
-      # 経路探索テストは全ノードで同じなので正典ノードだけでコンパイル・実行する。
-      # 他ノードでbuildを呼ぶと、Test自体はonlyIfで止まってもcompileTestJavaまでは
-      # 同じソースを再コンパイルするため、配布jarの検証に必要なassembleだけを使う。
+      # xaeronav.onlyNodes configures only the node(s) this job uses (and the canonical node) (see settings.gradle.kts).
+      # Pathfinding tests are the same on all nodes, so they are compiled and run only on the canonical node.
+      # Calling build on other nodes would recompile the same sources up to compileTestJava even though
+      # Test itself stops via onlyIf, so only assemble, needed to verify the distribution jars, is used.
       - name: Build and verify
         env:
           NODE: ${{ matrix.node.node }}
@@ -134,7 +134,7 @@ jobs:
             ./gradlew ":$NODE:assemble" "-Pxaeronav.onlyNodes=$NODE" --console=plain
           fi
 
-      # 失敗したときに、どのテストがなぜ落ちたかをログを掘らずに見られるようにする
+      # On failure, make it possible to see which test failed and why without digging through logs
       - name: Upload test report
         if: failure() && matrix.node.node == needs.discover.outputs.canonical_node
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -145,7 +145,7 @@ jobs:
             versions/${{ matrix.node.node }}/build/reports/tests/slowTest
           retention-days: 7
 
-      # PRから実際のjarを落として動作確認できるようにする
+      # Make it possible to download the actual jar from a PR and try it out
       - name: Upload mod jar
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -155,18 +155,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # 実際にMinecraftを起動して、ワールドへ入るところまで到達できるかを見る。
+  # Actually launch Minecraft and see whether it gets as far as entering a world.
   #
-  # Xaero連携のmixinはrequired=falseなので、注入先が変わっても例外は出ず「地図に線が出ない」だけになる。
-  # ビルドが通ることは何の保証にもならないので、起動してログを読むところまでをCIの仕事にする。
+  # The Xaero integration mixins are required=false, so if the injection target changes no exception is thrown; "no line on the map" is all you get.
+  # A passing build guarantees nothing, so CI's job extends to launching and reading the log.
   runtime:
-    # runtime自身が配布jarをビルドするので、build matrixの完了を待つ必要はない。
-    # 重いslowTestを含む正典ノードとMinecraft起動確認を並行させ、CI全体の
-    # クリティカルパスを「build + runtime」から「長い方だけ」にする。
+    # runtime builds the distribution jar itself, so there's no need to wait for the build matrix.
+    # Running the canonical node with the heavy slowTest in parallel with the Minecraft launch check cuts
+    # CI's overall critical path from "build + runtime" to "only the longer one".
     needs: discover
     runs-on: ubuntu-latest
-    # stepのtimeout-minutesだけでは、step以外で止まったときに既定の6時間まで必須チェックが埋まる。
-    # 普段は3〜4分。ランナーごと応答しなくなった場合はこれでも止まらないことがある
+    # With only steps' timeout-minutes, a hang outside a step holds the required check for the default 6 hours.
+    # Usually 3-4 minutes. If the whole runner stops responding, even this may not stop it
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -181,8 +181,8 @@ jobs:
           distribution: temurin
           java-version: 25
 
-      # build matrixが同じGradle依存をキャッシュする。runtime matrixからも各ノード分の
-      # 類似キャッシュを書き出すと容量を圧迫するため、ここでは復元だけを行う。
+      # The build matrix caches the same Gradle dependencies. Writing similar caches per node from the
+      # runtime matrix too would eat capacity, so this only restores.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-read-only: true
@@ -195,8 +195,8 @@ jobs:
           mkdir -p run/mods
           cp build/runtime-test/${{ matrix.node.node }}/mods/*.jar run/mods/
 
-      # fabric-apiの配布jarはリリースのタグ（deps.fabric_apiの値そのもの）から取る。mc-runtime-testに任せると
-      # タグを`<版>+<MCバージョン>`と組み立てるので、`0.42.0+1.16`のようにMCの版を丸めたタグを取れない
+      # The fabric-api distribution jar is taken from the release tag (the value of deps.fabric_api itself). Leaving it to mc-runtime-test
+      # builds the tag as `<version>+<MC version>`, so it can't fetch tags with a rounded MC version like `0.42.0+1.16`
       - name: Put fabric-api into the test client
         if: matrix.node.loader == 'fabric'
         env:
@@ -204,33 +204,34 @@ jobs:
           FABRIC_API: ${{ matrix.node.fabric_api }}
         run: gh release download "$FABRIC_API" -R FabricMC/fabric-api -p "fabric-api-$FABRIC_API.jar" -D run/mods
 
-      # HeadlessMCとMinecraftはこの時点のJAVA_HOMEで動く。Gradleのビルド（Java 25）が終わってから、
-      # 利用者と同じJavaへ切り替える
+      # HeadlessMC and Minecraft run on JAVA_HOME as of this point. After the Gradle build (Java 25) finishes,
+      # switch to the same Java users have
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         if: matrix.node.java != '25'
         with:
           distribution: temurin
           java-version: ${{ matrix.node.java }}
 
-      # Forge・NeoForgeの起動画面（early display）はXvfbでウィンドウの用意がタイムアウトすることがあり、
-      # そのときstdinへy/nを問い続ける無限ループに入る。出力の洪水でランナーごと応答しなくなり、
-      # stepのtimeoutもstall監視も効かないまま打ち切られるので、起動画面をバニラに任せる
-      # （NeoForgeでは1.21.3で発生。キーはForgeと同じ: https://neoforged.net/meta/displayerrors/）
+      # The Forge/NeoForge loading screen (early display) can time out preparing a window under Xvfb,
+      # and then enters an infinite loop asking y/n on stdin. The flood of output makes the whole runner
+      # unresponsive and it gets killed with neither the step timeout nor the stall watch taking effect,
+      # so leave the loading screen to vanilla
+      # (seen on NeoForge 1.21.3. The key is the same as Forge: https://neoforged.net/meta/displayerrors/)
       - name: Disable the Forge early display
         if: (matrix.node.loader == 'forge' && matrix.node.minecraft != '1.16.5') || matrix.node.loader == 'neoforge'
         run: |
           mkdir -p run/config
           echo "earlyWindowControl = false" > run/config/fml.toml
 
-      # ワールドへ入ってテストが通ったあと、JVMが終了しないまま止まることがある
-      # （両ローダーで発生。最後のログはサーバーの保存完了で、その先のXaeroの
-      # セッション終了までは進まない）。打ち切られるとログには何も残らないので、
-      # ログが伸びなくなった時点でスタックを取り、クライアントを落として先へ進める
+      # After entering the world and passing the test, the JVM sometimes hangs without exiting
+      # (seen on both loaders. The last log line is the server finishing its save; it never gets as far
+      # as ending the Xaero session). If killed, nothing is left in the log, so once
+      # the log stops growing, take stacks, kill the client and move on
       - name: Watch for a stalled client
         run: |
           nohup bash -c '
-            # 起動から終了まで通常60秒前後で、その間ログは途切れなく出続ける。
-            # 5分完全に止まっていれば、待っても進まない
+            # Launch to exit normally takes about 60 seconds, with log output continuing throughout.
+            # If it has been completely stalled for 5 minutes, waiting will not help
             STALL=300
             while [ "$SECONDS" -lt 1500 ]; do
               sleep 15
@@ -238,8 +239,8 @@ jobs:
               [ -f "$LOG" ] || continue
               IDLE=$(( $(date +%s) - $(stat -c %Y "$LOG") ))
               THRESHOLD=$STALL
-              # ゲーム内テストが成功したあとの終了処理だけが固まる既知ケースは、
-              # 5分待たずに30秒の猶予で診断・終了する。
+              # The known case where only shutdown hangs after the in-game test succeeded
+              # is diagnosed and terminated after a 30-second grace period instead of 5 minutes.
               if grep -Fq "No tests found, Successfully finished." "$LOG" \
                   && grep -Fq "All dimensions are saved" "$LOG"; then
                 THRESHOLD=30
@@ -247,22 +248,22 @@ jobs:
               [ "$IDLE" -ge "$THRESHOLD" ] || continue
               PIDS=$(fuser "$LOG" 2>/dev/null || true)
               {
-                echo "=== ログが ${THRESHOLD}秒 伸びていない。スタックを取る ($(date -u)) ==="
+                echo "=== Log has not grown for ${THRESHOLD}s. Taking stacks ($(date -u)) ==="
                 for PID in ${PIDS:-$(pgrep -f java || true)}; do
                   echo "--- pid=$PID"
                   tr "\0" " " < "/proc/$PID/cmdline" 2>/dev/null; echo
                   "$JAVA_HOME/bin/jstack" -l "$PID" 2>&1 || true
                 done
               } > run/logs/threaddump.txt 2>&1
-              # fuserで特定できたときだけ落とす。java全部を巻き込むとGradleデーモンまで
-              # 巻き添えになり、後続のキャッシュ保存が壊れる
+              # Kill only when fuser identified the process. Taking down all java would also take
+              # the Gradle daemon with it, breaking the subsequent cache save
               [ -n "$PIDS" ] && kill -9 $PIDS
               exit 0
             done
           ' > /dev/null 2>&1 &
 
-      # 上のウォッチが効かなかったときの最後の砦。ここで打ち切っても後続の
-      # ログ出力・アップロードは `if: always()` で走るので、原因を追う材料は残る
+      # Last line of defence when the watch above didn't work. Even if killed here, the subsequent
+      # log output and upload run with `if: always()`, so material for tracking down the cause remains
       - name: Run the client
         id: client
         timeout-minutes: 20
@@ -273,17 +274,17 @@ jobs:
           modloader: ${{ matrix.node.loader }}
           regex: .*${{ matrix.node.loader }}.*
           java: ${{ matrix.node.java }}
-          # mc-runtime-test配布物はForgeだけ"lexforge"という別名でリリースされている
-          # （modloader引数の"forge"とは別物。headlesshq/mc-runtime-testのaction.yml参照）
+          # The mc-runtime-test distribution is released under a different name, "lexforge", for Forge only
+          # (distinct from the modloader argument "forge". See headlesshq/mc-runtime-test's action.yml)
           mc-runtime-test: ${{ matrix.node.loader == 'forge' && 'lexforge' || matrix.node.loader }}
           fabric-api: none
-          # HeadlessMCの--jvmは値1個をそのままJVM引数として渡す。空白区切りで2個を
-          # まとめると後半がjava.awt.headlessの値に入り、probe propertyにならない。
+          # HeadlessMC's --jvm passes a single value as-is as a JVM argument. Combining two separated by
+          # a space puts the second into java.awt.headless's value, and it doesn't become a probe property.
           headlessmc-command: '--jvm "-Dxaeronav-ci.runtimeHookProbe=true"'
 
-      # Minecraft・ローダー・mc-runtime-testの取得は外部の配布元の一時的な不調で落ちる。ゲームが起動する前
-      # （ログが無い）に落ちたときだけ1回やり直す。起動後の失敗はやり直しても同じなので下の検査へ回す。
-      # 取得の途中で落ちると版のjsonだけが残り、actionが「導入済み」と見て取得を飛ばすので、版の一覧を消してから
+      # Fetching Minecraft, the loader and mc-runtime-test fails on transient problems at external distributors. Retry once only
+      # when it failed before the game launched (no log). Failures after launch would be the same on retry, so they go to the checks below.
+      # Failing mid-fetch leaves only the version json, and the action sees it as "installed" and skips the fetch, so clear the version list first
       - name: Reset the partial Minecraft install
         if: steps.client.outcome == 'failure' && hashFiles('run/logs/latest.log') == ''
         run: rm -rf ~/.minecraft/versions
@@ -303,28 +304,28 @@ jobs:
           fabric-api: none
           headlessmc-command: '--jvm "-Dxaeronav-ci.runtimeHookProbe=true"'
 
-      # 起動に失敗・ハングしたときは、まずここを読めば分かるようにする
-      # （artifactを落とさなくてもジョブのログで完結させる）
+      # When launch fails or hangs, make this the first place to read
+      # (complete within the job log without downloading the artifact)
       - name: Show the client log
         if: always()
         run: |
           if [ -f run/logs/threaddump.txt ]; then
-            echo "::group::run/logs/threaddump.txt（クライアントが止まっていた）"
+            echo "::group::run/logs/threaddump.txt (the client was stalled)"
             cat run/logs/threaddump.txt
             echo "::endgroup::"
           fi
           if [ -f run/logs/latest.log ]; then
-            echo "::group::run/logs/latest.log (末尾200行)"
+            echo "::group::run/logs/latest.log (last 200 lines)"
             tail -200 run/logs/latest.log
             echo "::endgroup::"
           else
-            echo "run/logs/latest.log が無い"
+            echo "run/logs/latest.log is missing"
             ls -la run/ 2>/dev/null || true
           fi
 
-      # mc-runtime-testはゲーム内テストが完了していても、Minecraftの終了ハングを
-      # watchdogがkillするとexit 137を失敗として返す。本当の失敗は隠さず、テスト成功と
-      # ワールド保存完了の両方が記録された終了ハングだけを救済する。
+      # Even when the in-game test completed, mc-runtime-test returns exit 137 as a failure if the
+      # watchdog kills Minecraft's shutdown hang. Real failures aren't hidden; only shutdown hangs
+      # where both test success and world save completion were recorded are rescued.
       - name: Validate the runtime result
         if: always()
         env:
@@ -338,61 +339,61 @@ jobs:
           if [ -f "$LOG" ] \
               && grep -Fq "No tests found, Successfully finished." "$LOG" \
               && grep -Fq "All dimensions are saved" "$LOG"; then
-            echo "::warning::ゲーム内テストと保存は完了。終了処理のハングだけを成功扱いにする"
+            echo "::warning::In-game test and save completed. Treating only the shutdown hang as success"
             exit 0
           fi
 
-          echo "::error::Minecraftの起動テストが完了していない (outcome=$CLIENT_OUTCOME)"
+          echo "::error::Minecraft launch test did not complete (outcome=$CLIENT_OUTCOME)"
           exit 1
 
-      # mixinが当たらなかったこと自体はログにしか出ない（configがrequired=falseなので落ちない）。
-      # 誰も読まないログは無いのと同じなので、ここで見つけたらCIを落とす
+      # A mixin failing to apply only shows up in the log (the config is required=false, so nothing crashes).
+      # A log nobody reads might as well not exist, so fail CI here if one is found
       - name: Check that the Xaero hooks applied
         if: always()
         run: |
           LOG=run/logs/latest.log
           if [ ! -f "$LOG" ]; then
-            echo "::error::$LOG が無い。クライアントが起動していない可能性がある"
+            echo "::error::$LOG is missing. The client may not have launched"
             exit 1
           fi
           if grep -nE 'Mixin apply failed.*xaeronav|Critical injection failure.*xaeronav|xaeronav-xaero\.mixins\.json.*(failed|error)' "$LOG"; then
-            echo "::error::XaeroNavのmixinが当たっていない。Xaeroの版が対応範囲の外にある可能性がある"
+            echo "::error::XaeroNav mixins did not apply. The Xaero version may be outside the supported range"
             exit 1
           fi
           for HOOK in WORLD_MAP WAYPOINT_MENU MINIMAP; do
             if ! grep -Fq "XAERONAV_HOOK_APPLIED $HOOK" "$LOG"; then
-              echo "::error::XaeroNavのmixin適用成功マーカーが無い: $HOOK"
+              echo "::error::XaeroNav mixin apply success marker missing: $HOOK"
               exit 1
             fi
           done
-          echo "XaeroNavの全mixin適用成功を確認"
+          echo "Confirmed all XaeroNav mixins applied successfully"
 
-      # 上のmarkerは対象クラスへmixin interfaceが付いたことだけを見る。実際の描画・キー・
-      # menu注入点をruntime probeで通し、各callbackから出たmarkerを別にpositive assertionする。
+      # The marker above only checks that the mixin interface was attached to the target class. Exercise
+      # the actual render, key and menu injection points through the runtime probe and positively assert each callback's marker separately.
       - name: Check that every Xaero hook executed
         if: always()
         run: |
           LOG=run/logs/latest.log
           if [ ! -f "$LOG" ]; then
-            echo "::error::$LOG が無い。runtime hook probeを確認できない"
+            echo "::error::$LOG is missing. Cannot check the runtime hook probe"
             exit 1
           fi
           if grep -Fq "XAERONAV_RUNTIME_HOOK_PROBE_FAILED" "$LOG"; then
             grep -F "XAERONAV_RUNTIME_HOOK_PROBE_FAILED" "$LOG"
-            echo "::error::Xaero runtime hook probeが失敗した"
+            echo "::error::Xaero runtime hook probe failed"
             exit 1
           fi
           for HOOK in WORLD_MAP_RENDER MINIMAP_RENDER WORLD_MAP_KEY WORLD_MAP_MENU WAYPOINT_MENU; do
             if ! grep -Fq "XAERONAV_HOOK_EXECUTED $HOOK" "$LOG"; then
-              echo "::error::XaeroNavのmixin実行成功マーカーが無い: $HOOK"
+              echo "::error::XaeroNav mixin execution success marker missing: $HOOK"
               exit 1
             fi
           done
           if ! grep -Fq "XAERONAV_RUNTIME_HOOK_PROBE_SUCCESS" "$LOG"; then
-            echo "::error::Xaero runtime hook probeの完了マーカーが無い"
+            echo "::error::Xaero runtime hook probe completion marker missing"
             exit 1
           fi
-          echo "XaeroNavの全mixin注入点の実行を確認"
+          echo "Confirmed all XaeroNav mixin injection points executed"
 
       - name: Upload client logs
         if: failure()
@@ -405,9 +406,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # XaeroNavはクライアント専用でサーバーへ入れる必要はない。ただしForgeの@Modには
-  # client限定の指定がなくouter entrypointは専用サーバーでも読み込まれるため、誤って
-  # 配布jarをserver modsへ置いてもclient classの早期loadで起動を妨げないことを確認する。
+  # XaeroNav is client-only and doesn't need to be installed on servers. However, Forge's @Mod has
+  # no client-only designation and the outer entrypoint is loaded on dedicated servers too, so verify
+  # that placing the distribution jar in server mods by mistake doesn't block startup via early client class loading.
   server:
     needs: discover
     if: needs.discover.outputs.server_required == 'true'
@@ -424,7 +425,7 @@ jobs:
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
-          # Gradle 9.8.0とStonecutter 0.9.8を動かすJVM（26.xのFabric用Loomが25を要求する）。1.20.1のmod自体はtoolchainでJava 17になる。
+          # JVM running Gradle 9.8.0 and Stonecutter 0.9.8 (Loom for 26.x Fabric requires 25). The 1.20.1 mod itself is Java 17 via toolchain.
           java-version: 25
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
@@ -439,14 +440,14 @@ jobs:
           mkdir -p run/mods
           cp build/server-test/${{ matrix.node.node }}/mods/*.jar run/mods/
 
-      # HeadlessMCはこの時点のJAVA_HOMEをserver JVMとして登録する。Gradleとは分け、利用者と同じJavaで実行する
+      # HeadlessMC registers JAVA_HOME as of this point as the server JVM. Separate from Gradle, run on the same Java users have
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: ${{ matrix.node.java }}
 
-      # mc-server-testはworldのload完了をpositiveに待ち、到達後にstopを送る。
-      # 可変tagではなく、内容を確認したv1.1.1の署名済みcommitへ固定する。
+      # mc-server-test positively waits for the world to finish loading, then sends stop once reached.
+      # Pinned not to a mutable tag but to the signed commit of v1.1.1, whose contents were reviewed.
       - name: Run the Forge dedicated server
         id: server
         continue-on-error: true
@@ -456,9 +457,9 @@ jobs:
           modloader: forge
           java: ${{ matrix.node.java }}
 
-      # Forgeのインストーラーの取得は配布元の一時的な不調で落ちる（タイムアウト後、HeadlessMCが別形式のURLへ
-      # 切り替えて404になる）。サーバーが起動する前（ログが無い）に落ちたときだけ1回やり直す。
-      # 取得の途中で落ちたサーバーのディレクトリが残ると、やり直しでそれを0番として起動してしまうので消す
+      # Fetching the Forge installer fails on transient problems at the distributor (after a timeout, HeadlessMC switches
+      # to a URL of a different format and gets a 404). Retry once only when it failed before the server started (no log).
+      # A server directory left over from a mid-fetch failure would be launched as entry 0 on retry, so delete it
       - name: Reset the partial server install
         if: steps.server.outcome == 'failure' && hashFiles('run/logs/latest.log') == ''
         run: rm -rf HeadlessMC/servers ~/.minecraft/servers
@@ -472,11 +473,11 @@ jobs:
           modloader: forge
           java: ${{ matrix.node.java }}
 
-      # 起動した後に落ちたもの（やり直さなかったもの）はここで落とす
+      # Fail here on failures after launch (ones not retried)
       - name: Fail if the server did not start cleanly
         if: steps.server.outcome == 'failure' && steps.server_retry.outcome == 'skipped'
         run: |
-          echo "::error::Forgeの専用サーバーの起動テストが失敗した"
+          echo "::error::Forge dedicated server launch test failed"
           exit 1
 
       - name: Upload server logs

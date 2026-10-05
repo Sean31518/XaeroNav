@@ -3,7 +3,7 @@ package net.prason.xaeronav.pathfinding.corridor;
 import java.util.Arrays;
 
 /**
- * {@link SurfaceGrid}を1ブロック列ずつ埋めていく。{@code CoarseMapBuilder}のブロック解像度版。
+ * Fills a {@link SurfaceGrid} one block column at a time. The block-resolution version of {@code CoarseMapBuilder}.
  */
 public final class SurfaceGridBuilder {
 
@@ -28,12 +28,12 @@ public final class SurfaceGridBuilder {
         Arrays.fill(surfaceHeight, SurfaceGrid.UNKNOWN_HEIGHT);
     }
 
-    /** 水面の高さが地表と同じ場合（陸・溶岩）。 */
+    /** When the water surface is at the same height as the ground (land, lava). */
     public void put(int x, int z, byte cellKind, int groundHeightValue) {
         put(x, z, cellKind, groundHeightValue, groundHeightValue);
     }
 
-    /** 範囲外の座標は黙って捨てる。読み出し側はタイル単位で走るので、範囲の縁で必ずはみ出す。 */
+    /** Silently drops out-of-range coordinates. The reader runs per tile, so it always spills over the edge of the range. */
     public void put(int x, int z, byte cellKind, int groundHeightValue, int surfaceHeightValue) {
         int localX = x - minX;
         int localZ = z - minZ;

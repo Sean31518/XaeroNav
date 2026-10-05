@@ -31,19 +31,19 @@ import net.prason.xaeronav.config.XaeroNavConfig;
 *///?}
 
 /**
- * {@link XaeroNavConfig}のうちトグル系の項目だけを並べる設定画面。
+ * Settings screen listing only the toggle items of {@link XaeroNavConfig}.
  *
- * <p>探索範囲・逸脱閾値・地上高さ等の数値系パラメータと掘削禁止ブロックの追加リストはここに置かない。
- * たまにしか触らない設定で、TOMLの直接編集で足りるため。
+ * <p>Numeric parameters such as search range, deviation threshold and surface height, and the extra list of no-dig blocks, aren't here.
+ * They're rarely touched, and editing the TOML directly is enough.
  *
- * <p>{@link OptionsSubScreen}はバニラのビデオ設定画面などと同じ土台（1列レイアウト・スクロール・
- * Doneボタン）を提供する。{@code options}引数はバニラの{@link net.minecraft.client.Options}に
- * 触れる場合にだけ使うフックで、このMODでは使わない。
+ * <p>{@link OptionsSubScreen} provides the same foundation as vanilla's video settings screen and others (single-column layout, scrolling,
+ * Done button). The {@code options} argument is a hook used only when touching vanilla's {@link net.minecraft.client.Options},
+ * and this mod doesn't use it.
  *
- * <p>1.20.1の{@code OptionsSubScreen}（{@code net.minecraft.client.gui.screens}直下、1.21.1とは
- * パッケージが違う）は{@code addOptions()}フックを持たず、リスト・Doneボタンの組み立てを
- * 自前の{@code init()}で行う必要がある（{@code SimpleOptionsSubScreen}は2列(addSmall)固定の
- * レイアウトを強制するため使わない——日本語ラベルは長く1列(addBig)が必須）。
+ * <p>1.20.1's {@code OptionsSubScreen} (directly under {@code net.minecraft.client.gui.screens}, a different
+ * package from 1.21.1) has no {@code addOptions()} hook, so the list and Done button must be assembled in our
+ * own {@code init()} ({@code SimpleOptionsSubScreen} isn't used because it forces a fixed two-column (addSmall)
+ * layout; Japanese labels are long and require a single column (addBig)).
  */
 //? if >=1.19.3 {
 public final class XaeroNavConfigScreen extends OptionsSubScreen {
@@ -62,8 +62,8 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
         addAllOptions(XaeroNavConfig.INSTANCE, this.list::addBig);
     }
     //?} else if >=1.20.5 {
-    /*// 1.20.5でOptionsSubScreenがヘッダーとフッター（Doneボタン込み）のレイアウトを持つようになった。
-    // 位置はそのレイアウトが決めるので、リストを足してからsuper.init()に任せる
+    /*// In 1.20.5 OptionsSubScreen gained a header and footer layout (including the Done button).
+    // That layout decides positions, so add the list and then leave it to super.init()
     @Override
     protected void init() {
         this.list = this.addRenderableWidget(new OptionsList(this.minecraft, this.width, this.height, this));
@@ -79,7 +79,7 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
     *///?} else {
     /*@Override
     protected void init() {
-        // 1.20.3でitemHeight引数がなくなった。
+        // The itemHeight argument was removed in 1.20.3.
         //? if >=1.20.3 {
         this.list = new OptionsList(this.minecraft, this.width, this.height, 32, this.height - 32);
         //?} else {
@@ -93,10 +93,10 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
     }
     *///?}
 
-    // 日本語ラベルは長く、2列（addSmall）だと見切れるため全項目1列（addBig）で並べる。
-    // 呼び出し方（this.list.addBig の参照先）だけがバージョンで違うので、一覧そのものは1箇所にする。
-    // cfgを引数化しているのはテスト用（XaeroNavConfigScreenTest）——本番はXaeroNavConfig.INSTANCEを渡すだけ。
-    // publicなのは、load済みのXaeroNavConfigをNightConfigStore経由で作るテストがconfigパッケージ側にあるため
+    // Japanese labels are long and get cut off in two columns (addSmall), so all items are laid out in one column (addBig).
+    // Only how it's called (what this.list.addBig refers to) differs by version, so the list itself lives in one place.
+    // cfg is a parameter for tests (XaeroNavConfigScreenTest); production just passes XaeroNavConfig.INSTANCE.
+    // It's public because the test that builds a loaded XaeroNavConfig via NightConfigStore lives in the config package
     public static void addAllOptions(XaeroNavConfig cfg, Consumer<OptionInstance<?>> addBig) {
         addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.digging_enabled",
                 "gui.xaeronav.config.digging_enabled.tooltip", cfg.diggingEnabled(), cfg::setDiggingEnabled));
@@ -135,8 +135,8 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
     }
 
     /**
-     * 安全性・所持品への影響がある項目にだけ付ける短い補足。全項目に付けると
-     * どれも同じ重みに見えて読み飛ばされるので、実際に結果が変わる項目に絞る。
+     * A short note attached only to items affecting safety or inventory. Attaching it to every item makes them
+     * all look equally weighted and get skimmed, so it's limited to items that actually change outcomes.
      */
     private static OptionInstance<Boolean> boolOptionWithTooltip(String key, String tooltipKey, boolean initial,
                                                                   Consumer<Boolean> setter) {
@@ -146,9 +146,9 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
     }
 
     /**
-     * {@link OptionsSubScreen#onClose}がDoneボタン・Escの両方から呼ばれる。superの中で
-     * {@code list.applyUnsavedChanges()}が走り、全項目が{@link XaeroNavConfig}へ{@code set}済みに
-     * なった後で、まとめて1回だけディスクへ書き出す。
+     * {@link OptionsSubScreen#onClose} is called from both the Done button and Esc. Inside super,
+     * {@code list.applyUnsavedChanges()} runs, and after every item has been {@code set} on {@link XaeroNavConfig},
+     * it is written to disk once, all together.
      */
     @Override
     public void onClose() {
@@ -208,7 +208,7 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
                 TextCompat.translatable("gui.done"), button -> onClose()));
     }
 
-    // 1.17でaddButtonがaddRenderableWidgetへ改名された
+    // addButton was renamed to addRenderableWidget in 1.17
     private void addToggleWidget(Button button) {
         //? if >=1.17 {
         addRenderableWidget(button);

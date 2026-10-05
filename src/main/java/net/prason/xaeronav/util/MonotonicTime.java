@@ -1,12 +1,12 @@
 package net.prason.xaeronav.util;
 
-/** 壁時計の補正に影響されない、deadline・retry・所要時間用の時刻。 */
+/** Time for deadlines, retries and durations, unaffected by wall clock adjustments. */
 public final class MonotonicTime {
 
     private MonotonicTime() {
     }
 
-    /** {@link System#nanoTime()}と同じ基準をミリ秒単位で返す。絶対日時として使ってはならない。 */
+    /** Returns the same base as {@link System#nanoTime()} in milliseconds. Must not be used as an absolute date/time. */
     public static long millis() {
         return System.nanoTime() / 1_000_000L;
     }

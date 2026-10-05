@@ -15,54 +15,54 @@ import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.world.FakeCells;
 
 /**
- * ネザーで「ガイドを良くすると歩き通しが悪くなる」現象の原因を切り分ける計測。
+ * Measurement isolating the cause of "a better guide makes the walk-through worse" in the Nether.
  *
- * <p>{@code AStarPathfinder#selectFallback}は{@code argmin(h + g/c)}で部分経路の終点を選ぶ。
- * 無駄{@code w = g - (h0 - h)}を置くと、ガイドが真値の{@code k}倍のとき、これは
- * {@code maximize g - λw}（{@code λ = k / (k - 1/c)}）と等価になる——つまり
- * <b>ガイドのスケールが、そのまま終点選びの遠回り許容度を決めてしまう</b>。
- * ここで測るのはその{@code k}。
+ * <p>{@code AStarPathfinder#selectFallback} picks the partial path's end point by {@code argmin(h + g/c)}.
+ * Setting waste {@code w = g - (h0 - h)}, when the guide is {@code k} times the true value this is
+ * equivalent to {@code maximize g - λw} ({@code λ = k / (k - 1/c)}); in other words,
+ * <b>the guide's scale directly determines how much detour the end-point choice tolerates</b>.
+ * This measures that {@code k}.
  */
 @Tag("bench")
 class NetherFallbackBenchTest {
 
     private static final BooleanSupplier NEVER = () -> false;
 
-    /** 基準の1回解きに渡す予算（{@code ProgressiveWalk#fullVisibilityBest}と同じ）。 */
+    /** Budget for the baseline single solve (same as {@code ProgressiveWalk#fullVisibilityBest}). */
     private static final SearchLimits REFERENCE = new SearchLimits(3_000_000, 120_000, 1.0);
 
     /**
-     * 残りコストがこれ未満の区間は比を取らない。ゴール直前は真値が0へ落ちるので、
-     * どんなガイドでも比が発散して平均を壊す。
+     * Segments whose remaining cost is below this aren't used for the ratio. Right before the goal the true value
+     * drops to 0, so with any guide the ratio diverges and wrecks the average.
      */
     private static final double MIN_REMAINING_TICKS = 200.0;
 
-    /** 測るガイドと、その名前。 */
+    /** The guides measured, with their names. */
     private record Guide(String name, CostToGo guide) {
     }
 
     private static List<Guide> guides(FakeCells cells, BlockPos start, BlockPos goal) {
         return List.of(
-                new Guide("3D粗層(本番)", XaeroMapModel.guide(cells, start, goal,
+                new Guide("3D coarse layer (prod)", XaeroMapModel.guide(cells, start, goal,
                         NetherLiveWalkTest.NETHER_MIN_Y, NetherLiveWalkTest.NETHER_MAX_Y, 1.0, 0L)),
-                new Guide("床だけ(理想)", WideVoxelGuide.build(cells, cells.bounds(), goal, true)),
-                new Guide("全地形(理想)", WideVoxelGuide.build(cells, cells.bounds(), goal, false)));
+                new Guide("floors only (ideal)", WideVoxelGuide.build(cells, cells.bounds(), goal, true)),
+                new Guide("full terrain (ideal)", WideVoxelGuide.build(cells, cells.bounds(), goal, false)));
     }
 
     /**
-     * 行列で使うガイド。<b>最後の2本は「値の大きさだけ真値に寄せた」代用品</b>——
-     * 完璧ガイドの{@code k=1}を、閉包を組み直さずに作るための定数倍。形（どちらへ迂回すべきか）は
-     * 元のガイドのままなので完璧ガイドそのものではないが、<b>終点選びがkにどう反応するか</b>を
-     * 見るには、kだけを動かせるこちらの方が素直に効く。
+     * Guides used for the matrix. <b>The last two are stand-ins "with only their magnitude moved toward the true value"</b>:
+     * constant multiples to get the perfect guide's {@code k=1} without rebuilding the closure. Their shape (which way to detour)
+     * is still the original guide's, so they aren't the perfect guide itself, but to see <b>how the end-point choice reacts to k</b>,
+     * being able to move only k makes these the more direct tool.
      */
     private static List<Guide> matrixGuides(FakeCells cells, BlockPos start, BlockPos goal) {
         CostToGo ideal = WideVoxelGuide.build(cells, cells.bounds(), goal, true);
         return List.of(
-                new Guide("3D粗層(本番)", XaeroMapModel.guide(cells, start, goal,
+                new Guide("3D coarse layer (prod)", XaeroMapModel.guide(cells, start, goal,
                         NetherLiveWalkTest.NETHER_MIN_Y, NetherLiveWalkTest.NETHER_MAX_Y, 1.0, 0L)),
-                new Guide("床だけ k≈0.8", ideal),
-                new Guide("床だけ×1.25 k≈1", scaled(ideal, 1.25)),
-                new Guide("床だけ×1.6 k≈1.3", scaled(ideal, 1.6)));
+                new Guide("floors only k≈0.8", ideal),
+                new Guide("floors only x1.25 k≈1", scaled(ideal, 1.25)),
+                new Guide("floors only x1.6 k≈1.3", scaled(ideal, 1.6)));
     }
 
     private static CostToGo scaled(CostToGo guide, double factor) {
@@ -70,8 +70,8 @@ class NetherFallbackBenchTest {
     }
 
     /**
-     * 基準経路の各点で{@code h / 真の残りコスト}を測る。最適経路の部分経路は最適なので、
-     * 真の残りコストは「全体 − そこまでの累積」で厳密に出る。
+     * Measures {@code h / true remaining cost} at each point of the baseline path. Sub-paths of an optimal path are optimal,
+     * so the true remaining cost is exactly "total minus accumulated so far".
      */
     @Test
     void measuresHowMuchEachGuideInflates() throws IOException {
@@ -80,13 +80,13 @@ class NetherFallbackBenchTest {
         for (BlockPos[] route : NetherLiveWalkTest.routes()) {
             PathResult reference = new AStarPathfinder(cells, REFERENCE).search(route[0], route[1], NEVER);
             if (!reference.complete()) {
-                System.out.printf(Locale.ROOT, "%s→%s 基準が完走しない（%s）%n",
+                System.out.printf(Locale.ROOT, "%s->%s baseline did not finish (%s)%n",
                         route[0].toShortString(), route[1].toShortString(), reference.termination());
                 continue;
             }
             List<PathStep> steps = reference.steps();
             double total = ProgressiveWalk.cost(steps);
-            System.out.printf(Locale.ROOT, "%n%s→%s 基準%.0ftick %d手%n",
+            System.out.printf(Locale.ROOT, "%n%s->%s baseline %.0ftick %d moves%n",
                     route[0].toShortString(), route[1].toShortString(), total, steps.size());
 
             List<BlockPos> at = new ArrayList<>();
@@ -100,12 +100,12 @@ class NetherFallbackBenchTest {
                 remaining.add(total - walked);
             }
 
-            report("幾何のみ", at, remaining, (x, y, z) -> Heuristic.estimate(x, y, z,
+            report("geometric only", at, remaining, (x, y, z) -> Heuristic.estimate(x, y, z,
                     route[1].getX(), route[1].getY(), route[1].getZ(), descent,
                     ActionCosts.SPRINT_ONE_BLOCK));
             for (Guide guide : guides(cells, route[0], route[1])) {
                 report(guide.name(), at, remaining, (x, y, z) -> guide.guide().estimate(x, y, z));
-                report(guide.name() + "+幾何max", at, remaining, (x, y, z) -> Math.max(
+                report(guide.name() + "+geometric max", at, remaining, (x, y, z) -> Math.max(
                         guide.guide().estimate(x, y, z),
                         Heuristic.estimate(x, y, z, route[1].getX(), route[1].getY(), route[1].getZ(),
                                 descent, ActionCosts.SPRINT_ONE_BLOCK)));
@@ -113,24 +113,24 @@ class NetherFallbackBenchTest {
         }
     }
 
-    /** 比べる終点選び。{@code budget}がfalseなら上限を効かせない＝この変更の前の挙動。 */
+    /** End-point selections to compare. With {@code budget} false the cap is not applied = the behavior before this change. */
     private record Rule(String name, boolean budget) {
     }
 
     private static final List<Rule> RULES = List.of(
-            new Rule("上限なし(旧)", false),
-            new Rule("上限あり(現行)", true));
+            new Rule("no cap (old)", false),
+            new Rule("capped (current)", true));
 
     /**
-     * ガイドの質 × 終点選びの行列。<b>知りたいのは絶対値ではなく向き</b>——
-     * ガイドが良くなるほど倍率が下がる規則があるか。
+     * Matrix of guide quality x end-point selection. <b>What matters is the direction, not absolute values</b>:
+     * is there a rule whose ratio drops as the guide gets better.
      */
     @Test
     void comparesFallbackRulesAcrossGuideQuality() throws IOException {
         FakeCells cells = NetherLiveWalkTest.terrain();
         for (BlockPos[] route : NetherLiveWalkTest.routes()) {
             double best = ProgressiveWalk.fullVisibilityBest(cells, route[0], route[1]);
-            System.out.printf(Locale.ROOT, "%n%s→%s 基準%.0f%n",
+            System.out.printf(Locale.ROOT, "%n%s->%s baseline %.0f%n",
                     route[0].toShortString(), route[1].toShortString(), best);
             for (Guide guide : matrixGuides(cells, route[0], route[1])) {
                 for (Rule rule : RULES) {
@@ -150,10 +150,10 @@ class NetherFallbackBenchTest {
                     ProgressiveWalk.Aim.GOAL, guide);
             long took = (System.currentTimeMillis() - began) / 1000;
             if (trace.steps().isEmpty()) {
-                return "未到達: " + trace.stopped() + String.format(Locale.ROOT, " (%ds)", took);
+                return "not reached: " + trace.stopped() + String.format(Locale.ROOT, " (%ds)", took);
             }
             double cost = ProgressiveWalk.cost(trace.steps());
-            return String.format(Locale.ROOT, "%6.0f(%.3f倍) 繋ぎ目%2d 解き直し%d/%d (%ds)",
+            return String.format(Locale.ROOT, "%6.0f(%.3fx) seams %2d re-solves %d/%d (%ds)",
                     cost, cost / best, trace.joints().size(), trace.repairsTaken(),
                     trace.repairAttempts(), took);
         } finally {
@@ -165,7 +165,7 @@ class NetherFallbackBenchTest {
         double at(int x, int y, int z);
     }
 
-    /** 経路上の{@code h / 真値}の平均・中央値・最大と、そこから決まる終点選びの無駄許容度λ。 */
+    /** Mean, median and max of {@code h / true value} along the path, and the waste tolerance λ of end-point selection it implies. */
     private static void report(String name, List<BlockPos> at, List<Double> remaining, Estimate h) {
         List<Double> ratios = new ArrayList<>();
         for (int i = 0; i < at.size(); i++) {
@@ -177,22 +177,22 @@ class NetherFallbackBenchTest {
             ratios.add(h.at(pos.getX(), pos.getY(), pos.getZ()) / truth);
         }
         if (ratios.isEmpty()) {
-            System.out.printf(Locale.ROOT, "  %-16s 測る区間が無い%n", name);
+            System.out.printf(Locale.ROOT, "  %-16s no segments to measure%n", name);
             return;
         }
         List<Double> sorted = new ArrayList<>(ratios);
         sorted.sort(Double::compareTo);
         double mean = ratios.stream().mapToDouble(Double::doubleValue).average().orElse(0);
         double median = sorted.get(sorted.size() / 2);
-        System.out.printf(Locale.ROOT, "  %-16s k平均%.2f 中央%.2f 最小%.2f 最大%.2f → λ(c=1.5)=%s%n",
+        System.out.printf(Locale.ROOT, "  %-16s k mean %.2f median %.2f min %.2f max %.2f -> λ(c=1.5)=%s%n",
                 name, mean, median, sorted.get(0), sorted.get(sorted.size() - 1), lambda(median));
     }
 
-    /** {@code argmin(h + g/c)}が実際に最大化している{@code g - λw}のλ。 */
+    /** The λ in {@code g - λw} that {@code argmin(h + g/c)} actually maximizes. */
     private static String lambda(double k) {
         double denominator = k - 1.0 / 1.5;
         if (denominator <= 0) {
-            return "発散(前へ出るほど良い)";
+            return "diverges (the further forward the better)";
         }
         return String.format(Locale.ROOT, "%.2f", k / denominator);
     }

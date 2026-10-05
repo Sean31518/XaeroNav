@@ -3,51 +3,51 @@ package net.prason.xaeronav.pathfinding.astar;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * 軸別ヒューリスティック（斜め昇降対応版）。
- * 水平・上昇・下降それぞれについて実コストを下回らない下限値を積算する。
- * 水平距離は斜め移動（同一高度のみ）に対応したoctile距離を使う。
+ * Per-axis heuristic (version supporting diagonal ascend/descend).
+ * Sums lower bounds that never exceed the real cost for horizontal movement, ascent and descent separately.
+ * Horizontal distance uses the octile distance, which accounts for diagonal moves (same height only).
  *
- * <p>例外は氷で、氷の上だけは1マスの実コストがこの下限（素の疾走）を下回る
- * （{@code CellData}の速度倍率）。そのぶん氷を含む経路は最適から少し外れうるが、
- * 下限を氷に合わせて下げると氷の無い場所でもヒューリスティックが一律に弱まり、
- * 探索が広がって展開ノード上限に先に当たる（＝経路が手前で切れる）。氷の有無に関わらず
- * 効いてしまう後者の害の方が大きいので、下限は疾走のまま据え置いている。
+ * <p>The exception is ice: only on ice does the real cost of one block fall below this lower bound (plain sprinting)
+ * ({@code CellData}'s speed multiplier). Paths containing ice may therefore deviate slightly from optimal, but
+ * lowering the bound to match ice would uniformly weaken the heuristic even where there's no ice, and
+ * the search would spread and hit the expanded node cap first (= the path gets cut short). The latter harm, which applies
+ * regardless of whether there's ice, is larger, so the bound stays at sprinting.
  *
- * <p>上昇分は、斜め移動・カーディナル移動それぞれの1手に「相乗り」できる範囲までは
- * 追加コスト無しで運べる（{@code Ascend}/{@code DiagonalAscend}は水平移動と昇りを1手でこなすため）。
- * 独立加算すると、水平1マス＋上昇1マスの{@code Ascend}1手（実コスト{@code ASCEND_ONE_BLOCK}）を
- * 「水平1マス＋昇り1マス」の2手分として見積もり、実コストを上回る（非許容）。
- * 下降は{@code FALL_ASYMPTOTIC_MIN_PER_BLOCK}が既に十分小さい下限なので、相乗りを考えず単純に加算する。
+ * <p>Ascent can be carried at no extra cost up to the amount that can "ride along" with each diagonal and cardinal
+ * move ({@code Ascend}/{@code DiagonalAscend} do horizontal movement and climbing in one move).
+ * Adding them independently would estimate a single {@code Ascend} of 1 horizontal + 1 up (real cost {@code ASCEND_ONE_BLOCK})
+ * as two moves, "1 horizontal + 1 climb", exceeding the real cost (inadmissible).
+ * For descent, {@code FALL_ASYMPTOTIC_MIN_PER_BLOCK} is already a sufficiently small bound, so it's simply added without considering ride-along.
  */
 public final class Heuristic {
 
     /**
-     * 斜め1手に相乗りできる昇り1段の下限。<b>陸と水の安い方</b>を取る——泳ぎの上昇は
-     * ジャンプではないので{@link ActionCosts#STEP_TRANSITION_TICKS}が乗らず、
-     * {@code DIAGONAL_ASCEND_ONE_BLOCK}より安い。陸の値だけを下限に置くと水中で非許容になる。
+     * Lower bound for one step of climbing that can ride along with a diagonal move. Takes <b>the cheaper of land and water</b>: swimming up
+     * isn't a jump, so {@link ActionCosts#STEP_TRANSITION_TICKS} doesn't apply, and it's
+     * cheaper than {@code DIAGONAL_ASCEND_ONE_BLOCK}. Using only the land value as the bound would be inadmissible underwater.
      */
     private static final double MIN_DIAGONAL_ASCEND = Math.min(ActionCosts.DIAGONAL_ASCEND_ONE_BLOCK,
             ActionCosts.DIAGONAL_SWIM_ASCEND_ONE_BLOCK);
 
-    /** カーディナル1手に相乗りできる昇り1段の下限。{@link #MIN_DIAGONAL_ASCEND}と同じ理由で水も見る。 */
+    /** Lower bound for one step of climbing that can ride along with a cardinal move. Water is considered for the same reason as {@link #MIN_DIAGONAL_ASCEND}. */
     private static final double MIN_CARDINAL_ASCEND =
             Math.min(ActionCosts.ASCEND_ONE_BLOCK, ActionCosts.SWIM_ASCEND_ONE_BLOCK);
 
     /**
-     * 水平移動に相乗りできない純粋な昇り（{@code pureAscends}）1段の下限。
+     * Lower bound for one step of pure climbing ({@code pureAscends}) that can't ride along with horizontal movement.
      *
-     * <p>「水平変位が要らないのだから梯子（{@link ActionCosts#LADDER_UP_ONE_BLOCK}）が下限」は誤り。
-     * {@code Ascend}を水平方向へ<b>往復させれば</b>、正味の水平変位0のまま高さだけ稼げる——
-     * 折り返し階段がその形で、実コストは1段あたり{@link ActionCosts#ASCEND_ONE_BLOCK}にしかならない。
-     * 梯子(8.511)を下限に置くと、この地形で見積もりが実コストを上回って非許容になる
-     * （実例: {@code (0,64,0)→(1,67,0)} は Ascend×3 = 13.90 なのに見積もりは 21.65 になっていた）。
+     * <p>"No horizontal displacement is needed, so the ladder ({@link ActionCosts#LADDER_UP_ONE_BLOCK}) is the bound" is wrong.
+     * <b>Going back and forth</b> horizontally with {@code Ascend} gains height with zero net horizontal displacement;
+     * a switchback staircase has exactly that shape, and its real cost is only {@link ActionCosts#ASCEND_ONE_BLOCK} per step.
+     * Using the ladder (8.511) as the bound makes the estimate exceed the real cost on such terrain, which is inadmissible
+     * (example: {@code (0,64,0)→(1,67,0)} is Ascend×3 = 13.90, but the estimate was 21.65).
      *
-     * <p>{@code Ascend}系は必ず水平1歩を伴うが、その1歩は<b>戻せる</b>のが要点。折り返せば
-     * 正味の水平変位0のまま高さだけ稼げるので、水平の相乗り先を使い切ったあともこれが下限になる。
+     * <p>{@code Ascend} moves always come with 1 horizontal step, but the point is that step <b>can be undone</b>. Doubling back
+     * gains height with zero net horizontal displacement, so this remains the bound even after the horizontal ride-along slots are used up.
      *
-     * <p><b>水も見るのが要点。</b>{@link ActionCosts#STEP_TRANSITION_TICKS}が乗る陸の{@code Ascend}
-     * (7.633)より、乗らない{@code SwimUp}(7.407)の方が安い。{@code ClimbUp}(8.511)と
-     * {@code Pillar}（設置コストが乗る）はどちらより高いので見なくてよい。
+     * <p><b>Considering water too is the point.</b> {@code SwimUp} (7.407), which doesn't incur {@link ActionCosts#STEP_TRANSITION_TICKS},
+     * is cheaper than land {@code Ascend} (7.633), which does. {@code ClimbUp} (8.511) and
+     * {@code Pillar} (which incurs the placement cost) are more expensive than either, so they needn't be considered.
      */
     private static final double MIN_PURE_ASCEND =
             Math.min(ActionCosts.ASCEND_ONE_BLOCK, ActionCosts.SWIM_UP_ONE_BLOCK);
@@ -55,13 +55,13 @@ public final class Heuristic {
     private Heuristic() {
     }
 
-    /** 下限を指定しない版。どの次元・設定でも安全な値を使う。 */
+    /** Variant without a specified lower bound. Uses values that are safe in any dimension or setting. */
     public static double estimate(int fromX, int fromY, int fromZ, int toX, int toY, int toZ) {
         return estimate(fromX, fromY, fromZ, toX, toY, toZ, ActionCosts.FALL_ASYMPTOTIC_MIN_PER_BLOCK,
                 ActionCosts.SPRINT_ONE_BLOCK);
     }
 
-    /** 水平の下限を指定しない版。徒歩で進む前提の探索はこれで正しい（最速の水平移動が疾走）。 */
+    /** Variant without a specified horizontal lower bound. Correct for searches that assume travel on foot (the fastest horizontal move is sprinting). */
     public static double estimate(int fromX, int fromY, int fromZ, int toX, int toY, int toZ,
                                    double minDescentTicksPerBlock) {
         return estimate(fromX, fromY, fromZ, toX, toY, toZ, minDescentTicksPerBlock,
@@ -69,19 +69,19 @@ public final class Heuristic {
     }
 
     /**
-     * @param minDescentTicksPerBlock この探索で生成されうる下降移動のうち、1ブロックあたり最も安いもの
-     *                               （{@link net.prason.xaeronav.pathfinding.world.CellSource#minDescentTicksPerBlock}）。
-     *                               終端速度からの下限(0.2551)は<b>任意の深さの落下が起きうる</b>前提の値で、
-     *                               実際に生成される最大の落差が分かっていれば大きく締められる——
-     *                               ネザー・落下ダメージ許容offなら3マスが上限で 4.392、17倍の差になる。
-     *                               ここが緩いと、登った1マスを取り返す実コスト(9.321)がほぼ無料に見え、
-     *                               重み付きA*が上りの枝を系統的に優先して{@code closed}で確定させてしまう
-     * @param minHorizontalTicksPerBlock そのノードから先に生成されうる水平移動のうち、1ブロックあたり
-     *                               最も安いもの。通常は疾走（{@link ActionCosts#SPRINT_ONE_BLOCK}）だが、
-     *                               <b>ボートに乗っているノードだけは{@link ActionCosts#PADDLE_ONE_BLOCK}</b>
-     *                               まで下がる。疾走のまま見積もるとボートのノードに対して非許容になり、
-     *                               乗り込む1手の大きな一時コストと相まって<b>ボートの枝が一度も展開されない</b>
-     *                               ——泳ぎの前線が先にゴールへ達してしまい、総コストで大きく有利でも選ばれない
+     * @param minDescentTicksPerBlock the cheapest per-block cost among descent moves this search can generate
+     *                               ({@link net.prason.xaeronav.pathfinding.world.CellSource#minDescentTicksPerBlock}).
+     *                               The bound from terminal velocity (0.2551) assumes <b>falls of any depth can occur</b>,
+     *                               and can be tightened a lot if the largest drop actually generated is known:
+     *                               in the Nether with fall damage tolerance off, 3 blocks is the max, giving 4.392, a 17x difference.
+     *                               If this is loose, the real cost of recovering one climbed block (9.321) looks almost free,
+     *                               and weighted A* systematically favors uphill branches and settles them as {@code closed}
+     * @param minHorizontalTicksPerBlock the cheapest per-block cost among horizontal moves that can be generated
+     *                               from that node. Normally sprinting ({@link ActionCosts#SPRINT_ONE_BLOCK}), but
+     *                               <b>only for nodes riding a boat</b> does it drop to {@link ActionCosts#PADDLE_ONE_BLOCK}.
+     *                               Estimating at sprint speed would be inadmissible for boat nodes, and
+     *                               together with the large one-time cost of boarding, <b>the boat branch would never be expanded</b>:
+     *                               the swimming frontier reaches the goal first, and it isn't chosen even when much better on total cost
      */
     public static double estimate(int fromX, int fromY, int fromZ, int toX, int toY, int toZ,
                                    double minDescentTicksPerBlock, double minHorizontalTicksPerBlock) {
@@ -96,17 +96,17 @@ public final class Heuristic {
         int up = Math.max(0, dy);
         int down = Math.max(0, -dy);
 
-        // 上昇を先に斜め移動へ相乗りさせ（節約が大きい）、残りをカーディナル移動へ相乗りさせる。
-        // それでも余る分だけが、水平移動を伴わない純粋な昇り（梯子・掘り上がり等）としてコストに乗る。
+        // Let ascent ride along with diagonal moves first (bigger savings), then let the rest ride along with cardinal moves.
+        // Only what's still left over is charged as pure climbing without horizontal movement (ladders, digging up, etc.).
         int diagonalAscends = Math.min(up, diagonalSteps);
         int cardinalAscends = Math.min(up - diagonalAscends, cardinalSteps);
         int pureAscends = up - diagonalAscends - cardinalAscends;
 
-        // 下降も同じ水平の枠へ相乗りする。`up`と`down`は排他なので枠を奪い合わない。
-        // 相乗りできた分は追加コストを0にする。実際には1段ごとに
-        // {@code ActionCosts#STEP_TRANSITION_TICKS}が乗るので低く見ているが、下限としては正しい
-        // （高く見積もる方だけが非許容になる）。単純加算していた頃は、ネザー相当の下限(4.392)で
-        // 斜め下降1手の見積もりが9.432＝実コスト9.321を上回って非許容になっていた。
+        // Descent rides along in the same horizontal slots. `up` and `down` are mutually exclusive, so they don't compete for slots.
+        // The portion that rides along gets zero extra cost. In reality each step incurs
+        // {@code ActionCosts#STEP_TRANSITION_TICKS}, so this underestimates, but it's correct as a lower bound
+        // (only overestimating is inadmissible). Back when they were simply added, with a Nether-equivalent bound (4.392),
+        // the estimate for one diagonal descent was 9.432, exceeding the real cost 9.321, which was inadmissible.
         int ridableDescends = Math.min(down, diagonalSteps + cardinalSteps);
         int pureDescends = down - ridableDescends;
 

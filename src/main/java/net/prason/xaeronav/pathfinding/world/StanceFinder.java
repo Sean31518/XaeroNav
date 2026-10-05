@@ -3,26 +3,26 @@ package net.prason.xaeronav.pathfinding.world;
 import net.minecraft.core.BlockPos;
 
 /**
- * 探索の始点・終点を「実際に立てる場所」へ寄せる。
+ * Moves the search's start and end to "a place you can actually stand".
  *
- * <p>A*が作る移動はすべて「足場のあるセル・水・梯子」で終わるので、そうでない座標を始点や終点に
- * 渡すと、経路が1本も伸びないか、到達不能として打ち切られる。ところが始点と終点はどちらも
- * 探索の外から降ってくる値で、そのままでは成立しないことが珍しくない:
+ * <p>Every move A* creates ends at "a cell with footing, water, or a ladder", so passing other coordinates as the start or end
+ * means either no path extends at all or the search is cut off as unreachable. Yet both the start and the end
+ * are values coming from outside the search, and it's not unusual for them not to hold as-is:
  *
  * <ul>
- *   <li>始点 — 落下中・蜘蛛の巣の中・トロッコの上。足元に足場が無い状態でも案内は続けたい</li>
- *   <li>終点 — 地図をクリックした座標やウェイポイントのY。地中や空中を指していることがある</li>
+ *   <li>Start: falling, inside a cobweb, on a minecart. We still want guidance to continue without footing underfoot</li>
+ *   <li>End: the coordinates clicked on the map, or a waypoint's Y. It may point underground or into the air</li>
  * </ul>
  */
 public final class StanceFinder {
 
-    /** 同じ柱を上下に探す範囲（ブロック）。探索範囲の垂直マージンと同程度に留める。 */
+    /** Range to search up and down the same column (blocks). Kept around the search range's vertical margin. */
     private static final int VERTICAL_SEARCH = 32;
 
     private StanceFinder() {
     }
 
-    /** そこにプレイヤーが立てる（＝A*の移動の終点になりうる）か。 */
+    /** Whether the player can stand there (= it can be the end of an A* move). */
     public static boolean isStance(CellSource view, int x, int y, int z) {
         long feet = view.cell(x, y, z);
         if (!CellData.occupiableWithoutDigging(feet)
@@ -35,8 +35,8 @@ public final class StanceFinder {
     }
 
     /**
-     * 探索の始点。足場が無ければ真下の着地点まで下ろす。落下中やトロッコでの移動中でも
-     * 「このあと自分が立つ場所」から先の経路が出るようにするためのもの。
+     * The search start. If there's no footing, lowers it to the landing point directly below. This is so that even while falling
+     * or riding a minecart, the path starts from "where you'll stand next".
      */
     public static BlockPos resolveStart(CellSource view, BlockPos start) {
         int x = start.getX();
@@ -49,7 +49,7 @@ public final class StanceFinder {
                 return new BlockPos(x, start.getY() - dy, z);
             }
         }
-        // 足元がブロックに埋まっている場合（半ブロックの中・地面にめり込んだ位置）だけは1マス上を見る
+        // Only when the feet are buried in a block (inside a slab, or sunk into the ground) look one block up
         if (isStance(view, x, start.getY() + 1, z)) {
             return start.above();
         }
@@ -57,14 +57,14 @@ public final class StanceFinder {
     }
 
     /**
-     * 探索の終点。原理的に辿り着けない座標なら、同じ柱で最も近い辿り着ける場所へ寄せる。
+     * The search end. If the coordinates are fundamentally unreachable, moves them to the nearest reachable spot in the same column.
      *
-     * <p>地図やウェイポイントが指すのは「その場所」であって「そのブロック」ではない。Yだけが
-     * ずれている目的地を到達不能として扱うと、目の前まで来ているのに経路なしになってしまう。
+     * <p>A map or waypoint points at "that place", not "that block". Treating a goal whose Y alone
+     * is off as unreachable would leave no path even when you're right in front of it.
      *
-     * <p>寄せるかどうかの判断に{@link #isStance}ではなく{@link #isReachable}を使うのは、
-     * 掘って辿り着ける地中の目的地（そこまでの坑道を出すのが正しい）と、足場が無くて
-     * どうやっても立てない空中の目的地を区別するため。
+     * <p>{@link #isReachable} rather than {@link #isStance} decides whether to move it, in order to
+     * distinguish an underground goal reachable by digging (where producing a tunnel to it is correct) from an aerial goal
+     * with no footing where you can't stand no matter what.
      */
     public static BlockPos resolveGoal(CellSource view, BlockPos goal) {
         int x = goal.getX();
@@ -84,13 +84,13 @@ public final class StanceFinder {
         return goal;
     }
 
-    /** そこへ到着する移動が作れるか。身体の通るセルは掘って空けられるので、塞がっていてもよい。 */
+    /** Whether a move arriving there can be made. Body cells can be dug out, so they may be blocked. */
     private static boolean isReachable(CellSource view, int x, int y, int z) {
         long feet = view.cell(x, y, z);
         if (!occupiableOrDiggable(feet) || !occupiableOrDiggable(view.cell(x, y + 1, z))) {
             return false;
         }
-        // 足場だけは掘って作れない
+        // Only the footing can't be made by digging
         return CellData.standable(view.cell(x, y - 1, z))
                 || CellData.water(feet)
                 || CellData.climbable(feet);

@@ -39,12 +39,12 @@ import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * ワーカースレッドでA*を実行する。新しいリクエストが来たら
- * 実行中(または未着手)の古いジョブをキャンセルし、常に最新のリクエストだけが結果を返す。
+ * Runs A* on a worker thread. When a new request arrives, the old job (running or not yet started)
+ * is cancelled, so only the latest request ever returns a result.
  *
- * <p>{@link CellSource}の構築（メインスレッドでのチャンク参照集め）は呼び出し側の責務。
- * このクラスはA*の実行と、そのキャンセル制御、危険箇所の注釈付けまでを担当する。
- * 注釈付けをここに置くのは、経路を求めたビューと注釈に使うビューを取り違えないようにするため。
+ * <p>Building the {@link CellSource} (collecting chunk references on the main thread) is the caller's
+ * job. This class handles running A*, controlling its cancellation, and annotating hazards.
+ * Annotation lives here so the view used to find the path and the view used to annotate it can't be mixed up.
  */
 public final class PathfindingExecutor {
 
@@ -58,11 +58,11 @@ public final class PathfindingExecutor {
             });
 
     /**
-     * {@link #submitWithDeepFallback}が深い予算の探索だけに使う2本目のワーカー。
+     * Second worker that {@link #submitWithDeepFallback} uses only for the deep-budget search.
      *
-     * <p>通常予算の探索は{@link #executor}上でそのまま進めつつ、こちらで深い予算の探索を
-     * 同時に進める。通常予算が届けば{@link AtomicBoolean}で打ち切るので、実際にCPUを
-     * 2コア分使い続けるのは「通常予算が結局失敗するとき」だけに限られる。
+     * <p>The normal-budget search keeps running on {@link #executor} while the deep-budget search runs
+     * here concurrently. When the normal budget reaches the goal, an {@link AtomicBoolean} stops this one,
+     * so two cores stay busy only "when the normal budget ends up failing".
      */
     private final ExecutorService deepExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "xaeronav-pathfinding-deep");
@@ -71,25 +71,28 @@ public final class PathfindingExecutor {
     });
 
     /**
-     * 直前に組んだ層1ガイドと、それを組んだ条件。
+     * The layer-1 guide built last time, and the conditions it was built under.
      *
-     * <p>歩いている間、目的地も地形も変わらないのに<b>探索のたびに組み直していた</b>
-     * （実測15〜30ms/回で、ほとんどが地図の走査）。
+     * <p>While walking, it used to be <b>rebuilt on every search</b> even though neither the destination
+     * nor the terrain had changed (measured 15-30 ms per build, mostly scanning the map).
      *
-     * <p><b>箱を格子へ広げて揃えてはいけない。</b>再利用の頻度は上がるが、広げたぶんの縁が
-     * 未知セル（下限側では最安）になってガイドが弱まる——実測でネザーの溶岩の海が
-     * 560,075→610,699ノードに増え、<b>ジ・エンドの奈落越えは到達から予算切れへ落ちた</b>。
+     * <p><b>Don't snap the box outward to a grid.</b> Reuse becomes more frequent, but the extra margin
+     * becomes unknown cells (cheapest on the lower-bound side) and weakens the guide: in measurements the
+     * Nether lava sea grew from 560,075 to 610,699 nodes, and <b>the End void crossing dropped from
+     * reaching the goal to running out of budget</b>.
      *
-     * <p><b>地形が後から読み込まれても古い表を使い続けてよい。</b>下限側では未知セルが
-     * 最安（倍率1.0）に倒れるので、古い表は新しい表以下＝下限であることは保たれる。
-     * 一方で参照Y（{@link LiveCoarseSampler}がどの床を採るか）が変われば下限を破りうるので、
-     * そちらは鍵に入れて厳密に一致させる。
+     * <p><b>It's fine to keep using a stale table when terrain loads later.</b> On the lower-bound side
+     * unknown cells fall to the cheapest value (multiplier 1.0), so the old table stays at or below the
+     * new one, i.e. remains a lower bound. A change in the reference Y (which floor
+     * {@link LiveCoarseSampler} picks), however, can break the lower bound, so it is part of the key and
+     * must match exactly.
      *
-     * <p>逆に<b>地形が掘られて安くなった</b>場合だけは古い表が上振れしうる。起きるのは
-     * 「箱も目的地も参照Yも変わらないまま地形が変わる」＝プレイヤーがその場から動かずに
-     * 掘ったときだけで、1ブロック歩けば箱が動いて組み直される。
+     * <p>Conversely, only when <b>terrain is dug out and becomes cheaper</b> can the old table overestimate.
+     * That happens only when "the terrain changes while the box, destination and reference Y stay the
+     * same", i.e. the player digs without moving; walking one block moves the box and triggers a rebuild.
      *
-     * <p>触るのは{@link #executor}のワーカー1本だけ（深い予算の探索には組み終えた表を渡す）。
+     * <p>Only the single {@link #executor} worker touches this (the deep-budget search is handed the
+     * finished table).
      */
     private record GuideKey(BlockPos goal, SearchBounds bounds, int referenceY,
                             CoarseRouter.BridgePolicy bridgePolicy) {
@@ -100,78 +103,82 @@ public final class PathfindingExecutor {
     private CostToGo guide;
 
     /**
-     * 粗い経由地チェーンの中間の経由地を、ゴールとして許す半径（ブロック）。
+     * Radius (blocks) within which an intermediate waypoint of the coarse waypoint chain counts as reached.
      *
-     * <p>経由地は1セル＝1チャンク(16ブロック)の代表点なので、実際の通り道はその中心から
-     * 最大8ブロックずれていて当然。座標ぴったりを要求すると、そのための遠回りが経路に乗る。
-     * 半径はセルの半幅に合わせる。
+     * <p>A waypoint is the representative point of one cell = one chunk (16 blocks), so the actual route
+     * naturally deviates up to 8 blocks from its center. Requiring the exact coordinate puts a detour into
+     * the path just to get there. The radius matches the cell's half-width.
      */
     private static final int COARSE_LEG_GOAL_RADIUS_BLOCKS = 8;
 
     /**
-     * 区間ごとのコストガイドを組む地図の水平マージン（ブロック）。区間の始点・終点を含めば十分——
-     * ガイドは幾何学的なHeuristicとのmaxを取って使うだけの補助（{@link CostToGo}のdocを参照）で、
-     * 遠くまで見通す必要は無い。
+     * Horizontal margin (blocks) of the map used to build each leg's cost guide. Covering the leg's start
+     * and end is enough: the guide is only an aid taken as a max with the geometric heuristic (see the
+     * {@link CostToGo} doc) and doesn't need to see far.
      *
-     * <p><b>この値を大きくしない。</b>{@link CoarseRouter#costToGo}は箱の面積に比例した配列を
-     * 毎回新規確保してDijkstraを回す（{@code chunksX*chunksZ*MAX_FLOORS}状態）。区間分割全体の
-     * 経路計画（{@link CoarseRouter#findRoute}、1回だけ）に使う広い箱をそのままここへ流用すると、
-     * 区間の数だけ広い箱ぶんのDijkstraを払うことになる。実機（ジ・エンドの崖ぎわ、2026-08-28）で
-     * 箱を4倍(64→256)に広げたところ、1区間の探索が0.7〜0.9秒から0.95〜1.15秒に伸び、
-     * `renderRadius`いっぱいまで広げると1.4〜1.6秒まで伸びた——チェーン全体の2秒予算を
-     * 区間1つで食い潰し、上限緩和の段が動く時間が無くなった。
+     * <p><b>Don't make this larger.</b> {@link CoarseRouter#costToGo} allocates a fresh array proportional
+     * to the box area every time and runs Dijkstra over it ({@code chunksX*chunksZ*MAX_FLOORS} states).
+     * Reusing the wide box from the overall leg-split plan ({@link CoarseRouter#findRoute}, run once) here
+     * means paying the wide box's Dijkstra once per leg. In-game (End cliff edge, 2026-08-28), widening the
+     * box 4x (64->256) stretched one leg's search from 0.7-0.9 s to 0.95-1.15 s, and widening it all the way
+     * to `renderRadius` stretched it to 1.4-1.6 s: a single leg ate the whole chain's 2-second budget,
+     * leaving no time for the cap-loosening stages to run.
      */
     private static final int COARSE_LEG_GUIDE_MARGIN_BLOCKS = 64;
 
     /**
-     * 上限で詰んだときに緩める倍率。最後は{@link RunCaps#NONE}（無制限）で締める。
+     * Multipliers used to loosen caps when the search gets stuck. Finishes with {@link RunCaps#NONE}
+     * (unlimited).
      *
-     * <p>いきなり無制限にすると、初回の詰みで唐突に長大な橋・長時間の潜水が案内に出かねない。
-     * 段階を踏むことで、実際に道を作るのに必要な最小限の長さで収まりやすくする。
+     * <p>Going straight to unlimited could make the first dead end suddenly produce a huge bridge or a long
+     * dive in the guidance. Stepping up keeps it close to the minimum length actually needed to make a way.
      */
     private static final int[] RUN_CAP_LOOSEN_MULTIPLIERS = {2, 4};
 
     /**
-     * {@link #refineQuality}が引き直しに使う重み。実機ジ・エンドの保存地形での実測から、
-     * <b>改善のほとんどが取れて展開ノードの増分が最小</b>の点を採った（経路コスト{@code -3.0%} /
-     * 展開{@code +40%}。1.15まで下げても{@code -5.0%} / {@code +46%}にしかならない）。
+     * Weight {@link #refineQuality} uses for the redo. Chosen from measurements on saved in-game End terrain
+     * as the point that <b>captures most of the improvement with the smallest increase in expanded nodes</b>
+     * (path cost {@code -3.0%} / expansions {@code +40%}; going down to 1.15 only yields {@code -5.0%} /
+     * {@code +46%}).
      */
     private static final double REFINE_HEURISTIC_WEIGHT = 1.25;
 
     /**
-     * {@link #retryGreedier}が順に試す重み。実測で2.5から解け始めるので、そこを1段目に置く。
-     * 3.0は{@code XaeroNavConfig#heuristicWeight}の上限でもあり、これ以上は用意しない——
-     * 貪欲さを上げるほど経路は遠回りになるので、届く最小の重みで止めたい。
+     * Weights {@link #retryGreedier} tries in order. Measurements show solutions start appearing at 2.5, so
+     * that is the first step. 3.0 is also the upper limit of {@code XaeroNavConfig#heuristicWeight}, so
+     * nothing beyond it is provided: the greedier the search, the more roundabout the path, so we want to
+     * stop at the smallest weight that reaches the goal.
      */
     private static final double[] GREEDY_RETRY_WEIGHTS = {2.5, 3.0};
 
     /**
-     * 最初の探索へ渡す予算・時間の割合（%）。
+     * Share (%) of the budget and time given to the first search.
      *
-     * <p><b>使い切られると緩和も{@link #retryGreedier}も動けない。</b>両者は
-     * {@code looseningDeadline}を最初の探索と共有しているので、1段目が枠いっぱいまで走ると
-     * 再挑戦に残り時間がゼロになる——実機のジ・エンド（深い探索でも12秒）でまさにそれが起きて、
-     * 「重みを上げれば解ける」と分かっていても一度も試されないままだった。
+     * <p><b>If it's used up, neither loosening nor {@link #retryGreedier} can run.</b> Both share
+     * {@code looseningDeadline} with the first search, so if the first stage runs to the full limit there is
+     * no time left for retries. That is exactly what happened in the in-game End (12 s even for the deep
+     * search): even though "raising the weight solves it" was known, it was never tried once.
      *
-     * <p><b>解ける地形では損をしない。</b>A*はゴールを取り出した時点で返るので、届く経路は
-     * 上限に関わらず同じ手数で見つかる（{@code XaeroNavConfig#maxExpandedNodes}の
-     * 「払うコストではなく届かなかったときの天井」と同じ理屈）。減るのは<b>届かない探索が
-     * 諦めるまでの時間</b>だけで、それはそのまま再挑戦の持ち時間になる。
+     * <p><b>No loss on solvable terrain.</b> A* returns as soon as it pops the goal, so a reachable path is
+     * found in the same number of steps regardless of the limit (the same reasoning as
+     * {@code XaeroNavConfig#maxExpandedNodes} being "a ceiling for when it can't reach, not a cost paid").
+     * What shrinks is only <b>the time an unreachable search takes to give up</b>, which becomes the retries'
+     * time allowance.
      */
     private static final int FIRST_PASS_PERCENT = 40;
 
     /**
-     * 区間の展開ノード上限を、呼び出し側の上限の何倍にするか。
+     * Multiplier applied to the caller's limit to get a leg's expanded-node limit.
      *
-     * <p><b>チェーンの区間は呼び出し側の上限より多くのノードを要ることがある。</b>区間ごとに
-     * 満額を渡してもなお足りないことがあり、上限で切られた区間は1手も返さない。倍率を掛けて
-     * よいのは<b>チェーンが最後の手段で、区間を順番に解く</b>から——並列に走る深い予算
-     * （{@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}）を上げるとメモリのピークが重なるが、
-     * こちらは重ならない。時間は据え置きなので、上げたぶんが丸ごと余計に掛かるわけではない。
+     * <p><b>A chain leg can need more nodes than the caller's limit.</b> Even giving each leg the full amount
+     * is sometimes not enough, and a leg cut off by the limit returns no steps at all. Multiplying is safe
+     * <b>because the chain is the last resort and solves legs one after another</b>: raising the deep budget
+     * that runs in parallel ({@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}) would overlap memory peaks,
+     * but these don't overlap. The time limit stays the same, so the increase doesn't all turn into extra time.
      */
     private static final int LEG_NODE_BUDGET_FACTOR = 3;
 
-    /** 最初の探索の取り分。残りは緩和と{@link #retryGreedier}のために空けておく。 */
+    /** The first search's share. The rest is kept free for loosening and {@link #retryGreedier}. */
     private static SearchLimits firstPassLimits(SearchLimits limits) {
         return new SearchLimits(
                 Math.max(1, limits.maxExpandedNodes() * FIRST_PASS_PERCENT / 100),
@@ -180,53 +187,56 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * {@link #refineQuality}が引き直すのは、最初の探索が予算のこれだけしか使わなかったときに限る。
+     * {@link #refineQuality} redoes the search only when the first search used no more than this fraction of
+     * its budget.
      *
-     * <p><b>「余裕があったときだけ質を問い直す」の余裕をここで測る。</b>引き直しは最初の探索より
-     * 4割ほど多く展開するので、既に予算の大半を焼いている探索でもう一度払うと、数%の質のために
-     * 待ち時間が倍になる——実機ジ・エンドの<b>島から島への渡り</b>がまさにそれで、
-     * {@code RealEndTerrainTest}の地形は60万ノード中53万(89%)を使って到達する。しかもそこは
-     * 奈落を渡る以外に道が無いので、引き直しても同じ経路しか出ない。
+     * <p><b>This measures the "slack" in "only reconsider quality when there's slack".</b> The redo expands
+     * about 40% more than the first search, so paying again for a search that already burned most of its
+     * budget doubles the wait for a few percent of quality. The in-game End <b>island-to-island crossing</b>
+     * is exactly that: the {@code RealEndTerrainTest} terrain reaches the goal using 530k of 600k nodes (89%).
+     * And there the only way is across the void, so a redo produces the same path anyway.
      *
-     * <p>一方で狙っている谷の横断は3万/60万＝5%、実機の既定予算(10万)に置き直しても30%で収まる。
-     * 半分に置けば両者を分けられる。
+     * <p>Meanwhile the valley crossing we're targeting uses 30k/600k = 5%, and still fits at 30% under the
+     * in-game default budget (100k). Setting it at half separates the two.
      *
-     * <p><b>割合を測る分母は{@link #firstPassLimits}が渡した予算</b>——最初の探索はフル予算では
-     * 走らないので、フル予算と比べると条件が常に成立して保護が消える。
+     * <p><b>The denominator is the budget {@link #firstPassLimits} handed out</b>: the first search doesn't
+     * run with the full budget, so comparing against the full budget would always pass and remove the
+     * protection.
      */
     private static final double REFINE_MAX_FIRST_PASS_FRACTION = 0.5;
 
     /**
-     * 経路が持ち物のこの割合を超えて使うとき、{@link #refineQuality}が節約を試みる。
+     * When a path uses more than this fraction of the inventory, {@link #refineQuality} tries to economize.
      *
-     * <p>半分に置くのは、<b>足りないことより「使い切ること」を問題にしている</b>から——渡り切れても
-     * 手元が空になれば、その先の谷や柱で詰む。逆に1〜2割しか使わない経路にまで掛けると、
-     * 設置を含む経路が常態のジ・エンドでは毎回2度探索することになる。
+     * <p>It's set at half because <b>the problem is "using it all up" rather than running short</b>: even if
+     * the crossing succeeds, an empty hand gets stuck at the next valley or pillar. Conversely, applying it
+     * to paths that use only 10-20% would mean searching twice every time in the End, where paths with
+     * placements are the norm.
      */
     private static final double THRIFT_TRIGGER_FRACTION = 0.5;
 
     /**
-     * 節約の引き直しで、足場1つを置く動作の値段を何倍にするか
-     * （{@code ActionCosts#PLACE_BLOCK_AIM_TICKS}）。
+     * How much to multiply the cost of the action of placing one support block by when redoing for thrift
+     * ({@code ActionCosts#PLACE_BLOCK_AIM_TICKS}).
      *
-     * <p><b>「1個節約するために何マス余計に歩いてよいか」がこの値の意味</b>。倍にすれば
-     * 置く動作ぶん（{@code ActionCosts#PLACE_BLOCK_AIM_TICKS}＝16.0）が上乗せされる＝
-     * <b>疾走4.5マス相当</b>。3倍なら9マス相当で、それ以上は
-     * {@link #THRIFT_MAX_COST_INCREASE}の関門で弾かれるだけの引き直しが増える。
+     * <p><b>The meaning of this value is "how many extra blocks of walking are worth saving one block"</b>.
+     * Doubling adds the placing action ({@code ActionCosts#PLACE_BLOCK_AIM_TICKS} = 16.0) on top =
+     * <b>equivalent to 4.5 blocks of sprinting</b>. Tripling is 9 blocks' worth, and beyond that it only adds
+     * redos that get rejected by the {@link #THRIFT_MAX_COST_INCREASE} gate.
      *
-     * <p>掛かるのは置く動作の側だけで、走行を中断するぶん
-     * （{@code ActionCosts#TERRAIN_EDIT_INTERRUPTION_TICKS}）には掛からない。減らしたいのは
-     * <b>使う枚数</b>なので枚数に比例する成分だけを割り増す——{@link #trueCost}が割増を
-     * 差し引いて比べられるのも、全ての設置が同じ額だけ膨らんでいるからこそ。
+     * <p>It applies only to the placing action, not to the part for interrupting movement
+     * ({@code ActionCosts#TERRAIN_EDIT_INTERRUPTION_TICKS}). What we want to reduce is <b>the number of blocks
+     * used</b>, so only the component proportional to the count is marked up; {@link #trueCost} can subtract
+     * the markup for comparison precisely because every placement is inflated by the same amount.
      */
     private static final double THRIFT_PLACEMENT_COST_SCALE = 2.0;
 
     /**
-     * 節約した経路を採るために、本来の値段での総コストの悪化をどこまで許すか。
+     * How much worsening of total cost at the true prices is tolerated in order to take the thrifty path.
      *
-     * <p>0にしてはいけない——最初の経路は本来の値段でほぼ最適なので、設置を減らした経路は
-     * 定義上それより高くなる。<b>少しの時間でブロックを買っている</b>のがこの引き直しなので、
-     * 買値の上限をここで決める。1割は、実機の島渡り（500 tick前後の区間）でおよそ2.5秒。
+     * <p>Must not be 0: the first path is nearly optimal at the true prices, so a path with fewer placements
+     * is by definition more expensive. This redo is <b>buying blocks with a little time</b>, so this sets the
+     * maximum purchase price. 10% is about 2.5 seconds on an in-game island crossing (legs of around 500 ticks).
      */
     private static final double THRIFT_MAX_COST_INCREASE = 0.10;
 
@@ -237,14 +247,14 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * {@code costToGoGuideEnabled}を明示的に指定する版。既定（引数無しの{@link #submit}）はtrue——
-     * 層1のcost-to-go（{@link #buildCostToGoGuide}）を幾何学的なHeuristicと併用する。設定で
-     * 切れるようにする理由は{@code XaeroNavConfig#costToGoGuideEnabled}を参照。
+     * Variant that specifies {@code costToGoGuideEnabled} explicitly. The default ({@link #submit} without
+     * the argument) is true: the layer-1 cost-to-go ({@link #buildCostToGoGuide}) is used alongside the
+     * geometric heuristic. See {@code XaeroNavConfig#costToGoGuideEnabled} for why it can be turned off.
      *
-     * <p>この設定値をここで{@code XaeroNavConfig}から直接読まないのは、{@link PathfindingExecutor}が
-     * 単体テスト対象（{@code PathfindingExecutorCoarseGuidedTest}）で、NeoForgeの設定システムが
-     * ロードされていない環境からも呼べる必要があるため。読み出しは呼び出し側
-     * （{@code PathfindingState}）の責務にする。
+     * <p>This setting isn't read directly from {@code XaeroNavConfig} here because {@link PathfindingExecutor}
+     * is unit-tested ({@code PathfindingExecutorCoarseGuidedTest}) and must be callable from environments where
+     * NeoForge's config system isn't loaded. Reading it is the caller's ({@code PathfindingState})
+     * responsibility.
      */
     public CompletableFuture<PathResult> submit(CellSource view, BlockPos start, BlockPos goal, SearchLimits limits,
                                                  boolean costToGoGuideEnabled) {
@@ -252,9 +262,9 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * {@code goalRadius}を明示する版。長距離ルートの中間目標のように「向かう方角」でしかない
-     * ゴールには半径を与えて、座標ぴったりへ寄せるための遠回りを避ける
-     * （{@link AStarPathfinder#search(BlockPos, BlockPos, BooleanSupplier, int)}参照）。
+     * Variant that specifies {@code goalRadius} explicitly. Goals that are only "a direction to head in",
+     * like intermediate targets of a long-distance route, get a radius to avoid detours just to land on the
+     * exact coordinate (see {@link AStarPathfinder#search(BlockPos, BlockPos, BooleanSupplier, int)}).
      */
     public CompletableFuture<PathResult> submit(CellSource view, BlockPos start, BlockPos goal, SearchLimits limits,
                                                  boolean costToGoGuideEnabled, int goalRadius) {
@@ -262,32 +272,34 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 手前の区間から累積を引き継ぐ版（{@link Carryover}）。表示中の経路の末端から継ぎ足す探索と、
-     * 経路へ合流し直す探索が使う——どちらも<b>1本の経路の続き</b>を解いているので、橋の連続長も
-     * 持ち物の予算も、この経路が既に使うと決めているぶんを差し引いた状態から始めなければならない。
+     * Variant that carries accumulated state over from the preceding leg ({@link Carryover}). Used by the
+     * search that extends from the end of the displayed path and by the search that rejoins the path: both
+     * solve <b>the continuation of a single path</b>, so the bridge run length and the inventory budget must
+     * start with whatever this path has already committed to subtracted.
      */
     public CompletableFuture<PathResult> submit(CellSource view, BlockPos start, BlockPos goal, SearchLimits limits,
                                                  boolean costToGoGuideEnabled, int goalRadius, Carryover carried) {
         return submit(view, start, goal, limits, costToGoGuideEnabled, goalRadius, carried, null);
     }
 
-    /** 作り済みのガイドを渡す版（実験）。 */
+    /** Variant that takes a prebuilt guide (experimental). */
     public CompletableFuture<PathResult> submit(CellSource view, BlockPos start, BlockPos goal, SearchLimits limits,
                                                  boolean costToGoGuideEnabled, int goalRadius, Carryover carried,
                                                  CostToGo prepared) {
         return submit(cancelled -> {
-            // 立てない座標のまま探索すると経路が1本も伸びない。ブロックを読める場所での
-            // 寄せ直しなので、メインスレッドへ戻さずここで行う
+            // Searching from a coordinate you can't stand on yields no path at all. This snapping happens
+            // where blocks can be read, so do it here instead of going back to the main thread
             BlockPos resolvedStart = StanceFinder.resolveStart(view, start);
             BlockPos resolvedGoal = StanceFinder.resolveGoal(view, goal);
             boolean goalInsideBounds = goalInsideBounds(view, resolvedGoal, goalRadius);
-            // ゴールが箱の外なら層1ガイドは組まない。組んでも{@code CoarseRouter#costToGo}が
-            // ゴールのセルを持たず<b>どこでも0を返す表</b>にしかならないのに、
-            // {@link LiveCoarseSampler}は箱を丸ごと舐める（天井のある次元では全高ぶん）。
+            // If the goal is outside the box, don't build the layer-1 guide. Even if built,
+            // {@code CoarseRouter#costToGo} wouldn't have the goal's cell and would only produce
+            // <b>a table that returns 0 everywhere</b>, while {@link LiveCoarseSampler} scans the whole
+            // box (the full height in dimensions with a ceiling).
             //
-            // ガイドの起点には<b>寄せ直す前のゴール</b>を渡す。同じ床の中でもYを寄せると層1の
-            // オフセット補正が変わり、NetherLavaSeaTestが「経路なし」へ戻る。到達可能性の判定と
-            // A*には下で寄せ直した方を使う
+            // The guide's origin is <b>the goal before snapping</b>. Shifting Y, even within the same
+            // floor, changes layer 1's offset correction, and NetherLavaSeaTest regresses to "no path".
+            // The reachability check and A* use the snapped goal below
             CostToGo costToGo = prepared != null ? prepared
                     : costToGoGuideEnabled && goalInsideBounds
                             ? buildCostToGoGuide(view, resolvedStart, goal, cancelled) : null;
@@ -299,39 +311,41 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 通常予算と深い予算を<b>並列に</b>試す。通常予算が届けばそれを採用して深い方は打ち切り、
-     * 通常予算が予算切れ・時間切れで終わったときだけ深い方の結果を待つ。
+     * Tries the normal budget and the deep budget <b>in parallel</b>. If the normal budget reaches the goal,
+     * that result is used and the deep one is stopped; the deep result is awaited only when the normal
+     * budget ends by running out of budget or time.
      *
-     * <p><b>直列（通常予算の失敗を確認 → 次tickで深い予算）だと2回分の時間が丸ごと足し算になる。</b>
-     * 実測（実機ユーザー報告の島渡り地形、{@code PlayerAreaEndReproTest}と同条件）:
+     * <p><b>Running them serially (confirm the normal budget failed, then the deep budget next tick) adds
+     * the two durations together.</b> Measurements (island-crossing terrain from a user report, same
+     * conditions as {@code PlayerAreaEndReproTest}):
      *
      * <pre>
-     * 通常予算(10万/2秒)のみ → NODE_BUDGET、1871ms
-     * 深い予算(60万/15秒)のみ → 到達、1876ms
-     * 直列の合計 ≈ 3747ms（tick境界の待ちを含めると実機ではさらに伸びる）
+     * Normal budget (100k/2 s) only -> NODE_BUDGET, 1871ms
+     * Deep budget (600k/15 s) only  -> reached, 1876ms
+     * Serial total ~ 3747ms (even longer in-game once waiting for tick boundaries is included)
      * </pre>
      *
-     * <p>深い方は通常予算と同時に始めておけば、通常予算が失敗を確定する頃には
-     * <b>ほぼ同時に終わっている</b>——上の実測どおり2つの所要時間はほとんど差が無い。
-     * 通常予算がすぐ届く（大半のケース）なら深い方は即座に打ち切られるので、
-     * 増える負荷は「通常予算と同じだけの時間、もう1コア使う」だけに留まる。
+     * <p>If the deep search starts at the same time as the normal one, by the time the normal budget
+     * confirms failure the deep one has <b>almost finished too</b>: as measured above, the two durations
+     * barely differ. When the normal budget reaches the goal quickly (most cases), the deep one is stopped
+     * immediately, so the added load is limited to "one more core for as long as the normal budget runs".
      *
-     * <p>費用対効果が悪いのは通常予算がそもそも一瞬で終わる近距離ナビだが、そこでは
-     * 深い方も同じくらい一瞬で打ち切られるので実害は小さい。逆に通常予算が最初から
-     * 時間切れ確定（{@code plainSearchHopeless}）と分かっている場合は、深い予算だけで
-     * 足りるので呼び出し側（{@code PathfindingState}）はこちらを使わず従来どおり
-     * {@link #submit}に深い{@link SearchLimits}を渡す。
+     * <p>The poorest cost-effectiveness is short-range navigation where the normal budget finishes in an
+     * instant anyway, but there the deep one is also stopped just as quickly, so the real harm is small.
+     * Conversely, when the normal budget is known up front to be doomed to time out
+     * ({@code plainSearchHopeless}), the deep budget alone is enough, so the caller ({@code PathfindingState})
+     * doesn't use this and instead passes the deep {@link SearchLimits} to {@link #submit} as before.
      *
-     * <p><b>ビューを2つ受け取るのは飾りではない。</b>{@link CellSource}は単一のワーカースレッドが
-     * 占有する約束（{@code ChunkView}のスレッド契約）で、2つの探索へ同じインスタンスを渡すと
-     * セルのキャッシュが並行に書き換わって壊れる。実際そうなっていて、実機で
-     * {@code ArrayIndexOutOfBoundsException}が出ていた。呼び出し側に2つ渡させるのは、
-     * {@code CellSource}へ複製用のメソッドを生やすと実装側が{@code this}を返して黙って
-     * 元に戻せてしまうため——引数で強制すれば取り違えようがない。
+     * <p><b>Taking two views is not decoration.</b> A {@link CellSource} is promised to be owned by a single
+     * worker thread (the {@code ChunkView} thread contract); passing the same instance to two searches makes
+     * the cell cache get rewritten concurrently and corrupts it. That actually happened, producing
+     * {@code ArrayIndexOutOfBoundsException} in-game. The caller is made to pass two because adding a copy
+     * method to {@code CellSource} would let an implementation return {@code this} and silently revert to
+     * the old behavior; forcing it through the arguments makes a mix-up impossible.
      *
-     * @param normalView 通常予算の探索が占有するビュー
-     * @param deepView   深い予算の探索が占有するビュー。同じ地形・探索範囲を持ち、
-     *                   {@code normalView}とは別インスタンスであること
+     * @param normalView view owned by the normal-budget search
+     * @param deepView   view owned by the deep-budget search. Must have the same terrain and search bounds,
+     *                   and be a different instance from {@code normalView}
      */
     public CompletableFuture<PathResult> submitWithDeepFallback(CellSource normalView, CellSource deepView,
                                                                   BlockPos start, BlockPos goal,
@@ -342,10 +356,12 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 作り済みのガイドを渡す版。天井のある次元の3D粗層（{@code VoxelCostToGo}）がここへ入る。
+     * Variant that takes a prebuilt guide. The 3D coarse layer for dimensions with a ceiling
+     * ({@code VoxelCostToGo}) comes in here.
      *
-     * <p><b>{@code prepared}はゴールが箱の外でも使う。</b>層1のガイドと違って箱の外まで覆っている
-     * ことがその存在意義で、ネザーの遠距離ではゴールは必ず箱の外にある。
+     * <p><b>{@code prepared} is used even when the goal is outside the box.</b> Unlike the layer-1 guide,
+     * covering beyond the box is its whole reason to exist, and for long distances in the Nether the goal is
+     * always outside the box.
      */
     public CompletableFuture<PathResult> submitWithDeepFallback(CellSource normalView, CellSource deepView,
                                                                   BlockPos start, BlockPos goal,
@@ -360,17 +376,18 @@ public final class PathfindingExecutor {
                     : costToGoGuideEnabled && inside
                             ? buildCostToGoGuide(normalView, resolvedStart, goal, cancelled) : null;
             if (!inside) {
-                // 両ビューは同じ箱。深い予算でも完走しえず、その部分経路は下の選択で
-                // 捨てられる。submitと同じく通常予算を満額で1回だけ使い、先まで案内する。
-                // 判定もこのワーカーで行い、ビューのスレッド所有権を保つ。
+                // Both views share the same box. Even the deep budget can't finish, and its partial path
+                // would be discarded by the selection below. As in submit, use the normal budget once at
+                // full size and guide as far as possible. The check also runs on this worker to keep the
+                // views' thread ownership.
                 return search(normalView, normalLimits,
                         MonotonicTime.millis() + normalLimits.timeLimitMillis(), cancelled, costToGo,
                         (pathfinder, c) -> pathfinder.search(resolvedStart, resolvedGoal, c,
                                 Carryover.NONE, goalRadius), false);
             }
 
-            // 通常予算が先に届いたら、まだ走っている深い方をここで打ち切る。deepExecutor自体は
-            // 空けておかないと、次の呼び出しがこのジョブの後ろに並んで無駄に待たされる
+            // If the normal budget arrives first, stop the still-running deep one here. deepExecutor itself
+            // must be freed, or the next call would queue behind this job and wait for nothing
             AtomicBoolean normalWon = new AtomicBoolean(false);
             BooleanSupplier deepCancelled = () -> cancelled.getAsBoolean() || normalWon.get();
             CompletableFuture<PathResult> deepFuture = CompletableFuture.supplyAsync(() ->
@@ -386,8 +403,8 @@ public final class PathfindingExecutor {
                 deepFuture.cancel(true);
                 return normal;
             }
-            // 通常予算は予算切れ・時間切れで終わった。深い方は同時に始めているので、
-            // ここではもう終わっているか、残りわずかのはず
+            // The normal budget ended by running out of budget or time. The deep one started at the same
+            // time, so it should already be done or nearly so
             try {
                 PathResult deep = deepFuture.get();
                 return deep.complete() ? deep : normal;
@@ -401,20 +418,21 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * {@link LiveCoarseSampler}で組んだ粗い地図から、このゴールへのcost-to-goガイドを作る。
-     * {@code view.bounds()}の箱に限れば{@link CoarseRouter}の逆向きDijkstra1回は数msで終わる
-     * （描画距離32相当で65×65セル、最大4床）。Xaeroの地図に依存せず読み込み済みチャンクの
-     * 生データだけを見るので、ワーカースレッド上で完結できる（メインスレッド境界を動かさない）。
+     * Builds the cost-to-go guide to this goal from a coarse map assembled with {@link LiveCoarseSampler}.
+     * Limited to the {@code view.bounds()} box, one reverse Dijkstra of {@link CoarseRouter} finishes in a few
+     * ms (65x65 cells for render distance 32, up to 4 floors). It looks only at raw data of loaded chunks,
+     * not at Xaero's map, so it completes on the worker thread (without moving the main-thread boundary).
      *
-     * <p>ボート所持の有無は見ない（{@code false}固定）。ガイドは{@code AStarPathfinder}側で
-     * 幾何学的なヒューリスティックとのmaxを取って使うだけなので、多少粗くても実害が無い——
-     * 損をするのは「ボートがあるのに引き締めが甘くなる」程度で、非許容にはならない。
+     * <p>Boat ownership is ignored (fixed to {@code false}). The guide is only taken as a max with the
+     * geometric heuristic in {@code AStarPathfinder}, so some coarseness does no real harm: the only loss is
+     * "a looser tightening when you do have a boat", and it never becomes inadmissible.
      *
-     * <p><b>ゴールが箱の外にあるとガイドは丸ごと無効になる。</b>{@code CoarseRouter#costToGo}は
-     * ゴールのセルを地図に含まないと全コストを無限にし、{@code estimate}はどこでも0を返す。
-     * 箱は始点を中心に描画距離で切られる（{@code SearchBounds#around}）ので、遠い目的地を
-     * そのまま狙う設計（天井のある次元。{@code PathfindingState#selectDetailTarget}）では常にこの形になる
-     * ——<b>意図的にそうしている</b>（測定は{@code NetherDetourBreakdownTest}）。
+     * <p><b>If the goal is outside the box, the guide becomes entirely useless.</b>
+     * {@code CoarseRouter#costToGo} sets every cost to infinity when the goal's cell isn't in the map, and
+     * {@code estimate} returns 0 everywhere. The box is cut around the start at the render distance
+     * ({@code SearchBounds#around}), so the design that aims straight at a distant destination (dimensions
+     * with a ceiling; {@code PathfindingState#selectDetailTarget}) always ends up in this shape
+     * -- <b>this is intentional</b> (measured in {@code NetherDetourBreakdownTest}).
      */
     private CostToGo buildCostToGoGuide(CellSource view, BlockPos start, BlockPos goal,
                                          BooleanSupplier cancelled) {
@@ -435,18 +453,20 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 補正済みのゴール領域が探索範囲に掛かり、正確なゴールならセルが読み込まれているか。
-     * 半径付きゴールは中心のセルが無くても周囲へ到達できる。範囲が重ならなければ、この探索は
-     * どれだけ予算を積んでも完走しない——範囲の外は未ロード扱いのセルで、そこへ入る手が無い。
+     * Whether the snapped goal region overlaps the search bounds and, for an exact goal, whether its cell is
+     * loaded. A goal with a radius can be reached around its center even if the center cell is missing. If the
+     * ranges don't overlap, this search will never finish no matter how much budget it gets: outside the
+     * bounds are cells treated as unloaded, with no move into them.
      *
-     * <p>{@code SearchBounds#around}は始点を中心に描画距離で切るので、遠い目的地をそのまま
-     * 狙う設計（天井のある次元。{@code PathfindingState#selectDetailTarget}）では常にこちら側になる。
+     * <p>{@code SearchBounds#around} cuts around the start at the render distance, so the design that aims
+     * straight at a distant destination (dimensions with a ceiling; {@code PathfindingState#selectDetailTarget})
+     * always lands on this side.
      */
     private static boolean goalInsideBounds(CellSource view, BlockPos goal, int goalRadius) {
         SearchBounds bounds = view.bounds();
         int verticalRadius = AStarPathfinder.goalVerticalRadius(goalRadius);
-        // 正確なゴールのセルがこのスナップショットに無ければ、そこへ入る手が無い。
-        // 半径付きゴールは読み込み済みの隣で受かるので、そちらは残す
+        // If the exact goal's cell isn't in this snapshot, there's no move into it.
+        // A goal with a radius can be accepted from a loaded neighbor, so keep those
         if (goalRadius <= 0 && !CellData.present(view.cell(goal.getX(), goal.getY(), goal.getZ()))) {
             return false;
         }
@@ -457,9 +477,10 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * {@link #submit}と違い、{@link StanceFinder}による寄せ直しと{@link PathSafetyChecker}による
-     * 危険箇所の注釈付けを行わない薄い版。呼び出し側が始点・終点をすでに立てる座標へ解決済みで、
-     * 結果を実際に歩く経路としてではなく中間データ（waypoint選定など）として使う場合に使う。
+     * Thin variant of {@link #submit} that skips snapping via {@link StanceFinder} and hazard annotation via
+     * {@link PathSafetyChecker}. Used when the caller has already resolved start and end to standable
+     * coordinates and uses the result as intermediate data (e.g. waypoint selection) rather than as a path
+     * to actually walk.
      */
     public CompletableFuture<PathResult> submitRaw(CellSource view, BlockPos start, BlockPos goal,
                                                     SearchLimits limits) {
@@ -467,14 +488,16 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 地下から地上へ出る経路を、目的地の真下ではなく「y &gt;= surfaceY の空の下」を探して求める
-     * （地上優先ナビ。{@link net.prason.xaeronav.client.PathfindingState}参照）。
+     * Finds a path from underground to the surface by searching for "under open sky at y &gt;= surfaceY"
+     * rather than for the spot directly below the destination (surface-first navigation; see
+     * {@link net.prason.xaeronav.client.PathfindingState}).
      *
-     * <p>まず{@code onFoot}（掘削を禁じたビュー）で探し、地上まで届かなかったときだけ{@code digging}で
-     * 探し直す。掘削を許したまま1度で済ませると、石を含めて分岐が桁違いに増え、展開数の上限が
-     * 数十ブロック先で尽きてしまう。そこで返るのは「その場から少し掘り上がる」だけの未到達な経路で、
-     * 辿っても地上には出られない。掘削を切れば通れるのは既存の空洞だけになり、同じ展開数で
-     * 洞窟や坑道を遥かに遠くまで辿れる。
+     * <p>Searches first with {@code onFoot} (a view that forbids digging), and searches again with
+     * {@code digging} only when that doesn't reach the surface. Doing it in one pass with digging allowed
+     * makes branching explode by orders of magnitude, stone included, and the expansion limit runs out a few
+     * dozen blocks away. What comes back is then an unreached path that just "digs up a little from where you
+     * are", and following it doesn't get you to the surface. With digging off, only existing cavities are
+     * passable, so the same expansion count follows caves and tunnels much farther.
      */
     public CompletableFuture<PathResult> submitToSurface(CellSource onFoot, CellSource digging, BlockPos start,
                                                           int surfaceY, SearchLimits limits) {
@@ -490,29 +513,30 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 詳細探索が展開ノード数の上限に当たって未到達だったときの再挑戦（層3の局所障害
-     * 対策）。読み込み済みチャンクの生データから粗い地図を組み立て（{@link LiveCoarseSampler}）、
-     * その上で{@link CoarseRouter}が引いた経由地を1区間ずつ詳細A*で辿る。1回の長い探索より
-     * 短い区間の連続の方が、同じ予算でも局所的な崖・湖を迂回しやすい。
+     * Retry for when the detailed search hit the expanded-node limit without reaching the goal (countermeasure
+     * for layer-3 local obstacles). Assembles a coarse map from raw data of loaded chunks
+     * ({@link LiveCoarseSampler}), then follows the waypoints {@link CoarseRouter} draws on it with detailed A*,
+     * one leg at a time. A sequence of short legs gets around local cliffs and lakes more easily than one long
+     * search with the same budget.
      *
-     * <p>{@link LiveCoarseSampler}は{@code CellSource}を読むだけ（Xaeroの地図とは無関係）なので、
-     * 粗い地図の組み立てから区間ごとの探索まですべてこのワーカースレッド上で完結できる
-     * （層2の廊下精緻化と違い、メインスレッドへ戻す必要がない）。
+     * <p>{@link LiveCoarseSampler} only reads the {@code CellSource} (unrelated to Xaero's map), so everything
+     * from assembling the coarse map to the per-leg searches completes on this worker thread (unlike layer 2's
+     * corridor refinement, there's no need to go back to the main thread).
      */
     public CompletableFuture<PathResult> submitCoarseGuided(CellSource view, SearchBounds bounds, BlockPos start,
                                                              BlockPos goal, SearchLimits limits) {
         return submitCoarseGuided(view, bounds, start, goal, limits, true);
     }
 
-    /** {@code costToGoGuideEnabled}を明示的に指定する版。{@link #submit(CellSource, BlockPos, BlockPos,
-     * SearchLimits, boolean)}と同じ理由で、設定の読み出しは呼び出し側に委ねる。 */
+    /** Variant that specifies {@code costToGoGuideEnabled} explicitly. For the same reason as {@link #submit(CellSource, BlockPos, BlockPos,
+     * SearchLimits, boolean)}, reading the setting is left to the caller. */
     public CompletableFuture<PathResult> submitCoarseGuided(CellSource view, SearchBounds bounds, BlockPos start,
                                                              BlockPos goal, SearchLimits limits,
                                                              boolean costToGoGuideEnabled) {
         return submitCoarseGuided(view, bounds, start, goal, limits, costToGoGuideEnabled, 0);
     }
 
-    /** {@code goalRadius}を明示する版。最終ゴールにだけ効く（区間の経由地は元から粗い点なので常に領域）。 */
+    /** Variant that specifies {@code goalRadius} explicitly. Only affects the final goal (leg waypoints are coarse points, so always regions). */
     public CompletableFuture<PathResult> submitCoarseGuided(CellSource view, SearchBounds bounds, BlockPos start,
                                                              BlockPos goal, SearchLimits limits,
                                                              boolean costToGoGuideEnabled, int goalRadius) {
@@ -524,27 +548,29 @@ public final class PathfindingExecutor {
                                                  SearchLimits limits, BooleanSupplier cancelled,
                                                  boolean costToGoGuideEnabled, int goalRadius) {
         CoarseMap coarseMap = LiveCoarseSampler.sample(view, bounds, start.getY(), cancelled);
-        // 橋を架けられるなら粗い側でも溶岩を通す。ここを一律ALLOWにすると、溶岩の海の縁では
-        // 出発点自身のセルがLAVA＝通行不能になって区間分割が1つも作れず、溶岩の海を1回の探索で
-        // 渡ろうとして予算を焼き切る（実機で踏んだ: ステップ数0のまま20万ノード）
+        // If bridges can be built, let lava through on the coarse side too. Making this ALLOW across the board
+        // means that at the edge of a lava sea the start's own cell is LAVA = impassable, no leg split can be
+        // made, and the search tries to cross the lava sea in one go and burns the budget (hit in-game: 200k
+        // nodes with 0 steps)
         CoarseRouter.BridgePolicy bridgePolicy = view.lavaBridgingEnabled()
                 ? CoarseRouter.BridgePolicy.BRIDGE : CoarseRouter.BridgePolicy.ALLOW;
         CoarseRouter.Route route = CoarseRouter.findRoute(coarseMap, start, goal, false, bridgePolicy);
-        // 粗い地図が空のまま「経路あり」になるのが最悪の失敗（全セルNO_DATAは通行可能なので、
-        // 溶岩を無視した直線が引けてしまう）。知られたセル数を出しておかないと、
-        // 「区間分割が下手」なのか「そもそも地形が見えていない」のかを切り分けられない
-        // 種類の内訳（kindBreakdown）を併記する。既知セル数だけでは「奈落が奈落として見えて
-        // いるのか、そもそもデータが無いのか」を切り分けられない——NO_DATAは最安でも陸の1.6倍で
-        // 通れるので、奈落がそちらへ倒れていれば奈落を突っ切る線が安く見える理由になる。
-        // 内訳はCoarseRouterのNO_DATA較正の入力そのものでもあるので、値の妥当性確認にも要る。
-        // 実際にこの内訳で「奈落は正しく検出されている」を確認し、原因の候補を1つ潰した
+        // The worst failure is "route found" while the coarse map is empty (all-NO_DATA cells are passable,
+        // so a straight line ignoring lava can be drawn). Without logging the known cell count, you can't
+        // tell whether "the leg split is bad" or "the terrain isn't visible at all".
+        // Also log the per-kind breakdown (kindBreakdown). The known cell count alone can't tell whether
+        // "the void is seen as void or there's simply no data": NO_DATA is passable at 1.6x land even at its
+        // cheapest, so if the void falls into that, it explains why a line straight through the void looks cheap.
+        // The breakdown is also the very input of CoarseRouter's NO_DATA calibration, so it's needed to check
+        // that value too. This breakdown did in fact confirm "the void is detected correctly", ruling out one
+        // candidate cause
         if (LOGGER.isDebugEnabled()) {
-            LOGGER.debug("XaeroNav: 粗い経由地チェーンの地図 (既知セル={}/{}, {}, 中間目標={}個, 溶岩={})",
+            LOGGER.debug("XaeroNav: coarse waypoint chain map (known cells={}/{}, {}, intermediate targets={}, lava={})",
                     coarseMap.knownCells(), coarseMap.totalCells(), coarseMap.kindBreakdown(),
                     route.waypoints().size(), bridgePolicy);
         }
         if (route.waypoints().isEmpty()) {
-            // 粗い側でも道が見つからない（孤立した地形等）。直接探索と同じ結果に留める
+            // No way found even on the coarse side (isolated terrain, etc.). Stick to the same result as a direct search
             CostToGo directCostToGo = costToGoGuideEnabled
                     ? CoarseRouter.costToGo(coarseMap, goal, false, bridgePolicy) : null;
             return search(view, limits, cancelled, directCostToGo, (pathfinder, c) ->
@@ -554,30 +580,31 @@ public final class PathfindingExecutor {
 
         List<BlockPos> rawLegGoals = new ArrayList<>(route.waypoints());
         rawLegGoals.add(goal);
-        // 展開数の上限は区間数で割らずに満額渡す。SearchLimitsが言うとおりこれは「届かなかった
-        // ときに打ち切る天井」であって払うコストではなく、区間が短いほど実際の展開数は少なく済む。
-        // 割ると、届くはずの区間が手前で切れるだけになる（実機で30000÷3区間=10000となり山岳地形の
-        // 1区間目すら届かなかった）。
+        // Pass the full expansion limit without dividing by the number of legs. As SearchLimits says, this is
+        // "a ceiling at which to stop when the goal can't be reached", not a cost paid, and shorter legs
+        // actually expand fewer nodes. Dividing only makes legs that would reach the goal stop short (in-game,
+        // 30000 / 3 legs = 10000 couldn't even complete the first leg in mountainous terrain).
         //
-        // 代わりにチェーン全体を、単一探索1回分と同じ時間で縛る。区間ごとに固定の上限を置くと
-        // 区間数ぶんまで伸びてしまい、これの代替手段であるはずのチェーンだけが青天井になる。
-        // 伸ばしても意味が無い——溶岩の海（NetherLavaSeaTest）でチェーンは単発の倍のノード
-        // （104万 対 57万）を使ううえ遅く、時間を足すぶんだけ詰み判定が遅れるだけだった。
-        // その中で各区間が残り時間を山分けする（下のlegShare）
+        // Instead, bound the whole chain by the same time as one single search. A fixed per-leg limit would
+        // stretch up to the number of legs, making the chain, which is supposed to be the fallback, the only
+        // unbounded thing. Stretching it is pointless: on the lava sea (NetherLavaSeaTest) the chain used twice
+        // the nodes of a single search (1.04M vs 570k) and was slower, so adding time only delayed the dead-end
+        // verdict. Within that, each leg splits the remaining time (legShare below)
         long chainDeadline = MonotonicTime.millis() + limits.timeLimitMillis();
 
         List<PathStep> steps = new ArrayList<>();
-        // 届かなかった区間のうち、いちばん長く引けた部分経路。チェーンが丸ごと空で返るのを
-        // 防ぐための最後の受け皿——実機のネザーの溶岩の海で、3区間とも届かず
-        // 「展開47万・ステップ数0」＝線が1本も出ないまま24秒待たされた。
-        // 案内は末端から継ぎ足して伸びていくので、途中までの線が出れば次の探索はそのぶん
-        // 近い所から始まる。空で返すとその起点すら作れず、同じ場所で何度でもやり直すことになる
+        // Among legs that didn't reach their goal, the longest partial path drawn. A last fallback to keep
+        // the chain from returning completely empty: on the in-game Nether lava sea, all 3 legs failed with
+        // "470k expansions, 0 steps" = not a single line shown after a 24-second wait.
+        // Guidance grows by extending from the end, so if a line up to some point is shown, the next search
+        // starts that much closer. Returning empty can't even create that origin, and the search retries from
+        // the same place over and over
         List<PathStep> bestPartial = List.of();
         boolean complete = false;
         int totalExpanded = 0;
         int totalDistinct = 0;
-        // チェーン全体の打ち切り理由は最後に解いた区間のもの。全区間が「範囲内に道が無い」で
-        // 終わったときだけEXHAUSTEDのまま残り、本物の詰みとして呼び出し側に伝わる
+        // The termination reason for the whole chain is that of the last leg solved. It remains EXHAUSTED only
+        // when every leg ended with "no way within bounds", and is passed to the caller as a genuine dead end
         PathResult.Termination termination = PathResult.Termination.EXHAUSTED;
         boolean limitsHeld = false;
         BlockPos legStart = StanceFinder.resolveStart(view, start);
@@ -587,50 +614,51 @@ public final class PathfindingExecutor {
                 termination = PathResult.Termination.TIME_LIMIT;
                 break;
             }
-            // 区間の持ち時間は<b>残りを山分けする</b>。1つの区間がチェーンの予算を使い切ると、
-            // 後続の区間が一度も試されない——実機（ジ・エンド、2026-08-28）では区間1が2秒中
-            // 1.4〜1.6秒を使って失敗し、区間2・3が時間切れで潰れるのが失敗時の定型だった。
-            // 一方で実際に成功した回は「区間2が100,000ノードで失敗 → 区間3を試したら27,340ノードで
-            // 到達」という形で、<b>後続を必ず試せること自体が成功率を決めている</b>
-            // （届かなかった経由地の次を同じ地点から狙う、という下のフォールバックが本体）。
+            // Each leg's time allowance <b>splits the remainder</b>. If one leg uses up the chain's budget,
+            // the following legs are never tried: in-game (End, 2026-08-28), the typical failure was leg 1
+            // using 1.4-1.6 s of 2 s and failing, with legs 2 and 3 dying of timeouts.
+            // Meanwhile the run that actually succeeded looked like "leg 2 failed at 100,000 nodes -> leg 3
+            // reached the goal at 27,340 nodes", i.e. <b>being guaranteed to try the following legs is itself
+            // what determines the success rate</b> (the fallback below, aiming at the next waypoint from the
+            // same point after missing one, is the core).
             //
-            // 固定の上限（区間ごと何ms）は使わない。呼び出し側の予算が変われば1区間に割ける時間も
-            // 変わるべきで、固定値だと予算を増やしても区間が使えないまま余る。使い切らなかった
-            // ぶんは次の区間へ自然に回る（remainingMillisが減らないため）
+            // No fixed limit (some ms per leg). If the caller's budget changes, the time available per leg
+            // should change too; with a fixed value, raising the budget would leave it unused by the legs.
+            // Whatever isn't used naturally rolls over to the next leg (because remainingMillis doesn't drop)
             int legsLeft = rawLegGoals.size() - i;
             long legShare = Math.max(1, remainingMillis / legsLeft);
-            // 持ち時間の半分は上限緩和のために残す。最初の探索が全部使うと緩和が動けず、
-            // 奈落越えに必要な「橋の上限を緩めた探索」へ一度も到達しない
+            // Keep half the allowance for cap loosening. If the first search uses all of it, loosening can't
+            // run, and the "search with a loosened bridge cap" needed to cross the void is never reached
             long legDeadline = MonotonicTime.millis() + legShare;
             SearchLimits thisLegLimits = new SearchLimits(
                     limits.maxExpandedNodes() * LEG_NODE_BUDGET_FACTOR,
                     Math.max(1, legShare / 2), limits.heuristicWeight());
             BlockPos legGoal = StanceFinder.resolveGoal(view, rawLegGoals.get(i));
             BlockPos currentLegStart = legStart;
-            // 中間の経由地はチャンク平均から作った代表点でしかない。座標ぴったりへ寄せる意味が
-            // 無いどころか、そのための遠回りが生まれる。最後の区間だけは呼び出し側の指定に従う
+            // Intermediate waypoints are just representative points made from chunk averages. Snapping to the
+            // exact coordinate is not only pointless but creates detours. Only the last leg follows the caller
             boolean lastLegGoal = i == rawLegGoals.size() - 1;
             int legRadius = lastLegGoal ? goalRadius : COARSE_LEG_GOAL_RADIUS_BLOCKS;
-            // 区間ごとのゴールに向けたガイド。区間分割の計画（route）には広い箱のcoarseMapが
-            // 要るが、ガイドの計算はその区間の始点・終点周りだけで足りる——広い箱をそのまま
-            // 使い回すとDijkstraの状態数が箱の面積に比例して膨らみ、区間の数だけ払うことになる
-            // （COARSE_LEG_GUIDE_MARGIN_BLOCKS参照）。区間専用の狭い地図を別に組み直す
+            // Guide toward each leg's goal. Planning the leg split (route) needs the wide box's coarseMap, but
+            // computing the guide only needs the area around that leg's start and end: reusing the wide box
+            // inflates Dijkstra's state count in proportion to the box area and is paid once per leg
+            // (see COARSE_LEG_GUIDE_MARGIN_BLOCKS). Build a separate narrow map just for the leg
             CostToGo legCostToGo = costToGoGuideEnabled
                     ? CoarseRouter.costToGo(legCoarseMap(view, currentLegStart, legGoal, bounds, cancelled),
                             legGoal, false, bridgePolicy)
                     : null;
-            // 区間の境目で累積が0に戻らないよう、直前までの分を引き継ぐ（橋の連続長・設置数）
+            // Carry over what came before (bridge run length, placement count) so accumulation doesn't reset to 0 at leg boundaries
             Carryover carried = Carryover.after(steps);
             long legBegan = MonotonicTime.millis();
             PathResult legResult = search(view, thisLegLimits, legDeadline, cancelled, legCostToGo,
                     (pathfinder, c) -> pathfinder.search(currentLegStart, legGoal, c, carried, legRadius));
-            // 区間ごとに出す。チェーン全体の合算だけでは「どの区間で詰まったか」「始点から
-            // 動けていないのか、最後の区間だけ届かないのか」が切り分けられない——実機の
-            // 「展開30万・ステップ数2」がどちらなのかを、合算値からは判断できなかった。
-            // チェーンが走るのは通常探索が失敗した後だけとはいえ、1回で区間数ぶんの行が出るので
-            // debugに留める
+            // Log per leg. The total across the whole chain alone can't tell "which leg got stuck" or "whether
+            // it can't move from the start, or only the last leg falls short": from the totals, in-game
+            // "300k expansions, 2 steps" couldn't be classified either way.
+            // The chain runs only after the normal search fails, but it emits one line per leg each time, so
+            // keep it at debug
             if (LOGGER.isDebugEnabled()) {
-                LOGGER.debug("XaeroNav: 区間{}/{} {} → {} (到達={}, {}, 展開ノード数={}, ステップ数={}, {}ms)",
+                LOGGER.debug("XaeroNav: leg {}/{} {} → {} (reached={}, {}, expanded nodes={}, steps={}, {}ms)",
                         i + 1, rawLegGoals.size(), currentLegStart.toShortString(), legGoal.toShortString(),
                         legResult.complete(), legResult.termination(), legResult.expandedNodes(),
                         legResult.steps().size(), MonotonicTime.millis() - legBegan);
@@ -652,21 +680,22 @@ public final class PathfindingExecutor {
                     complete = true;
                 }
             } else if (lastLeg) {
-                // 最後の区間は本来の目的地。届かなくても拾えた分はそのまま使う（暫定経路の思想）
+                // The last leg is the real destination. Even if it falls short, use whatever was found (the provisional-path approach)
                 steps.addAll(legResult.steps());
             } else if (legResult.steps().size() > bestPartial.size()) {
                 bestPartial = legResult.steps();
             }
-            // 中間の経由地に届かなかったときは、そこで諦めずに同じ地点から次の経由地を狙う。
-            // 粗い地図は溶岩以外に「通行不能」を表現できず、チャンクを埋める垂直な壁は起伏0の
-            // 平坦な台地に見えるため、経由地が壁の天面のような到達不能な点に落ちることがある。
-            // 1つ届かないだけでチェーンごと捨てると、そういう地形で直接探索より悪くなる——
-            // 最後の区間は必ず本来の目的地なので、経由地が全滅しても直接探索と同じ結果に落ち着く。
-            // 部分経路をその場で継ぎ足さないのは、次の区間を同じ地点から引き直す以上そこで
-            // 経路が飛ぶため。拾えた分はbestPartialに取っておき、全区間が空振りしたときだけ使う
+            // When an intermediate waypoint isn't reached, don't give up there; aim at the next waypoint from the
+            // same point. The coarse map can't express "impassable" other than lava, and a vertical wall filling
+            // a chunk looks like a flat plateau with zero relief, so a waypoint can land on an unreachable spot
+            // like the top of a wall. Discarding the whole chain because one isn't reached would be worse than a
+            // direct search on such terrain; the last leg is always the real destination, so even if every
+            // waypoint fails the result settles to the same as a direct search.
+            // The partial path isn't appended on the spot because the next leg is redrawn from the same point,
+            // so the path would jump there. What was found is kept in bestPartial and used only if every leg misses
         }
         if (steps.isEmpty()) {
-            // どの区間も届かず、最後の区間も1手も引けなかった。ここで空を返すと案内が消える
+            // No leg reached its goal, and the last leg couldn't draw a single step. Returning empty here would make the guidance disappear
             steps.addAll(bestPartial);
         }
         return new PathResult(steps, complete ? PathResult.Termination.REACHED_GOAL : termination,
@@ -674,11 +703,11 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 区間専用の狭いコース地図を組む。{@link #COARSE_LEG_GUIDE_MARGIN_BLOCKS}参照。
+     * Builds a narrow coarse map just for a leg. See {@link #COARSE_LEG_GUIDE_MARGIN_BLOCKS}.
      *
-     * <p>チャンクの読み取り自体は{@code view}（区間分割全体で共有する広いChunkView）を使い回す
-     * ので追加の読み込みは発生しない——{@link LiveCoarseSampler#sample}に渡す{@code bounds}を
-     * 狭くするだけで、走査する列の数そのものを絞る。
+     * <p>Chunk reads reuse {@code view} (the wide ChunkView shared across the whole leg split), so no extra
+     * loading happens: only the {@code bounds} passed to {@link LiveCoarseSampler#sample} are narrowed, which
+     * cuts the number of columns scanned.
      */
     private static CoarseMap legCoarseMap(CellSource view, BlockPos legStart, BlockPos legGoal,
                                            SearchBounds outer, BooleanSupplier cancelled) {
@@ -700,13 +729,14 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 上限緩和の段に使ってよい期限（絶対時刻）を明示する版。
+     * Variant that specifies the deadline (absolute time) the cap-loosening stages may use.
      *
-     * <p>緩和には<b>必ず出番を残す</b>。最初の探索と同じ期限を渡すと、最初の探索がそれを使い切った
-     * 時点で緩和が動けない——実機（ジ・エンドの島渡り）で走る探索は全部{@link #solveCoarseGuided}の
-     * 区間探索なので、緩和は事実上一度も動けていなかった（探索の総時間だけが伸びて結果は変わらず）。
-     * 呼び出し側は最初の探索へ持ち時間の半分だけを渡し、この期限には全体を渡すことで
-     * 「最初の探索の取り分が余れば緩和がそのぶん長く走る」形にしてある。
+     * <p>Loosening must <b>always be left a turn</b>. Passing the same deadline as the first search means
+     * loosening can't run once the first search has used it up: in-game (End island crossing) every search
+     * that runs is a {@link #solveCoarseGuided} leg search, so loosening effectively never got to run (only
+     * the total search time grew, with no change in the result). The caller passes only half the allowance
+     * to the first search and the whole allowance as this deadline, so that "if the first search's share has
+     * time left over, loosening runs that much longer".
      */
     private static PathResult search(CellSource view, SearchLimits limits, long looseningDeadline,
                                      BooleanSupplier cancelled, CostToGo costToGo, SearchCall run) {
@@ -714,16 +744,17 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * <b>ゴールが探索範囲の外にあると分かっている探索</b>は、下の梯子（貪欲さを上げる・上限を
-     * 緩める・質を問い直す）が1つも効かない——どれも「届かせる」ための仕掛けで、届いた経路にしか
-     * 出番が無いのに対し、範囲外のゴールへは<b>原理的に届かない</b>からだ。
+     * For <b>a search whose goal is known to be outside the search bounds</b>, none of the ladder below
+     * (raising greediness, loosening caps, reconsidering quality) helps: they're all mechanisms for
+     * "reaching the goal" and only matter for paths that reach it, whereas a goal outside the bounds is
+     * <b>unreachable in principle</b>.
      *
-     * <p>それでも梯子を回すと、最初の探索は{@link #FIRST_PASS_PERCENT}しか使えないまま
-     * 残りを2回の空振りに使う。返るのは40%の予算で引けた短い部分経路で、
-     * <b>末端から継ぎ足す回数がそのぶん増える</b>——繋ぎ目こそが遠回りの出どころなので、
-     * 短い部分経路は質にも効く。ここは満額の予算で1回だけ解く。
+     * <p>Running the ladder anyway leaves the first search with only {@link #FIRST_PASS_PERCENT} and spends
+     * the rest on two misses. What comes back is a short partial path drawn with 40% of the budget, and
+     * <b>the number of extensions from the end grows accordingly</b>: the seams are exactly where detours
+     * come from, so short partial paths hurt quality too. Here it's solved once with the full budget.
      *
-     * @param goalInsideBounds ゴールが探索範囲の中にあるか（{@link #goalInsideBounds}）
+     * @param goalInsideBounds whether the goal is inside the search bounds ({@link #goalInsideBounds})
      */
     private static PathResult search(CellSource view, SearchLimits limits, long looseningDeadline,
                                      BooleanSupplier cancelled, CostToGo costToGo, SearchCall run,
@@ -737,11 +768,12 @@ public final class PathfindingExecutor {
         boolean capBlocked = pathfinder.bridgeRunCapBlocked() || pathfinder.submergedRunCapBlocked()
                 || pathfinder.fallDamageCapBlocked() || pathfinder.riskyJumpBlocked()
                 || pathfinder.placedBudgetBlocked() || pathfinder.placementBlockedByEmptyInventory();
-        // 上限の緩和より先に貪欲さを上げる。<b>重みを上げる方が圧倒的に安い</b>——実機ジ・エンドの
-        // 島渡りで、緩和の段は毎回フル予算(60万ノード・7秒)を焼くのに対し、重み2.5は19.8万で解ける。
-        // 緩和を先に置くと、そこで持ち時間を使い切って再挑戦が一度も走らないまま終わる
-        // （実機相当の時間枠4.8秒で実測: 1段目24万＋緩和で使い切り、届かず）。
-        // 上限が本当に原因なら重みを上げても解けないので、その場合だけ下の緩和へ進む
+        // Raise greediness before loosening caps. <b>Raising the weight is far cheaper</b>: on the in-game End
+        // island crossing, the loosening stages burn the full budget (600k nodes, 7 s) every time, while
+        // weight 2.5 solves it in 198k. Putting loosening first uses up the allowance there, and the retry
+        // never runs (measured with an in-game-equivalent 4.8 s window: 240k in stage 1 + loosening used it
+        // all, goal not reached). If the caps really are the cause, raising the weight won't solve it, so only
+        // then proceed to the loosening below
         if (!result.complete() && result.termination() != PathResult.Termination.CANCELLED) {
             PathResult greedier = retryGreedier(view, limits, looseningDeadline, cancelled, costToGo, run, result);
             if (greedier.complete()) {
@@ -750,29 +782,33 @@ public final class PathfindingExecutor {
         }
         if (!result.complete() && result.termination() != PathResult.Termination.CANCELLED && capBlocked
                 && view.strictLimits()) {
-            // 上限は「必要なら緩める希望」ではなく「守る線」だと設定で言われている。緩めれば届くかもしれない
-            // ことだけを結果に残し、届かなかった理由の表示に回す
+            // The config says the caps are "a line to hold", not "a wish to loosen if needed". Record only that
+            // loosening might reach the goal, for display as the reason the goal wasn't reached
             return PathSafetyChecker.annotate(view, result.withLimitsHeld());
         }
         if (!result.complete() && result.termination() != PathResult.Termination.CANCELLED && capBlocked) {
-            // 上限のせいで捨てた移動がある。詰むよりは長い橋・息継ぎの要る潜水の方がマシ、という
-            // 優先順で上限を段階的に緩めて試す。上限と落下ダメージはまとめて緩める——片方だけ緩めても、
-            // もう片方で詰んでいれば同じ結果をもう一度払うだけになるから。
+            // Moves were discarded because of the caps. Try loosening the caps step by step, on the priority
+            // that a long bridge or a dive needing breath is better than a dead end. Caps and fall damage are
+            // loosened together: loosening only one just pays for the same result again if the other is
+            // also stuck.
             //
-            // <b>予算切れ（NODE_BUDGET/TIME_LIMIT）でも緩める。</b>以前はEXHAUSTED限定だったが、
-            // それだと「探索範囲の中の到達可能セルを全部舐め切れる」ほど狭い地形でしか緩和が
-            // 発動しない。実機（ジ・エンドの崖ぎわ）で踏んだのはその裏返しで、島が大きいと
-            // 到達可能セルだけで予算を使い切り、45マスの奈落を上限30のまま渡ろうとして
-            // <b>一度も緩まないまま失敗し続けた</b>（合成地形: 島半径60まではEXHAUSTED＝緩和あり、
-            // 半径80でNODE_BUDGET＝緩和なし）。同じ島の途中まで橋を架けた地点からだと到達可能
-            // セルが減ってEXHAUSTEDに届くので、「崖ぎわからだけ経路が出ない」という形で表れる。
+            // <b>Loosen even on budget exhaustion (NODE_BUDGET/TIME_LIMIT).</b> It used to be EXHAUSTED-only,
+            // but then loosening only triggers on terrain narrow enough that "every reachable cell within the
+            // search bounds can be fully scanned". What we hit in-game (End cliff edge) was the flip side: with
+            // a large island, the reachable cells alone used up the budget, and the search tried to cross a
+            // 45-block void with the cap still at 30, <b>failing repeatedly without ever loosening</b>
+            // (synthetic terrain: up to island radius 60 EXHAUSTED = loosening; radius 80 NODE_BUDGET = no
+            // loosening). From a point where a bridge has been built partway across the same island, the
+            // reachable cells shrink and it reaches EXHAUSTED, so it shows up as "no path only from the cliff edge".
             //
-            // 資源不足を理由に同じ探索を払い直すわけではない——{@code capBlocked}は「上限が実際に
-            // 移動を捨てた」という探索自身の報告で、緩めた探索は別の探索になる。総時間は
-            // looseningDeadlineが縛るので、緩和の段は残り時間ぶんしか走らない
-            // 危険な跳躍だけは別扱いで、上限を緩める段を全部試し切ってから開ける（{@link #capStages}）。
-            // 跳躍を捨てたのが最初の探索とは限らない——上限を緩めて初めて届いた場所に、
-            // 跳ぶしかない隙間があることがあるので、1群目の報告も見る
+            // This isn't paying for the same search again because of a resource shortage: {@code capBlocked} is
+            // the search's own report that "a cap actually discarded moves", and the loosened search is a
+            // different search. Total time is bounded by looseningDeadline, so the loosening stages only run for
+            // the remaining time.
+            // Risky jumps alone are handled separately and opened only after every cap-loosening stage has been
+            // tried ({@link #capStages}). It isn't necessarily the first search that discarded the jump: a place
+            // reached only after loosening a cap may have a gap that can only be jumped, so also check the
+            // first group's report
             boolean budgetBlocked = pathfinder.placedBudgetBlocked();
             boolean emptyInventoryBlocked = pathfinder.placementBlockedByEmptyInventory();
             Loosening capsOnly = runStages(view, limits, looseningDeadline, cancelled, costToGo, run,
@@ -787,7 +823,7 @@ public final class PathfindingExecutor {
                     result = withJumps.result();
                 }
             }
-            // 緩和まで来た経路は「そもそも道が無い」側の話なので、質を問い直さない（下記）
+            // A path that got as far as loosening is a case of "there's no way at all", so quality isn't reconsidered (below)
             return PathSafetyChecker.annotate(view, result);
         }
         return refineQuality(view, limits, looseningDeadline, cancelled, costToGo, run,
@@ -795,29 +831,31 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * <b>予算を焼き切って届かなかったら、探索の貪欲さを上げてもう一度試す。</b>
+     * <b>If the budget burns out without reaching the goal, raise the search's greediness and try again.</b>
      *
-     * <p>広い足場の上から長い奈落を渡る地形（ジ・エンドの島渡り）では、
-     * <b>島の上でヒューリスティックがほぼ一定になる</b>——どこにいてもゴールは奈落の向こうで、
-     * 残りの見積もりは「縁までの距離＋橋の値段」だから差が付きにくい。重み1.5の探索は
-     * そこで幅優先に近くなり、<b>橋に手を伸ばす前に島を舐め尽くして予算が尽きる</b>。
-     * 橋1マスは徒歩10マス相当なので、100マスの奈落を渡る経路に届くには
-     * 「徒歩1000マス分の陸地」を先に展開し終える必要がある。
+     * <p>On terrain crossing a long void from a wide platform (End island crossing),
+     * <b>the heuristic is nearly constant across the island</b>: wherever you are, the goal is beyond the void,
+     * and the remaining estimate is "distance to the edge + cost of the bridge", so it barely differs. A
+     * weight-1.5 search becomes close to breadth-first there and <b>exhausts the budget scanning the island
+     * before reaching for a bridge</b>. One bridge block is worth 10 blocks of walking, so reaching a path
+     * across a 100-block void requires first expanding "1000 blocks' worth of land on foot".
      *
-     * <p>実測（ユーザーが報告した地点、24339列の島の突端から北東99ブロックの島へ）:
+     * <p>Measurements (the spot a user reported, from the tip of island at column 24339 to the island 99 blocks
+     * northeast):
      *
      * <pre>
-     * 重み1.5 → 60万ノードで未到達    重み2.5 → 19.8万で到達
-     * 重み2.0 → 60万ノードで未到達    重み3.0 → 10.7万で到達
+     * weight 1.5 -> not reached at 600k nodes    weight 2.5 -> reached at 198k
+     * weight 2.0 -> not reached at 600k nodes    weight 3.0 -> reached at 107k
      * </pre>
      *
-     * <p><b>cost-to-goガイドが無いとどの重みでも解けない</b>（全部60万で未到達）。
-     * 島の縁へ導いているのはガイドの方で、重みはそれを信じる度合いを上げているだけ。
+     * <p><b>Without the cost-to-go guide no weight solves it</b> (all unreached at 600k). It's the guide that
+     * leads to the island's edge; the weight only raises how much it is trusted.
      *
-     * <p>質は確実に落ちる（{@code refineQuality}が重みを下げているのと正反対のことをする）が、
-     * ここへ来るのは<b>経路が1本も出ていない</b>ときだけ——遠回りな案内と案内なしの比較になる。
-     * 上限の緩和を試し切った後に置くのも同じ理由で、まず「上限のせいで道が消えていないか」を
-     * 確かめてから貪欲さに手を付ける。
+     * <p>Quality definitely drops (it does the exact opposite of {@code refineQuality} lowering the weight),
+     * but this is reached only when <b>not a single path has come out</b>: the comparison is between
+     * roundabout guidance and no guidance.
+     * It's placed after cap loosening has been fully tried for the same reason: first check "whether the way
+     * disappeared because of the caps" before touching greediness.
      */
     private static PathResult retryGreedier(CellSource view, SearchLimits limits, long deadline,
                                              BooleanSupplier cancelled, CostToGo costToGo, SearchCall run,
@@ -843,46 +881,50 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * <b>余裕があるときだけ、経路の質を問い直してもう一度だけ引き直す。</b>引き金は2つあり、
-     * どちらか一方でも立てば<b>1回だけ</b>引き直す（両方立てば両方の調整を掛けた1回）。
+     * <b>Only when there's slack, reconsider the path's quality and redo it just once.</b> There are two
+     * triggers, and if either fires it redoes <b>just once</b> (if both fire, one redo with both adjustments).
      *
-     * <h4>引き金1: 奈落を渡っている（重みを下げる）</h4>
+     * <h4>Trigger 1: crossing the void (lower the weight)</h4>
      *
-     * <p>重み付きA*は{@code f = g + w·h}で取り出すので、<b>目的地から一度遠ざかる経路を系統的に嫌う</b>。
-     * 実機ジ・エンド(2481,-488)で踏んだのがまさにこれで、谷を挟んだ39ブロック東へ行くのに
-     * <b>15マスの橋（うち7マスは奈落の上）を架けて突っ切る</b>経路が出ていた。しかもコストモデルの側は
-     * 既に南から回り込む方を安いと言っている——重み1.5の経路が596.3tick、1.3では橋ゼロの522.2tick。
-     * 探索が貪欲なだけで、値段付けは間違っていなかった。
+     * <p>Weighted A* pops by {@code f = g + w·h}, so it <b>systematically dislikes paths that first move away
+     * from the destination</b>. That's exactly what we hit in the in-game End (2481,-488): to go 39 blocks east
+     * across a valley, it produced a path that <b>built a 15-block bridge (7 of them over the void) straight
+     * across</b>. And the cost model already said going around from the south was cheaper: weight 1.5's path was
+     * 596.3 ticks, while at 1.3 it was 522.2 ticks with zero bridges. The search was merely greedy; the pricing
+     * wasn't wrong.
      *
-     * <p><b>重みを下げるのは全体ではなくここだけ</b>。実機の保存地形で測った平均は割に合わない——
-     * 経路コストの改善は{@code -1.9%}(1.35)〜{@code -5.0%}(1.15)しかないのに、展開ノードは
-     * {@code +17%}〜{@code +46%}増える（オーバーワールドでは{@code -0.7%}に対し{@code +5%}）。
-     * <b>損は平均ではなく一部の経路に集中している</b>ので、その一部だけを狙い撃つ。
+     * <p><b>The weight is lowered only here, not globally</b>. Averages measured on saved in-game terrain don't
+     * pay off: path cost improves only {@code -1.9%} (1.35) to {@code -5.0%} (1.15), while expanded nodes grow
+     * {@code +17%} to {@code +46%} (in the Overworld, {@code +5%} for {@code -0.7%}).
+     * <b>The loss is concentrated in some paths rather than on average</b>, so only those are targeted.
      *
-     * <p>引き金を「奈落・致死落差の上を通る」に置くのは、そこが<b>貪欲さを抑えたい判断</b>
-     * だから。{@code VOID_BRIDGE_PENALTY_TICKS}は元々「他に道が無いときの最後の手段」という値段で、
-     * 回り込む道があるかどうかを確かめずに払ってよいものではない。橋の無い経路には引き金が
-     * 掛からないので、大半の探索は1回で終わる。
+     * <p>The trigger is "passing over the void or a lethal drop" because that's <b>a decision where we want to
+     * curb greediness</b>. {@code VOID_BRIDGE_PENALTY_TICKS} was originally priced as "the last resort when there
+     * is no other way", not something to pay without checking for a way around. Paths without bridges don't
+     * fire the trigger, so most searches finish in one pass.
      *
-     * <h4>引き金2: 持ち物の大半を使い切る（設置の値段を上げる）</h4>
+     * <h4>Trigger 2: using up most of the inventory (raise the placement cost)</h4>
      *
-     * <p>予算（{@link Tolerances#placedBlockBudget()}）は<b>実行できるか</b>の線引きでしかない。
-     * 手持ち40個で40個置く経路は「実行できる」が、少し回り込めば10個で済むならそちらの方がいい
-     * ——<b>置いた先で足りなくなるのは、その経路を歩き終えた後</b>だからだ（経路キャッシュのキーは
-     * 目的地だけなので、途中で減っても引き直されない）。
+     * <p>The budget ({@link Tolerances#placedBlockBudget()}) only draws the line of <b>whether it's feasible</b>.
+     * A path placing 40 of the 40 blocks in hand is "feasible", but if going around a little needs only 10, that
+     * is better: <b>running short happens after you finish walking that path</b> (the path cache key is only the
+     * destination, so it isn't redrawn when the count drops along the way).
      *
-     * <p>そこで{@link #THRIFT_TRIGGER_FRACTION}を超えて使う経路が出たときだけ、設置の手間を
-     * {@link #THRIFT_PLACEMENT_COST_SCALE}倍にして引き直す。<b>係数は探索開始時に決まる一律の値</b>
-     * ——残り枚数で値段を変えると、同じ辺の値段が到達経路によって変わってA*の前提が崩れる。
+     * <p>So only when a path using more than {@link #THRIFT_TRIGGER_FRACTION} comes out, redo it with the
+     * placement effort multiplied by {@link #THRIFT_PLACEMENT_COST_SCALE}. <b>The factor is a uniform value
+     * fixed at search start</b>: changing the price by the remaining count would make the same edge's price
+     * depend on the path that reached it, breaking A*'s assumptions.
      *
-     * <p>採るのは<b>設置が減って、本来の値段での総コストが{@link #THRIFT_MAX_COST_INCREASE}以内の
-     * 悪化に収まるとき</b>だけ。値段を割り増して解いた以上、そのままの総コストで比べると必ず
-     * 「改善した」ことになってしまうので、割増ぶんを差し引いてから比べる（{@link #trueCost}）。
+     * <p>It's taken only <b>when placements decrease and the total cost at the true prices worsens by no more
+     * than {@link #THRIFT_MAX_COST_INCREASE}</b>. Since it was solved with marked-up prices, comparing the total
+     * cost as-is would always count as "improved", so the markup is subtracted before comparing
+     * ({@link #trueCost}).
      *
-     * <h4>共通</h4>
+     * <h4>Common</h4>
      *
-     * <p>緩和の梯子を通った結果には掛けない——あちらは「上限を外さないと経路が一本も出ない」場所なので、
-     * 質を問い直す前提（別の道がある）が成り立たない。
+     * <p>Not applied to results that went through the loosening ladder: those are places where "no path comes
+     * out at all unless the caps are removed", so the premise for reconsidering quality (another way exists)
+     * doesn't hold.
      */
     private static PathResult refineQuality(CellSource view, SearchLimits limits,
                                              long deadline, BooleanSupplier cancelled,
@@ -891,13 +933,13 @@ public final class PathfindingExecutor {
         if (!result.complete()) {
             return result;
         }
-        // 分母は<b>最初の探索が実際に渡された予算</b>（{@link #firstPassLimits}）。フル予算と
-        // 比べると、1段目の上限がそれより小さい以上この条件は常に通り、保護が丸ごと効かなくなる
+        // The denominator is <b>the budget the first search was actually given</b> ({@link #firstPassLimits}).
+        // Comparing with the full budget, this condition always passes since stage 1's limit is smaller, and the protection is lost entirely
         if (result.expandedNodes()
                 > firstPassLimits(limits).maxExpandedNodes() * REFINE_MAX_FIRST_PASS_FRACTION) {
             return result;
         }
-        // 引き金は独立に立つ。両方立てば、両方の調整を掛けた探索を1回だけ走らせる
+        // The triggers fire independently. If both fire, run a single search with both adjustments applied
         boolean lowerWeight = limits.heuristicWeight() > REFINE_HEURISTIC_WEIGHT
                 && result.steps().stream().anyMatch(step -> step.risk() == PathRisk.VOID_BELOW);
         boolean thrift = thrifty(view, result, carriedPlacements);
@@ -917,11 +959,11 @@ public final class PathfindingExecutor {
         if (!attempt.complete()) {
             return result;
         }
-        // 元の経路は割増していないので、その総コストがそのまま本来の値段
+        // The original path isn't marked up, so its total cost is the true price as-is
         double before = totalCost(result);
         double after = trueCost(attempt, scale);
-        // 「安くなった」か「同じくらいの値段で設置が減った」なら採る。後者を許すのが節約の本体で、
-        // 買値の上限が THRIFT_MAX_COST_INCREASE（節約を狙っていない引き直しでは0＝従来どおり）
+        // Take it if "it got cheaper" or "placements dropped at about the same price". Allowing the latter is the
+        // heart of thrift, and the max purchase price is THRIFT_MAX_COST_INCREASE (0 = as before for redos not aiming at thrift)
         boolean worthIt = after < before || placements(attempt) < placements(result);
         if (worthIt && after <= before * (1.0 + (thrift ? THRIFT_MAX_COST_INCREASE : 0.0))) {
             return attempt;
@@ -930,13 +972,13 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * この経路は持ち物の大半を使い切るか。予算が無い（クリエイティブ・設定offなど）なら
-     * <b>希少さという概念自体が無い</b>ので問わない。
+     * Whether this path uses up most of the inventory. When there's no budget (creative, setting off, etc.)
+     * <b>the concept of scarcity doesn't exist</b>, so it isn't asked.
      *
-     * <p>数えるのは<b>手前の区間が使うと決めているぶんも含めた合計</b>。この探索が返した経路の
-     * 設置数だけで見ると、区間に割って解いたときは<b>いつも余裕があるように見える</b>——
-     * 予算そのものは全区間で共通（手持ちの枚数）なので、比べる相手も全区間の合計でなければ
-     * 意味が合わない。
+     * <p>What's counted is <b>the total including what preceding legs have committed to use</b>. Looking only
+     * at the placements of the path this search returned, a split into legs <b>always looks like it has slack</b>:
+     * the budget itself is shared across all legs (the blocks in hand), so the comparison must also be against
+     * the total across all legs to make sense.
      */
     private static boolean thrifty(CellSource view, PathResult result, int carriedPlacements) {
         int budget = view.placedBlockBudget();
@@ -948,14 +990,15 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 割り増した設置の値段を元に戻した総コスト。<b>2つの経路を同じ値段で比べるためのもの</b>で、
-     * 割増したまま比べると「割増した方の探索が割増した目的関数で勝つ」だけの比較になる。
+     * Total cost with the marked-up placement price reverted. <b>It's for comparing two paths at the same
+     * prices</b>; comparing with the markup still applied just means "the marked-up search wins on the
+     * marked-up objective".
      *
-     * <p>水中で置いた足場だけは差し引きが僅かに足りない（{@code relax}が
-     * {@code SUBMERGED_TRAVEL_PENALTY}を辺コスト全体に掛けるため）。<b>ずれる向きは安全側</b>
-     * ——引き直した経路の見積もりが実際より高くなるので、採用しすぎる方には倒れない。
+     * <p>Only supports placed underwater are slightly under-subtracted (because {@code relax} applies
+     * {@code SUBMERGED_TRAVEL_PENALTY} to the whole edge cost). <b>The error leans to the safe side</b>: the
+     * redone path's estimate comes out higher than reality, so it never tips toward over-accepting.
      *
-     * @param placementScale その経路を求めた探索が使っていた設置の値段の倍率。1.0なら素通し
+     * @param placementScale the placement cost multiplier used by the search that found the path. 1.0 passes through
      */
     private static double trueCost(PathResult result, double placementScale) {
         return totalCost(result)
@@ -971,10 +1014,11 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 緩和の1群を順に試す。到達した段があればその結果を、無ければ{@code null}を{@link Loosening}で返す。
+     * Tries one group of loosening stages in order. Returns the result of the stage that reached the goal, if
+     * any, otherwise {@code null}, wrapped in a {@link Loosening}.
      *
-     * <p>{@code riskyJumpBlocked}には、この群のどこかで「危険な跳躍を理由に手を捨てた」ことが
-     * 立つ。呼び出し側はそれを見て次の群（跳躍を開ける段）を作るか決める。
+     * <p>{@code riskyJumpBlocked} is set if anywhere in this group "a move was discarded because of a risky
+     * jump". The caller looks at it to decide whether to build the next group (the stages that open jumps).
      */
     private static Loosening runStages(CellSource view, SearchLimits limits, long looseningDeadline,
                                        BooleanSupplier cancelled, CostToGo costToGo, SearchCall run,
@@ -983,11 +1027,11 @@ public final class PathfindingExecutor {
         for (Tolerances tolerances : stages) {
             long remainingMillis = looseningDeadline - MonotonicTime.millis();
             if (remainingMillis <= 0) {
-                // 上限は疑われた（capBlocked）が、緩和を試し切る前に持ち時間が尽きた。上限ではなく
-                // 予算の問題だという手がかりなので残す——ただし予算が厳しい地形では毎回出るので
-                // debugに留める（実機の既定ではdebugは出ない）
+                // The caps were suspected (capBlocked), but the allowance ran out before loosening was fully
+                // tried. It's a hint that the problem is the budget, not the caps, so keep it; but on terrain
+                // with a tight budget it fires every time, so keep it at debug (debug is off by default in-game)
                 if (LOGGER.isDebugEnabled()) {
-                    LOGGER.debug("XaeroNav: 上限を疑ったが緩和の時間が残っていなかった");
+                    LOGGER.debug("XaeroNav: suspected the caps, but no time was left for loosening");
                 }
                 break;
             }
@@ -999,7 +1043,7 @@ public final class PathfindingExecutor {
                 return new Loosening(attempt, riskyJumpBlocked);
             }
             riskyJumpBlocked |= stage.riskyJumpBlocked();
-            // EXHAUSTED以外（予算切れ・キャンセル）は、更に緩めても同じ壁に当たるだけ
+            // Anything other than EXHAUSTED (budget exhausted, cancelled) just hits the same wall even if loosened further
             if (attempt.termination() != PathResult.Termination.EXHAUSTED) {
                 break;
             }
@@ -1008,49 +1052,54 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * @param result           到達した経路。この群では到達しなかったなら{@code null}
-     * @param riskyJumpBlocked この群のどこかで危険な跳躍を理由に手を捨てたか
+     * @param result           the path that reached the goal, or {@code null} if this group didn't reach it
+     * @param riskyJumpBlocked whether a move was discarded somewhere in this group because of a risky jump
      */
     private record Loosening(PathResult result, boolean riskyJumpBlocked) {
     }
 
     /**
-     * 上限を緩める段（{@link #RUN_CAP_LOOSEN_MULTIPLIERS}倍したものの後に無制限）。落下ダメージは
-     * 全段で{@link #loosenedFallDamagePoints}の1段だけ。
+     * Cap-loosening stages ({@link #RUN_CAP_LOOSEN_MULTIPLIERS} times the caps, then unlimited). Fall damage is
+     * a single step, {@link #loosenedFallDamagePoints}, across all stages.
      *
-     * <p><b>落下ダメージを1段目から開けるのが要点</b>——直前に失敗した探索が既定の許容量そのもので
-     * 走っているので、1段目に同じ値を置くと、そちらだけが原因だったときに何も変えない探索を
-     * 1回まるごと捨てることになる。
+     * <p><b>The key is opening fall damage from the first stage</b>: the search that just failed ran with the
+     * default tolerance itself, so putting the same value in the first stage would throw away a whole search
+     * that changes nothing when fall damage was the only cause.
      *
-     * <p><b>危険な跳躍（奈落・致死落差の上）だけは、この群を全部試し切ってから開ける</b>
-     * （呼び出し側が{@code allowRiskyJumps=true}でもう一度この群を作る）。以前は1段目から無条件に
-     * 開けていたが、それだと<b>橋の上限で詰まっただけの探索でも、経路のどこであれ奈落を跳ぶ手が
-     * 合法になっていた</b>——実機ジ・エンドのように橋が常用される地形では毎回開くので、
-     * 回り込める島の内部の亀裂まで跳んでいた（ユーザー報告「エンド島内部で奈落を越えたジャンプ」）。
-     * ユーザーの意図は「同じ島の中なら外周を回れ、島と島の間なら跳べ」で、その使い分けは
-     * <b>「橋を架けてでも回れるか」まで含めた「他に道があるか」</b>。
+     * <p><b>Only risky jumps (over the void or a lethal drop) are opened after this whole group has been tried</b>
+     * (the caller builds this group again with {@code allowRiskyJumps=true}). They used to be opened
+     * unconditionally from the first stage, but then <b>even a search that was merely stuck on the bridge cap
+     * made jumping over the void legal anywhere along the path</b>: on terrain like the in-game End where
+     * bridges are routine it opened every time, so it jumped even across cracks inside an island that could
+     * be walked around (user report: "a jump across the void inside an End island"). The user's intent is
+     * "within the same island go around the rim, between islands jump", and that distinction is
+     * <b>"is there another way", including "can it go around even by building a bridge"</b>.
      *
-     * <p>跳ぶことになった区間には{@code PathRisk.VOID_BELOW}で警告色が付き、
-     * {@code ActionCosts#dropRiskPenalty}が隙間の深さぶんの危険料を積む——<b>開けたあとも、
-     * 短い回り道があるならそちらが勝つ</b>。
+     * <p>Legs that end up jumping get a warning color via {@code PathRisk.VOID_BELOW}, and
+     * {@code ActionCosts#dropRiskPenalty} adds a risk charge for the gap's depth: <b>even after opening, a short
+     * detour wins if there is one</b>.
      *
-     * <p><b>持ち物のブロックの予算だけは、他の上限と違って真っ先に外す。</b>あちらは「その移動を
-     * 作らない」だけで探索の形は変わらないが、<b>予算は前線が進むほど全ての設置の枝を消していく</b>
-     * ——{@code PathNode.placedTotal}はノードの同一性に含まれない近似なので、集約されたセルに
-     * 残った累積が実際より多いと、そこから先の橋が理由なく消える。結果、予算内で解けない地形では
-     * 探索が橋以外の道を延々と探して予算を焼き切る。
+     * <p><b>Only the inventory block budget, unlike the other caps, is removed first.</b> Those just "don't
+     * create that move" and leave the shape of the search unchanged, but <b>the budget prunes every placement
+     * branch as the frontier advances</b>: {@code PathNode.placedTotal} is an approximation not part of the
+     * node's identity, so if the accumulation left on a merged cell is higher than reality, bridges beyond it
+     * vanish for no reason. As a result, on terrain not solvable within budget, the search endlessly looks for
+     * ways other than bridges and burns the budget.
      *
-     * <p>実測（実機ジ・エンドの島渡り 1233,1142→1288,1080、橋が43本必要）:
-     * <b>予算42以上と8以下では到達するのに、16〜40では60万ノードを焼いて6ステップで終わる</b>。
-     * 少ない側で通るのは橋が即座に切られて探索が橋を諦めるから。中間の帯だけが壊れる。
+     * <p>Measurements (in-game End island crossing 1233,1142->1288,1080, needing 43 bridge blocks):
+     * <b>with a budget of 42 or more, or 8 or less, it reaches the goal, but with 16-40 it burns 600k nodes and
+     * ends at 6 steps</b>. The low side works because bridges are cut off immediately and the search gives up
+     * on bridges. Only the middle band breaks.
      *
-     * <p>倍率で緩めないのは枚数が地形の都合で増えないから。外すなら一度に外す。ここまで来た経路は
-     * 「手持ちでは足りないが、それ以外に道が無い」ものなので、HUDが不足を伝える。
+     * <p>It isn't loosened by a multiplier because the count doesn't grow with terrain needs. If it's removed,
+     * remove it at once. A path that gets this far is one where "what's in hand isn't enough, but there's no
+     * other way", so the HUD reports the shortage.
      *
-     * @param budgetBlocked 最初の探索が予算を理由に設置を捨てたか。立っていれば予算を外した段を
-     *                      先頭に積む——予算が原因なら、他の上限をいくら緩めても同じ壁に当たる
+     * @param budgetBlocked whether the first search discarded placements because of the budget. If set, the
+     *                      stage with the budget removed goes first: if the budget is the cause, loosening the
+     *                      other caps however much just hits the same wall
      */
-    // 段の順序そのものが直した中身なので、探索を回さずに直接確かめられるようにpackage-privateにしてある
+    // The stage order itself is what was fixed, so it's package-private to allow checking it directly without running a search
     static List<Tolerances> capStages(CellSource view, boolean allowRiskyJumps, boolean budgetBlocked,
                                        boolean emptyInventoryBlocked) {
         RunCaps base = RunCaps.of(view);
@@ -1060,8 +1109,8 @@ public final class PathfindingExecutor {
         if (budgetBlocked && budget > 0) {
             stages.add(new Tolerances(base, fallPoints, allowRiskyJumps, 0, false));
         }
-        // 置けるブロックを1つも持っていないせいで設置を捨てた場合も、上限を緩める前にここを開ける。
-        // 他の上限をいくら緩めても「橋そのものが生成されない」という壁は動かない
+        // If placements were discarded because there isn't a single placeable block in hand, open this before
+        // loosening caps too. Loosening other caps however much won't move the wall of "the bridge isn't generated at all"
         if (emptyInventoryBlocked) {
             stages.add(new Tolerances(base, fallPoints, allowRiskyJumps, 0, true));
         }
@@ -1074,15 +1123,16 @@ public final class PathfindingExecutor {
     }
 
     /**
-     * 詰み回避で開ける落下ダメージの許容量（0.5ハート単位）。
+     * Fall damage tolerance (in half-hearts) opened to avoid a dead end.
      *
-     * <p><b>無制限の段は作らない。</b>橋の長さや潜水と違って、上限を外すと即死する落下が案内に
-     * 出る——「詰みよりはマシ」が成り立たない唯一の項目なので、体力から決まる上限で止める。
-     * 既定値が体力の1/3なので、その1.5倍＝体力の1/2まで開ける（体力満タンなら落差13マス）。
-     * エリトラを持たないプレイヤーがジ・エンドの低い島へ降りる、という本来の用途にはこれで足りる。
+     * <p><b>There is no unlimited stage.</b> Unlike bridge length or diving, removing the cap would put
+     * instantly lethal falls into the guidance: it's the one item where "better than a dead end" doesn't hold,
+     * so it stops at a cap derived from health. The default is 1/3 of health, so this opens up to 1.5x that =
+     * 1/2 of health (a 13-block drop at full health). That's enough for the intended use: a player without an
+     * elytra descending to a low island in the End.
      *
-     * <p>{@code fallDamageToleranceEnabled}がoffなら0のまま——設定で明示的に断られている以上、
-     * 詰み回避であっても勝手に痛い落下を提示しない。
+     * <p>If {@code fallDamageToleranceEnabled} is off it stays 0: since the config explicitly declined it,
+     * painful falls aren't offered on its own initiative even to avoid a dead end.
      */
     private static int loosenedFallDamagePoints(CellSource view) {
         int configured = view.maxFallDamagePoints();
@@ -1096,16 +1146,17 @@ public final class PathfindingExecutor {
                 scaleCap(base.maxSubmergedTicks(), multiplier));
     }
 
-    /** {@code 0}は既に無制限なので、乗じてもそのまま無制限に留まる。 */
+    /** {@code 0} is already unlimited, so multiplying keeps it unlimited. */
     private static int scaleCap(int cap, int multiplier) {
         return cap == 0 ? 0 : cap * multiplier;
     }
 
     /**
-     * 走っている探索と待っている探索を捨てる。受け取る側が居なくなったとき（目的地の消去・ログアウト）用。
+     * Discards the running search and the queued searches. For when there's no longer a receiver (destination
+     * cleared, logout).
      *
-     * <p>世代を進めるだけでは結果が捨てられるだけで、探索は予算を使い切るまで走り続ける。その間は
-     * {@code ChunkView}がチャンクを掴み続け、次の探索もこのワーカーの後ろで待たされる。
+     * <p>Merely advancing the generation only discards the result; the search keeps running until it uses up
+     * its budget. Meanwhile the {@code ChunkView} keeps holding chunks, and the next search waits behind this worker.
      */
     public void cancelAll() {
         PathfindingJob previous = currentJob.getAndSet(null);
@@ -1122,13 +1173,13 @@ public final class PathfindingExecutor {
         if (previous != null) {
             previous.cancel();
         }
-        // 実行中1件は協調cancelへ任せ、まだ始まっていない旧jobは捨てる。待機列には常に最新だけ。
+        // Leave the one running job to cooperative cancellation and drop old jobs that haven't started. The queue only ever holds the latest.
         executor.getQueue().clear();
 
-        // executor.submit(Runnable)ではなくexecute(Runnable)を使う。submitはFutureTaskで
-        // ラップするため、下のcatch (Error)からのrethrowはFutureTask#run内のcatch (Throwable)に
-        // 飲まれ、スレッドの未捕捉例外ハンドラへ届かない。executeなら本当に伝播し、
-        // ThreadPoolExecutorが死んだworkerを補充する（DiagnosticJobRunner.submitと同じ方針）。
+        // Use execute(Runnable), not executor.submit(Runnable). submit wraps in a FutureTask, so the rethrow from
+        // catch (Error) below would be swallowed by catch (Throwable) inside FutureTask#run and never reach the
+        // thread's uncaught exception handler. With execute it really propagates, and ThreadPoolExecutor
+        // replaces the dead worker (same approach as DiagnosticJobRunner.submit).
         executor.execute(() -> {
             try {
                 PathResult result = work.apply(job::isCancelled);

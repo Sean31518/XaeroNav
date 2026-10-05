@@ -14,39 +14,39 @@ import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>層1が出す中間目標に、層2が必ず「立てる場所」を見つけられること</b>を実機のジ・エンド
- * 保存データで固定する。
+ * Pins down with real End save data that <b>layer 2 always finds "a place to stand" for the intermediate
+ * targets layer 1 produces</b>.
  *
- * <p>{@code CoarseRouter#toBlockPos}はセルの種別に関わらず常に<b>チャンク中心</b>を返す。
- * エンドには床が数％しかないセルが密なセルと同じ値段で並ぶので、中間目標の座標が<b>奈落の
- * 真上</b>になりうる。層3はその点へ届くために奈落へ橋を架ける——これが「謎にわたらせる」の
- * 機構として実在する。
+ * <p>{@code CoarseRouter#toBlockPos} always returns <b>the chunk center</b> regardless of cell type.
+ * In The End, cells with only a few percent of floor are priced the same as dense cells, so an
+ * intermediate target's coordinates can be <b>directly above the void</b>. Layer 3 builds a bridge into the
+ * void to reach that point; this genuinely exists as the mechanism behind "making you cross for no reason".
  *
- * <p><b>ただし実データではこの機構は発火しない。</b>107ルート・中間目標190個を調べると、層2の
- * 8ブロック寄せ（{@code CorridorLegSolver.ENDPOINT_FALLBACK_RADIUS_BLOCKS}）が<b>全部を
- * 救っていた</b>。層2が使える限り、生のチャンク中心が層3へ渡ることは無い。
+ * <p><b>But with real data this mechanism doesn't fire.</b> Examining 107 routes and 190 intermediate
+ * targets, layer 2's 8-block snap ({@code CorridorLegSolver.ENDPOINT_FALLBACK_RADIUS_BLOCKS}) <b>rescued all
+ * of them</b>. As long as layer 2 is usable, a raw chunk center never reaches layer 3.
  *
- * <p>残る容疑は「層2が使えないとき」——Xaeroの地図データがその区間に無いと
- * {@code CorridorLegSolver.prepare}が{@code view=null}を返し、{@code PathfindingState#solveLeg}が
- * 生のチャンク中心へフォールバックする。<b>そこはオフラインでは測れない</b>（Xaeroのリージョン
- * 読み込み状態に依存する）。
+ * <p>The remaining suspect is "when layer 2 isn't usable": if Xaero's map data lacks that segment,
+ * {@code CorridorLegSolver.prepare} returns {@code view=null} and {@code PathfindingState#solveLeg} falls
+ * back to the raw chunk center. <b>That can't be measured offline</b> (it depends on Xaero's region
+ * loading state).
  */
 class CoarseWaypointFidelityTest {
 
     /**
-     * 層2が中間目標を立てる場所へ寄せる半径（{@code CorridorLegSolver.ENDPOINT_FALLBACK_RADIUS_BLOCKS}）。
-     * ここで見つからなければ{@code prepare}が{@code view=null}を返す。
+     * Radius within which layer 2 snaps an intermediate target to a place to stand ({@code CorridorLegSolver.ENDPOINT_FALLBACK_RADIUS_BLOCKS}).
+     * If none is found here, {@code prepare} returns {@code view=null}.
      */
     private static final int LAYER2_SNAP_RADIUS = 8;
 
     private static FakeCells endTerrain() throws IOException {
-        // 実機の既定に合わせる（maxBridgeRunBlocks/maxVoidBridgeRunBlocks=96、落下許容6）
+        // Match the real game's defaults (maxBridgeRunBlocks/maxVoidBridgeRunBlocks=96, fall tolerance 6)
         return TerrainFixture.load("/end_terrain_columns.txt.gz", bounds -> FakeCells.empty(bounds)
                 .canPlaceBlocks(true).maxFallDamagePoints(6)
                 .maxBridgeRunBlocks(96).maxVoidBridgeRunBlocks(96));
     }
 
-    /** {@code waypoint}から、実際に立てる最寄りの列までの水平距離。無ければ{@link Double#NaN}。 */
+    /** Horizontal distance from {@code waypoint} to the nearest column you can actually stand in. {@link Double#NaN} if none. */
     private static double distanceToNearestStandable(CellSource cells, SearchBounds bounds,
                                                       BlockPos waypoint, int searchRadius) {
         double best = Double.NaN;
@@ -70,9 +70,9 @@ class CoarseWaypointFidelityTest {
     }
 
     /**
-     * 実機の始点・目的地の格子から多数のルートを引き、<b>層2が救えない中間目標が1つも出ない</b>
-     * ことを見る。層1のコスト・間引き間隔・層2の寄せ半径のどれかを変えてここが崩れたら、
-     * 「立てない中間目標」が実データでも成立する条件に変わっている。
+     * Draws many routes from a grid of real start and destination points and checks that <b>not a single
+     * intermediate target layer 2 can't rescue appears</b>. If this breaks after changing layer 1's cost, the
+     * thinning interval or layer 2's snap radius, conditions have changed so that "unstandable intermediate targets" occur in real data too.
      */
     @Test
     void layer2AlwaysSnapsCoarseWaypointsOntoStandableGround() throws IOException {
@@ -80,7 +80,7 @@ class CoarseWaypointFidelityTest {
         SearchBounds b = terrain.bounds();
         CoarseMap map = LiveCoarseSampler.sample(terrain, b);
 
-        // データのある範囲(1130..1390 x 990..1250)に始点・目的地の格子を張る
+        // Lay a grid of start and destination points over the range with data (1130..1390 x 990..1250)
         List<BlockPos> anchors = new ArrayList<>();
         for (int x = 1150; x <= 1370; x += 55) {
             for (int z = 1010; z <= 1230; z += 55) {
@@ -104,7 +104,7 @@ class CoarseWaypointFidelityTest {
                 if (!route.reachedGoal() || route.waypoints().size() < 2) {
                     continue;
                 }
-                // 最後は PathfindingState#freshRoute の replaceLast が本来の目的地で上書きする
+                // Finally, replaceLast in PathfindingState#freshRoute overwrites it with the actual destination
                 for (int i = 0; i < route.waypoints().size() - 1; i++) {
                     BlockPos w = route.waypoints().get(i);
                     intermediates++;
@@ -119,8 +119,8 @@ class CoarseWaypointFidelityTest {
         }
 
         assertEquals(0, layer2WouldFail,
-                "層2の寄せ半径" + LAYER2_SNAP_RADIUS + "で救えない中間目標が" + layer2WouldFail
-                        + "/" + intermediates + "個出た（例: " + examples + "）＝"
-                        + "「立てない中間目標」仮説が実データで成立する条件に変わった");
+                "intermediate targets not rescued by layer 2's snap radius " + LAYER2_SNAP_RADIUS + ": " + layer2WouldFail
+                        + "/" + intermediates + " (e.g. " + examples + ") = "
+                        + "conditions changed so the \"unstandable intermediate target\" hypothesis holds in real data");
     }
 }

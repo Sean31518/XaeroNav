@@ -5,41 +5,41 @@
 
 ## Decision
 
-1つの共有ソースからStonecutterでMinecraft版とローダーのノードを作ります。ノード一覧と依存バージョンを
-別々の場所へ重複定義せず、`settings.gradle.kts`と`stonecutter.properties.toml`を正典にします。
+Minecraft version and loader nodes are built from a single shared source with Stonecutter. The node list and dependency versions
+aren't defined redundantly in separate places; `settings.gradle.kts` and `stonecutter.properties.toml` are canonical.
 
-Xaero's World MapとXaero's Minimapは任意依存です。Xaeroが無くても、ワールド内経路とHUDは動作します。
-Xaero連携Mixinは`required=false`とし、外部modの変更で注入に失敗してもXaeroNav本体を起動不能にしません。
-その代わり、注入失敗を黙らせず、ゲーム内のhealth表示とruntime CIのpositive assertionで検出します。
+Xaero's World Map and Xaero's Minimap are optional dependencies. Even without Xaero, in-world paths and the HUD work.
+The Xaero integration mixins are `required=false`, so an injection failure caused by a change in the external mod doesn't stop XaeroNav itself from starting.
+Instead of silencing injection failures, they are detected by the in-game health display and the runtime CI's positive assertions.
 
 ## Invariants
 
-- Fabric jarには`fabric.mod.json`、NeoForge jarには`neoforge.mods.toml`（NeoForge 20.4は`mods.toml`）、
-  Forge jarには`mods.toml`だけをローダーmetadataとして含める。
-- Forgeは版にかかわらず、配布jarのmanifestに`MixinConfigs`を含める。`mods.toml`の`[[mixins]]`
-  だけを根拠にしてはいけない。
-- SRG名前空間で動くForge（1.20.4以前）のjarにはrefmapを含める。公式mappingで動くForge 1.21.1へ同じ前提を
-  持ち込まない。
-- Forgeへ同梱するMixinExtrasを含む統合jarを配布し、slim jarを配布対象にしない。
-- Xaeroの最低対応版は、各Mixinの実際の注入先を確認した版に合わせる。推測で下限を広げない。
-- Releaseはノードごとのjobで`verifyDistribution`を走らせ、jarの名前、version、metadata、manifest、refmapを公開前に検査する。jar数は全jobの成果物を集めたGitHub Release作成時に検査する。
-- CIは全ノードをmatrixでビルドし、client runtimeとForge dedicated-server smokeで実行時の契約を検査する。
-- 外部GitHub Actionはcommit SHAへ固定し、build jobにはリポジトリ書き込み権限を与えない。
+- The Fabric jar contains `fabric.mod.json`, the NeoForge jar `neoforge.mods.toml` (`mods.toml` for NeoForge 20.4),
+  and the Forge jar only `mods.toml` as loader metadata.
+- Forge distribution jars include `MixinConfigs` in the manifest regardless of version. Don't rely solely on
+  `[[mixins]]` in `mods.toml`.
+- Forge jars running in the SRG namespace (1.20.4 and earlier) include a refmap. Don't carry the same assumption over to
+  Forge 1.21.1, which runs on official mappings.
+- Distribute the merged jar that includes the MixinExtras bundled for Forge; don't distribute the slim jar.
+- Xaero's minimum supported version matches the version whose actual injection targets were checked for each mixin. Don't widen the lower bound by guesswork.
+- Releases run `verifyDistribution` in a per-node job, checking each jar's name, version, metadata, manifest and refmap before publishing. The jar count is checked when creating the GitHub Release, which collects the artifacts of all jobs.
+- CI builds all nodes in a matrix, and checks the runtime contract with client runtime and Forge dedicated-server smoke tests.
+- External GitHub Actions are pinned to commit SHAs, and build jobs aren't given repository write permission.
 
 ## Client-only contract
 
-XaeroNavはクライアント専用であり、サーバーへインストールする必要はありません。Fabricはmetadata、
-NeoForgeはentrypointのdist指定でクライアントに限定します。Forgeの`@Mod`には同等のdist引数がないため、
-外側のentrypointが専用サーバーで読み込まれてもクライアントクラスを早期ロードしない構造を保ちます。
+XaeroNav is client-only and doesn't need to be installed on servers. Fabric restricts it to the client via metadata,
+and NeoForge via the entrypoint's dist setting. Forge's `@Mod` has no equivalent dist argument, so
+the structure is kept such that client classes aren't loaded early even if the outer entrypoint is loaded on a dedicated server.
 
-専用サーバーへ誤ってjarを置いた場合のForgeの起動互換性は、配布jarを使うCI smoke testで守ります。
+Forge startup compatibility when the jar is mistakenly placed on a dedicated server is protected by the CI smoke test using the distribution jar.
 
 ## Verification
 
-- Releaseのbuild matrix（`-Pxaeronav.onlyNodes=<ノード>`の`verifyDistribution`）: 各ノードの配布jar契約。テストは同じcommitのCIが緑であることを公開前に確認する
-- `.github/workflows/ci.yml`のbuild matrix: 全ノードのコンパイル
-- 同workflowのclient runtime matrix: Minecraft起動とXaero hook適用
-- Forge dedicated-server smoke matrix: クライアントクラスの早期ロード防止
+- Release build matrix (`verifyDistribution` with `-Pxaeronav.onlyNodes=<node>`): each node's distribution jar contract. Before publishing, confirms that CI on the same commit is green for tests
+- Build matrix in `.github/workflows/ci.yml`: compiling all nodes
+- Client runtime matrix in the same workflow: Minecraft startup and Xaero hook application
+- Forge dedicated-server smoke matrix: preventing early loading of client classes
 
 ## Code map
 
@@ -53,4 +53,4 @@ NeoForgeはentrypointのdist指定でクライアントに限定します。Forg
 - `.github/workflows/ci.yml`
 - `.github/workflows/release.yml`
 
-ローダーごとの具体的な追加手順と既知の版差は、[multiloader guide](../multiloader.md)を参照してください。
+For per-loader steps for adding nodes and known version differences, see the [multiloader guide](../multiloader.md).

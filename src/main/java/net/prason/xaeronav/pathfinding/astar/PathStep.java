@@ -5,13 +5,13 @@ import java.util.List;
 import net.minecraft.core.BlockPos;
 
 /**
- * @param bodyCells      この移動で身体が通過するセル一覧。{@link PathSafetyChecker}や経路の再確認が
- *                       到着地点だけでなく全セルを見るために使う
- * @param digCells       この移動で実際に壊すセル一覧（「掘削経路を別色で表示」用）。
- *                       身体が通過しない落下ブロック連鎖（頭上の砂・砂利）もここに含まれる
- * @param risk           {@link PathSafetyChecker}による事後チェック結果。A*探索直後はNONE固定で、
- *                       {@link PathSafetyChecker#annotate}で埋める
- * @param placedBlockPos 空洞をブロックを置いて渡る区間の場合、置く先の座標。それ以外はnull
+ * @param bodyCells      cells the body passes through during this move. Used by {@link PathSafetyChecker} and path
+ *                       re-validation to look at every cell, not just the destination
+ * @param digCells       cells actually broken by this move (for "show digging routes in a different color").
+ *                       Also includes falling-block chains the body doesn't pass through (sand/gravel overhead)
+ * @param risk           result of the post-check by {@link PathSafetyChecker}. Fixed at NONE right after the A* search,
+ *                       filled in by {@link PathSafetyChecker#annotate}
+ * @param placedBlockPos for a stretch crossing a gap by placing blocks, the coordinates to place at. Otherwise null
  */
 public record PathStep(BlockPos pos, MovementType movement, double cost,
                         List<BlockPos> bodyCells, List<BlockPos> digCells, PathRisk risk, BlockPos placedBlockPos) {

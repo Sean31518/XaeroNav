@@ -14,17 +14,17 @@ import net.prason.xaeronav.xaero.XaeroHookProbe;
 import net.prason.xaeronav.xaero.XaeroHookRuntimeProbe;
 import net.prason.xaeronav.xaero.XaeroHooks;
 
-/** 再計算トリガー（逸脱検知・定期実行）と、案内表示用の実測速度を毎tick駆動する。 */
+/** Drives the recompute triggers (deviation detection, periodic runs) and the measured speed for guidance display every tick. */
 public final class ClientTickHandler {
 
     private static final boolean RUNTIME_HOOK_PROBE = Boolean.getBoolean(XaeroHookProbe.PROPERTY);
 
-    /** tickが「遅い」とみなす所要時間。1tick(20TPS)相当。 */
+    /** Duration at which a tick is considered "slow". Equivalent to 1 tick (20 TPS). */
     private static final long SLOW_TICK_THRESHOLD_MILLIS = 50L;
-    /** 遅いtickが続く間、警告を再度出すまでの間隔。毎回だとログが洪水になる。 */
+    /** Interval before warning again while slow ticks continue. Warning every time floods the log. */
     private static final long SLOW_TICK_LOG_INTERVAL_MILLIS = 5_000L;
 
-    /** 連携の欠落を知らせたか。ワールドへ入るたびに繰り返すと、直しようが無い警告を毎回読ませることになる。 */
+    /** Whether missing integration has been reported. Repeating it on every world join would make the user read an unfixable warning every time. */
     private boolean hookNoticeShown;
 
     private final ChangeGate<Boolean> slowTickGate = new ChangeGate<>();
@@ -34,17 +34,17 @@ public final class ClientTickHandler {
         TickLaps.begin();
         long lap = TickLaps.start();
         XaeroNavKeys.handleInput();
-        TickLaps.add("キー入力", lap);
+        TickLaps.add("key input", lap);
         lap = TickLaps.start();
         PathfindingState.INSTANCE.onClientTick();
-        TickLaps.add("経路の状態", lap);
+        TickLaps.add("route state", lap);
         lap = TickLaps.start();
         NavPace.INSTANCE.onClientTick();
-        TickLaps.add("速度の実測", lap);
+        TickLaps.add("speed measurement", lap);
         lap = TickLaps.start();
         XaeroHookHealth.onClientTick();
-        TickLaps.add("Xaero連携の点検", lap);
-        // XaeroHookRuntimeProbeはXaero型を直接参照するため、通常起動ではクラス自体をloadしない。
+        TickLaps.add("Xaero integration check", lap);
+        // XaeroHookRuntimeProbe references Xaero types directly, so on a normal launch the class itself isn't loaded.
         if (RUNTIME_HOOK_PROBE) {
             XaeroHookRuntimeProbe.onClientTick();
         }
@@ -53,20 +53,20 @@ public final class ClientTickHandler {
         long elapsedMillis = nowMillis - startMillis;
         if (elapsedMillis > SLOW_TICK_THRESHOLD_MILLIS
                 && slowTickGate.changed(true, nowMillis, SLOW_TICK_LOG_INTERVAL_MILLIS)) {
-            XaeroNav.LOGGER.warn("XaeroNav: tick処理が遅い ({}ms > {}ms, 内訳={})", elapsedMillis, SLOW_TICK_THRESHOLD_MILLIS,
+            XaeroNav.LOGGER.warn("XaeroNav: slow tick ({}ms > {}ms, breakdown={})", elapsedMillis, SLOW_TICK_THRESHOLD_MILLIS,
                     TickLaps.summary());
         }
     }
 
     /**
-     * ワールドから抜けるときに経路と目的地を捨てる。
+     * Discards the route and destination when leaving a world.
      *
-     * <p>{@link PathfindingState#onClientTick}は{@code level == null}で何もせずに戻るだけなので、
-     * 切断してもゴールと経路はそのまま残る。次に別のワールドへ入ると、前のワールドの座標を目指す
-     * 案内が復活する（次元の違いは見ているが、同じ次元の別サーバーは見分けられない）。
+     * <p>{@link PathfindingState#onClientTick} just returns without doing anything when {@code level == null}, so
+     * the goal and route survive a disconnect. On entering another world next, guidance toward the previous world's coordinates
+     * would come back (the dimension difference is checked, but a different server in the same dimension can't be told apart).
      *
-     * <p>経路が持つ{@code ChunkView}は探索範囲ぶんのチャンク参照を掴んでいるので、
-     * ここで捨てることでワールドのアンロードを妨げなくなる意味もある。
+     * <p>The route's {@code ChunkView} holds chunk references for the search range, so
+     * discarding it here also keeps it from blocking the world from unloading.
      */
     public void onLoggingOut() {
         PathfindingState.INSTANCE.clear();
@@ -77,14 +77,14 @@ public final class ClientTickHandler {
     }
 
     /**
-     * Xaeroは入っているのに連携が当たっていないことを、ゲーム起動につき1度だけ知らせる。
+     * Reports, once per game launch, that Xaero is installed but the integration didn't apply.
      *
-     * <p>当たらなかったmixinは何も言わずに消える（required=false）ので、ユーザーには
-     * 「地図に線が出ない」としか見えない。Xaeroが注入先の形を変えた新版でこうなるが、その状態でも
-     * ワールド内描画は動いているため、故障だと気付かないまま使い続けることになる。
+     * <p>A mixin that fails to apply disappears silently (required=false), so all the user sees is
+     * "no line on the map". This happens with new Xaero versions that change the shape of the injection target, and even then
+     * in-world rendering still works, so the user keeps using it without realizing it's broken.
      *
-     * <p>ワールドへ入る時点で出すのは、チャットへ書ける最初の機会がここだから。判定に使う
-     * {@code Class.forName}はXaeroのクラスを読み込むので、MODの読み込み中には行わない。
+     * <p>It's reported on entering a world because that's the first chance to write to chat. The
+     * {@code Class.forName} used for the check loads Xaero's classes, so it isn't done while mods are loading.
      */
     private void reportMissingXaeroHooks(LocalPlayer player) {
         if (hookNoticeShown) {
@@ -94,7 +94,7 @@ public final class ClientTickHandler {
         List<XaeroHooks.Hook> missing = XaeroHooks.missing();
         for (XaeroHooks.Hook hook : XaeroHooks.Hook.values()) {
             if (ModPresence.isLoaded(hook.modId()) && XaeroHooks.applied(hook)) {
-                // CIが「失敗文字列が無い」だけでなく、各hookの実適用をpositiveに検査するマーカー。
+                // A marker so CI positively checks each hook's actual application, not just "no failure string".
                 XaeroNav.LOGGER.info("XAERONAV_HOOK_APPLIED {}", hook.name());
             }
         }
@@ -107,8 +107,8 @@ public final class ClientTickHandler {
                 features.append(" / ");
             }
             features.append(TextCompat.translatable(hook.nameKey()));
-            XaeroNav.LOGGER.warn("XaeroNav: Xaero連携のmixinが当たっていない ({} / {})。"
-                    + "Xaeroの版が対応範囲の外にある可能性がある", hook.modId(), hook.className());
+            XaeroNav.LOGGER.warn("XaeroNav: Xaero integration mixin did not apply ({} / {}). "
+                    + "The Xaero version may be outside the supported range", hook.modId(), hook.className());
         }
         GameCompat.tell(player, TextCompat.translatable("hud.xaeronav.hook_missing", features), false);
     }

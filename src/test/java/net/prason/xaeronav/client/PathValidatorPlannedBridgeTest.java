@@ -12,11 +12,11 @@ import net.prason.xaeronav.pathfinding.astar.PathStep;
 import org.junit.jupiter.api.Test;
 
 /**
- * 「手前のステップでこれから置く橋は、その先のステップにとって足場がある前提」の番人。
+ * Guards the rule that "bridges an earlier step is about to place count as footing for the steps after it."
  *
- * <p>継ぎ足しの探索は手前の設置を足場に使うので、経路が自分の橋の上を通り直すことがある。
- * これが崩れると、まだ置いていない橋が「足場が無い」と判定され、途中までの経路が丸ごと
- * 引き直される（実機のネザーで621ステップの経路が75ステップへ縮んだ）。
+ * <p>The extension search uses earlier placements as footing, so a route can pass back over its own bridge.
+ * If this breaks, bridges not yet placed are judged to have "no footing", and the whole route so far
+ * gets re-planned (on a real Nether run a 621-step route shrank to 75 steps).
  */
 class PathValidatorPlannedBridgeTest {
 
@@ -42,13 +42,13 @@ class PathValidatorPlannedBridgeTest {
         assertTrue(PathValidator.bridgeStillToBePlaced(ROUTE, 0, 3, BRIDGE));
     }
 
-    /** 通過済みの橋は置かれているはず。無ければ本物の変化なので見逃さない。 */
+    /** A bridge already passed should have been placed. If it is missing, that is a real change and must not be overlooked. */
     @Test
     void bridgeAlreadyPassedIsStillChecked() {
         assertFalse(PathValidator.bridgeStillToBePlaced(ROUTE, 2, 3, BRIDGE));
     }
 
-    /** 自分自身や後ろのステップで置く橋は、このステップの足場にならない。 */
+    /** Bridges placed by the step itself or by later steps do not count as footing for this step. */
     @Test
     void bridgePlacedLaterIsNotFooting() {
         assertFalse(PathValidator.bridgeStillToBePlaced(ROUTE, 0, 1, BRIDGE));

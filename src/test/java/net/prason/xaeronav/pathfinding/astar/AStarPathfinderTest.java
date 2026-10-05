@@ -17,11 +17,11 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * 経路探索コアの振る舞い。地形は{@link FakeCells}で文字として書く。
+ * Behavior of the pathfinding core. Terrain is written as characters with {@link FakeCells}.
  *
- * <p>ここで押さえるのは「どの移動が生成され、どの移動が生成されないか」。コスト定数の細かい値ではなく、
- * 地形に対して人間が期待する経路が返るかを見る。案内として破綻するのは経路の形が違うときで、
- * 数tickのコスト差ではない。
+ * <p>What this pins down is "which moves are generated and which are not". Rather than fine-grained cost
+ * constants, it checks whether the path a human would expect for the terrain comes back. Guidance breaks
+ * down when the shape of the path is wrong, not over a cost difference of a few ticks.
  */
 class AStarPathfinderTest {
 
@@ -36,9 +36,9 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 経路中で1手にいちばん大きく下がった段数。{@link ActionCosts#SAFE_FALL_BLOCKS}を超えていれば
-     * その落下でダメージを受けている——{@code PathStep}は{@code MoveKind}を持たない
-     * （{@code MovementType}まで畳まれている）ので、種類ではなく<b>案内が実際に何マス落とすか</b>で見る。
+     * The largest number of levels dropped in a single step of the path. Beyond {@link ActionCosts#SAFE_FALL_BLOCKS},
+     * that fall deals damage. {@code PathStep} carries no {@code MoveKind}
+     * (it is folded down to {@code MovementType}), so we look at <b>how far the guidance actually drops</b>, not the kind.
      */
     private static int biggestDrop(BlockPos start, PathResult result) {
         int biggest = 0;
@@ -59,17 +59,17 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
-        assertTrue(result.complete(), "平地の直線は必ず到達できる");
+        assertTrue(result.complete(), "a straight line on flat ground must always be reachable");
         assertEquals(5, result.steps().size());
         assertEquals(List.of(MovementType.TRAVERSE, MovementType.TRAVERSE, MovementType.TRAVERSE,
                 MovementType.TRAVERSE, MovementType.TRAVERSE), movements(result));
-        assertTrue(result.steps().stream().noneMatch(PathStep::digging), "掘る必要はない");
+        assertTrue(result.steps().stream().noneMatch(PathStep::digging), "no need to dig");
         assertEquals(new BlockPos(5, 61, 0), last(result).pos());
     }
 
     @Test
     void climbsAndDescendsAOneBlockStep() {
-        // x=2,3 に1マスの段差がある
+        // a one-block step at x=2,3
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ......
                 ..##..
@@ -77,69 +77,69 @@ class AStarPathfinderTest {
 
         PathResult up = search(cells, new BlockPos(0, 61, 0), new BlockPos(3, 62, 0));
         assertTrue(up.complete());
-        assertTrue(movements(up).contains(MovementType.ASCEND), "段差は登って越える: " + movements(up));
-        assertTrue(up.steps().stream().noneMatch(PathStep::digging), "登れる段差を掘ってはいけない");
+        assertTrue(movements(up).contains(MovementType.ASCEND), "climbs over the step: " + movements(up));
+        assertTrue(up.steps().stream().noneMatch(PathStep::digging), "must not dig a climbable step");
 
         PathResult down = search(cells, new BlockPos(3, 62, 0), new BlockPos(0, 61, 0));
         assertTrue(down.complete());
-        assertTrue(movements(down).contains(MovementType.DESCEND), "降りる側も段差として扱う: " + movements(down));
+        assertTrue(movements(down).contains(MovementType.DESCEND), "the way down is treated as a step too: " + movements(down));
     }
 
     @Test
     void climbsDiagonallyUpAStaircase() {
-        // (0,61,0)→(1,62,1)→(2,63,2)→(3,64,3) と、XZ両方に1段ずつ上がる階段状の床だけを敷く。
-        // カーディナルの床（例: (1,60,0)）は一切置かないので、カーディナル分解では登れない
+        // Lay only a staircase floor rising one level in both X and Z: (0,61,0)→(1,62,1)→(2,63,2)→(3,64,3).
+        // No cardinal floor (e.g. (1,60,0)) is placed at all, so a cardinal decomposition can't climb it
         CellSource cells = diagonalStaircase();
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(3, 64, 3));
 
         assertTrue(result.complete());
-        // カーディナル分解なら1段につき2手（登り+直進）＝6手かかる。斜めなら1段1手＝3手で済む
+        // A cardinal decomposition takes 2 steps per level (ascend + straight) = 6 steps. Diagonally it's 1 per level = 3
         assertEquals(3, result.steps().size(),
-                "斜め昇りで1段1手のはず: " + result.steps().stream().map(PathStep::pos).toList());
+                "diagonal ascent should take one step per level: " + result.steps().stream().map(PathStep::pos).toList());
         assertEquals(List.of(MovementType.ASCEND, MovementType.ASCEND, MovementType.ASCEND), movements(result));
         assertEquals(new BlockPos(3, 64, 3), last(result).pos());
     }
 
     @Test
     void descendsDiagonally() {
-        // 上のテストと同じ階段を逆向きに降りる
+        // descend the same staircase as the test above, in reverse
         CellSource cells = diagonalStaircase();
 
         PathResult result = search(cells, new BlockPos(3, 64, 3), new BlockPos(0, 61, 0));
 
         assertTrue(result.complete());
         assertEquals(3, result.steps().size(),
-                "斜め降りで1段1手のはず: " + result.steps().stream().map(PathStep::pos).toList());
+                "diagonal descent should take one step per level: " + result.steps().stream().map(PathStep::pos).toList());
         assertEquals(List.of(MovementType.DESCEND, MovementType.DESCEND, MovementType.DESCEND), movements(result));
         assertEquals(new BlockPos(0, 61, 0), last(result).pos());
     }
 
     /**
-     * <b>角と角だけで触れている2ブロックを、斜めに1手で渡る。</b>ユーザー報告
-     * 「ブロックの角と角がくっついていて普通に歩いて渡れそうな地形」がこれ。
+     * <b>Crosses two blocks that touch only corner to corner in one diagonal step.</b> This is the user-reported
+     * "terrain where block corners touch and it looks like you could just walk across".
      *
-     * <p>バニラでも渡れる——プレイヤーの当たり判定は0.6マス幅なので、角を通る瞬間に
-     * はみ出す2列が空いていれば体は通るし、足元は両方のブロックに載っている。
-     * {@link #doesNotCutThroughABlockedCorner}が示すとおり、<b>その2列が塞がっているときだけ</b>
-     * 渡れない。
+     * <p>Vanilla can cross it too: the player's hitbox is 0.6 blocks wide, so as it passes the corner the body fits
+     * as long as the two columns it overhangs are empty, and the feet rest on both blocks.
+     * As {@link #doesNotCutThroughABlockedCorner} shows, it can't be crossed <b>only when those two columns</b>
+     * <b>are blocked</b>.
      */
     @Test
     void walksAcrossBlocksThatTouchOnlyAtACorner() {
-        // 角の2列((1,60,0)と(0,60,1))には床も壁も置かない＝奈落
+        // nothing (no floor, no wall) in the two corner columns ((1,60,0) and (0,60,1)) = void
         CellSource cells = FakeCells.empty(new SearchBounds(-2, 55, -2, 8, 75, 8))
                 .set(0, 60, 0, FakeCells.STONE)
                 .set(1, 60, 1, FakeCells.STONE);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 61, 1));
 
-        assertTrue(result.complete(), "角と角が触れていれば渡れる");
-        assertEquals(1, result.steps().size(), "斜め1手で渡るはず: "
+        assertTrue(result.complete(), "crossable when corners touch");
+        assertEquals(1, result.steps().size(), "should cross in one diagonal step: "
                 + result.steps().stream().map(PathStep::pos).toList());
         assertEquals(List.of(MovementType.TRAVERSE), movements(result));
     }
 
-    /** 角だけで繋がった飛び石を続けて渡る。1つ渡れることと、繋げて渡れることは別。 */
+    /** Crosses a run of stepping stones connected only at the corners. Crossing one is not the same as chaining them. */
     @Test
     void walksAlongAChainOfCornerTouchingBlocks() {
         FakeCells cells = FakeCells.empty(new SearchBounds(-2, 55, -2, 10, 75, 10));
@@ -150,20 +150,20 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(4, 61, 4));
 
         assertTrue(result.complete());
-        assertEquals(4, result.steps().size(), "4回とも斜めのまま渡るはず: "
+        assertEquals(4, result.steps().size(), "should stay diagonal all four times: "
                 + result.steps().stream().map(PathStep::pos).toList());
     }
 
     @Test
     void doesNotCutThroughABlockedCorner() {
-        // 斜め昇りの角の一方(1,62,0)を石で塞ぐ。到着地点の床(1,61,1)自体は空いているので、
-        // 斜めでは行けないがカーディナル2手（z方向へ直進してから登る）では行ける
+        // Block one corner (1,62,0) of the diagonal ascent with stone. The landing floor (1,61,1) itself is free,
+        // so it can't go diagonally but can in two cardinal steps (straight in z, then ascend)
         CellSource cells = diagonalAscendWithCardinalDetour().set(1, 62, 0, FakeCells.STONE);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 62, 1));
 
-        assertTrue(result.complete(), "角が塞がっていても迂回すれば届く");
-        assertEquals(2, result.steps().size(), "斜めが塞がっているのでカーディナル2手に迂回する: "
+        assertTrue(result.complete(), "reachable by a detour even with a blocked corner");
+        assertEquals(2, result.steps().size(), "the diagonal is blocked, so it detours in two cardinal steps: "
                 + result.steps().stream().map(PathStep::pos).toList());
         assertEquals(new BlockPos(0, 61, 1), result.steps().get(0).pos());
         assertEquals(new BlockPos(1, 62, 1), last(result).pos());
@@ -171,19 +171,19 @@ class AStarPathfinderTest {
 
     @Test
     void doesNotJumpDiagonallyUnderALowCeiling() {
-        // 踏み切り地点の頭上(0,63,0)を石で塞ぐ。カーディナル2手側の頭上は別の座標なので影響を受けない
+        // Block the headroom (0,63,0) above the takeoff point. The two-cardinal-step side has its headroom elsewhere, so it is unaffected
         CellSource cells = diagonalAscendWithCardinalDetour().set(0, 63, 0, FakeCells.STONE);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 62, 1));
 
-        assertTrue(result.complete(), "頭上が塞がっていても迂回すれば届く");
-        assertEquals(2, result.steps().size(), "頭上が塞がって跳べないのでカーディナル2手に迂回する: "
+        assertTrue(result.complete(), "reachable by a detour even with blocked headroom");
+        assertEquals(2, result.steps().size(), "headroom blocks the jump, so it detours in two cardinal steps: "
                 + result.steps().stream().map(PathStep::pos).toList());
         assertEquals(new BlockPos(0, 61, 1), result.steps().get(0).pos());
         assertEquals(new BlockPos(1, 62, 1), last(result).pos());
     }
 
-    /** (0,61,0)から(3,64,3)まで、XZ両方に1段ずつ上がる床だけを敷いた階段。カーディナルの床は無い。 */
+    /** A staircase from (0,61,0) to (3,64,3) with only floors rising one level in both X and Z. No cardinal floors. */
     private static CellSource diagonalStaircase() {
         SearchBounds bounds = new SearchBounds(-2, 55, -2, 8, 75, 8);
         return FakeCells.empty(bounds)
@@ -194,8 +194,8 @@ class AStarPathfinderTest {
     }
 
     /**
-     * (0,61,0)→(1,62,1)の斜め昇り1段と、それを迂回できるカーディナル経路
-     * （(0,61,0)→(0,61,1)→(1,62,1)、z方向へ直進してから登る）の両方が成立する床だけを敷いた地形。
+     * Terrain with only the floors needed for both a one-level diagonal ascent (0,61,0)→(1,62,1) and a cardinal route
+     * around it ((0,61,0)→(0,61,1)→(1,62,1), straight in z then ascend).
      */
     private static FakeCells diagonalAscendWithCardinalDetour() {
         SearchBounds bounds = new SearchBounds(-2, 55, -2, 8, 75, 8);
@@ -207,7 +207,7 @@ class AStarPathfinderTest {
 
     @Test
     void digsThroughAWallWhenThereIsNoWayAround() {
-        // 天井が岩盤なので登って越えられない。背丈2マスの壁を掘り抜くしかない
+        // the ceiling is bedrock, so it can't be climbed over. The only way is to dig through the 2-high wall
         CellSource cells = FakeCells.of(0, 60, 0, """
                 BBBBBB
                 ..##..
@@ -218,17 +218,17 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         List<BlockPos> dug = result.steps().stream().flatMap(step -> step.digCells().stream()).toList();
-        // 足元だけでなく頭の高さも掘る対象に挙がる。到着地点1マスだけを見ていると、
-        // 頭がつかえて実際には通れない経路を「掘れば通れる」として出してしまう
-        assertTrue(dug.contains(new BlockPos(2, 61, 0)), "壁の足元を掘る: " + dug);
-        assertTrue(dug.contains(new BlockPos(2, 62, 0)), "壁の頭の高さも掘る: " + dug);
-        assertTrue(dug.contains(new BlockPos(3, 61, 0)), "壁の足元を掘る: " + dug);
-        assertTrue(dug.contains(new BlockPos(3, 62, 0)), "壁の頭の高さも掘る: " + dug);
+        // The head height is a dig target too, not just the feet. Looking only at the one landing block would
+        // emit a path the head can't actually fit through as "passable if dug"
+        assertTrue(dug.contains(new BlockPos(2, 61, 0)), "digs the base of the wall: " + dug);
+        assertTrue(dug.contains(new BlockPos(2, 62, 0)), "also digs the wall at head height: " + dug);
+        assertTrue(dug.contains(new BlockPos(3, 61, 0)), "digs the base of the wall: " + dug);
+        assertTrue(dug.contains(new BlockPos(3, 62, 0)), "also digs the wall at head height: " + dug);
     }
 
     @Test
     void doesNotDigThroughUndiggableBlocks() {
-        // 掘れない壁。diggingEnabled=false のときChunkViewが全固体をこの状態にするのと等価
+        // An undiggable wall. Equivalent to how ChunkView marks every solid when diggingEnabled=false
         CellSource cells = FakeCells.of(0, 60, 0, """
                 BBBBBB
                 ..BB..
@@ -237,14 +237,14 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
-        assertFalse(result.complete(), "掘れない壁の向こうへは到達できない");
+        assertFalse(result.complete(), "cannot reach past an undiggable wall");
         assertTrue(result.steps().stream().allMatch(step -> step.pos().getX() < 2),
-                "壁を越えたステップがあってはいけない: " + result.steps().stream().map(PathStep::pos).toList());
+                "there must be no step past the wall: " + result.steps().stream().map(PathStep::pos).toList());
     }
 
     @Test
     void returnsNoRouteRatherThanAUselesslyShortOne() {
-        // 動ける範囲が MIN_DIST_PATH(5ブロック) に満たない密室
+        // a sealed room whose movable area is under MIN_DIST_PATH (5 blocks)
         CellSource cells = FakeCells.of(0, 60, 0, """
                 BBBB
                 ..BB
@@ -254,12 +254,12 @@ class AStarPathfinderTest {
 
         assertFalse(result.complete());
         assertTrue(result.steps().isEmpty(),
-                "数マスしか進めない経路は提示しない（案内として役に立たないため）: " + result.steps().size());
+                "does not offer a path that only advances a few blocks (useless as guidance): " + result.steps().size());
     }
 
     @Test
     void offersAPartialRouteWhenTheGoalIsOutOfReach() {
-        // 長い廊下の先が塞がっている。ゴールへは届かないが、進める分は案内する価値がある
+        // The end of a long corridor is blocked. The goal is out of reach, but the reachable part is worth guiding
         CellSource cells = FakeCells.of(0, 60, 0, """
                 BBBBBBBBBBBBBBBBBB
                 ................B#
@@ -268,15 +268,15 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(40, 61, 0));
 
-        assertFalse(result.complete(), "ゴールには届いていない");
-        assertFalse(result.steps().isEmpty(), "届く範囲までは案内する（暫定経路）");
+        assertFalse(result.complete(), "has not reached the goal");
+        assertFalse(result.steps().isEmpty(), "guides as far as it can reach (provisional path)");
         assertTrue(last(result).pos().getX() >= 5,
-                "始点から MIN_DIST_PATH 以上進んだ地点を返す: " + last(result).pos());
+                "returns a point at least MIN_DIST_PATH from the start: " + last(result).pos());
     }
 
     @Test
     void swimsAcrossWaterWithoutAFloor() {
-        // 水面が続く区間。足場が無いのでTraverseは生成されず、Swimでしか渡れない
+        // A stretch of water surface. With no footing no Traverse is generated, so it can only be crossed by Swim
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ......
                 .~~~~.
@@ -286,12 +286,12 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
         assertTrue(result.complete());
-        assertTrue(movements(result).contains(MovementType.SWIM), "水の区間は泳ぎとして出す: " + movements(result));
+        assertTrue(movements(result).contains(MovementType.SWIM), "water stretches come out as swimming: " + movements(result));
     }
 
     @Test
     void climbsALadderInsteadOfDigging() {
-        // 縦穴に梯子（x=3のy=61〜63）。掘るより梯子の方が安いので、梯子を使う経路が出るべき
+        // A ladder in a shaft (y=61-63 at x=3). The ladder is cheaper than digging, so the path should use it
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ...H##
                 ###H##
@@ -301,14 +301,14 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(3, 61, 0), new BlockPos(1, 63, 0));
 
         assertTrue(result.complete());
-        assertTrue(movements(result).contains(MovementType.CLIMB), "梯子を登る移動が出る: " + movements(result));
+        assertTrue(movements(result).contains(MovementType.CLIMB), "emits a ladder-climbing move: " + movements(result));
         assertTrue(result.steps().stream().noneMatch(PathStep::digging),
-                "梯子があるなら掘らない: " + result.steps().stream().flatMap(s -> s.digCells().stream()).toList());
+                "does not dig when there is a ladder: " + result.steps().stream().flatMap(s -> s.digCells().stream()).toList());
     }
 
     @Test
     void surfaceSearchStopsAtTheFirstCellAtOrAboveSurfaceLevel() {
-        // 東へ向かって階段状に上がる地形。y=64 が地上
+        // terrain rising like stairs toward the east. y=64 is the surface
         CellSource cells = FakeCells.of(0, 60, 0, """
                 .....
                 ....#
@@ -320,16 +320,16 @@ class AStarPathfinderTest {
         PathResult result = new AStarPathfinder(cells)
                 .searchToSurface(new BlockPos(2, 61, 0), 64, NOT_CANCELLED);
 
-        assertTrue(result.complete(), "地上へ出る道がある");
+        assertTrue(result.complete(), "there is a way up to the surface");
         assertTrue(last(result).pos().getY() >= 64,
-                "surfaceY 以上で止まる: " + last(result).pos());
+                "stops at or above surfaceY: " + last(result).pos());
         assertTrue(result.steps().stream().filter(step -> step.pos().getY() >= 64).count() == 1,
-                "surfaceY に達したら即座に打ち切る（そこから先は本来の目的地への経路が引き直される）");
+                "cuts off as soon as it reaches surfaceY (from there the route to the real destination is recomputed)");
     }
 
     @Test
     void surfaceSearchWalksOutFromUnderARoofInsteadOfStoppingAtHeight() {
-        // y=65〜66 の坑道。西側(x=0,1)は岩の天井の下、東側(x=2,3)は空が開けている
+        // A tunnel at y=65-66. The west side (x=0,1) is under a rock ceiling, the east side (x=2,3) is open to the sky
         CellSource cells = FakeCells.of(0, 64, 0, """
                 ....
                 ##..
@@ -340,22 +340,22 @@ class AStarPathfinderTest {
         PathResult result = new AStarPathfinder(cells)
                 .searchToSurface(new BlockPos(0, 65, 0), 64, NOT_CANCELLED);
 
-        assertTrue(result.complete(), "開口部まで歩けば地上に出られる");
+        assertTrue(result.complete(), "walking to the opening gets it to the surface");
         assertTrue(last(result).pos().getX() >= 2,
-                "天井の下は高さが足りていても地上ではない。空が開けた列まで進む: " + last(result).pos());
+                "under a ceiling is not the surface even with enough height. Advance to a column open to the sky: " + last(result).pos());
         assertTrue(result.steps().stream().noneMatch(PathStep::digging),
-                "既存の坑道を歩いて出られるなら掘らない: " + movements(result));
+                "does not dig when it can walk out through the existing tunnel: " + movements(result));
     }
 
     /**
-     * 海の中では「水面に顔を出せた」を地上到達として認める。{@code openSkyY}が使う
-     * MOTION_BLOCKINGハイトマップは流体を含むので水面の<b>1つ上</b>を指すが、そこは空気で
-     * 足場が無く、泳いでいるプレイヤーが立てるノードにならない。そのまま条件にすると、
-     * 外洋では地上へ出る中継探索が原理的に成功できなかった。
+     * In the sea, "got its head above the water" counts as reaching the surface. The MOTION_BLOCKING heightmap
+     * used by {@code openSkyY} includes fluids, so it points <b>one above</b> the water surface, but that is air with
+     * no footing and never a node a swimming player can stand on. Using it as the condition as-is meant the
+     * relay search to the surface could, in principle, never succeed in the open ocean.
      */
     @Test
     void surfaceSearchReachesTheWaterLineWhenTheColumnIsSea() {
-        // y=62 が海底、y=63〜66 が水、y=67 から上は空（fillWithを使わないので図の外は空気）
+        // y=62 is the seabed, y=63-66 water, y=67 and up sky (fillWith is not used, so outside the drawing is air)
         CellSource cells = FakeCells.of(0, 62, 0, """
                 ......
                 ~~~~~~
@@ -367,33 +367,33 @@ class AStarPathfinderTest {
         PathResult result = new AStarPathfinder(cells)
                 .searchToSurface(new BlockPos(0, 63, 0), 64, NOT_CANCELLED);
 
-        assertTrue(result.complete(), "泳ぎ上がれば水面に出られる");
+        assertTrue(result.complete(), "swimming up reaches the water surface");
         assertEquals(66, last(result).pos().getY(),
-                "水面のセルで到達とみなす（その1つ上は水の外＝立てない）: " + last(result).pos());
+                "counts a water-surface cell as reached (the one above is out of the water = can't stand): " + last(result).pos());
     }
 
     /**
-     * 水没した横穴と、遠回りだが息継ぎできる迂回路。息が続かない潜水は<b>移動そのものを作らない</b>ので、
-     * 探索は最初から迂回路だけを見る。
+     * A flooded side tunnel and a longer detour where it can catch its breath. A dive longer than one breath
+     * <b>doesn't create the move at all</b>, so the search only ever sees the detour.
      *
-     * <p>y=63が水面（顔が出せる高さ）、y=61〜62が水中の横穴。北(z=1)側は水面まで開けている。
+     * <p>y=63 is the water surface (head can be above water), y=61-62 the underwater tunnel. The north (z=1) side is open to the surface.
      */
     private static FakeCells floodedTunnel() {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 24, 76, 8))
                 .fillWith(FakeCells.BEDROCK);
         for (int x = -1; x <= 13; x++) {
-            // z=0: 天井(y=64)で塞がれた水没坑道。ここを泳ぐ間ずっと頭が水に浸かる
+            // z=0: a flooded tunnel capped by a ceiling (y=64). The head stays submerged the whole swim
             for (int y = 61; y <= 63; y++) {
                 cells.set(x, y, 0, FakeCells.WATER);
             }
-            // z=2: 空の下に水面がある水路。y=63を泳げば顔が出るので息は減らない
+            // z=2: a channel with its water surface under the sky. Swimming at y=63 keeps the head out, so no breath is lost
             for (int y = 61; y <= 63; y++) {
                 cells.set(x, y, 2, FakeCells.WATER);
             }
             cells.set(x, 64, 2, FakeCells.AIR);
         }
-        // 両端(x=-1, x=13)だけが2本を繋ぐ。途中のz=1は岩盤の壁なので、坑道の途中で
-        // 顔を出しに抜けることはできない
+        // Only the ends (x=-1, x=13) connect the two. z=1 in between is a bedrock wall, so it can't
+        // break off mid-tunnel to surface
         for (int x : new int[] {-1, 13}) {
             for (int y = 61; y <= 63; y++) {
                 cells.set(x, y, 1, FakeCells.WATER);
@@ -409,15 +409,15 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 62, 0), new BlockPos(12, 62, 0));
 
-        assertTrue(result.complete(), "顔を出せる水路を回れば到達できる");
+        assertTrue(result.complete(), "reachable by going around via the channel where the head can surface");
         assertTrue(result.steps().stream().anyMatch(step -> step.pos().getZ() != 0),
-                "息の続かない水没坑道を突っ切らず、顔を出せる水路へ逸れる: "
+                "does not push through a flooded tunnel longer than one breath; veers to the channel where it can surface: "
                         + result.steps().stream().map(PathStep::pos).toList());
     }
 
     /**
-     * {@link #doesNotRouteThroughADiveLongerThanOneBreath}が空振りしていないことの裏付け。
-     * 上限を外せば同じ地形で水没横穴を直進する＝逸れる理由が息であることが確かめられる。
+     * Confirms {@link #doesNotRouteThroughADiveLongerThanOneBreath} isn't passing vacuously.
+     * Without the limit it goes straight through the flooded tunnel on the same terrain = breath is what makes it veer.
      */
     @Test
     void divesStraightThroughWhenTheBreathLimitIsOff() {
@@ -427,21 +427,21 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().allMatch(step -> step.pos().getZ() == 0),
-                "上限が無ければ最短の水没坑道を直進する: "
+                "without a limit it goes straight through the shortest flooded tunnel: "
                         + result.steps().stream().map(PathStep::pos).toList());
     }
 
     /**
-     * 水中を斜めに泳ぐ。足場のある斜め移動（{@code addDiagonalTraverse}）は水中で成立しないので、
-     * 泳ぎ専用の斜めが無いとカーディナル2手に分解される。
+     * Swims diagonally underwater. A diagonal move with footing ({@code addDiagonalTraverse}) doesn't hold underwater,
+     * so without a swim-specific diagonal it gets decomposed into two cardinal steps.
      *
-     * <p>天井を付けて浮上できない形にしてあるのは、斜めに泳げるかどうかだけを見るため。開けた海だと
-     * 先に水面へ上がる（{@link #surfacesBeforeCrossingOpenWater}）ので、そちらの挙動が混ざる。
+     * <p>It has a ceiling so it can't surface, to look only at whether it can swim diagonally. In open sea it would
+     * first rise to the surface ({@link #surfacesBeforeCrossingOpenWater}), mixing in that behavior.
      */
     @Test
     void swimsDiagonallyThroughWater() {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 12, 76, 12));
-        // 底(y=60)と天井(y=64)に挟まれた水塊。y=62を泳ぐ限り足場は無い
+        // A body of water sandwiched between a floor (y=60) and ceiling (y=64). Swimming at y=62 there is no footing
         for (int x = -1; x <= 6; x++) {
             for (int z = -1; z <= 6; z++) {
                 cells.set(x, 60, z, FakeCells.BEDROCK);
@@ -456,14 +456,14 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertEquals(4, result.steps().size(),
-                "斜めに泳げば1手で1マスずつXZ両方に進む: " + result.steps().stream().map(PathStep::pos).toList());
+                "swimming diagonally advances one block in both X and Z per step: " + result.steps().stream().map(PathStep::pos).toList());
         assertTrue(result.steps().stream().allMatch(step -> step.movement() == MovementType.SWIM),
-                "水中の斜めも泳ぎとして案内する: " + movements(result));
+                "underwater diagonals are guided as swimming too: " + movements(result));
     }
 
     /**
-     * 岸(x=0)から水面(x=1..width)を渡って対岸(x=width+1)へ。水面は y=62、岸は y=63 で、
-     * 水面のほうが1マス低い普通の海岸の形。
+     * From the shore (x=0) across the water surface (x=1..width) to the far shore (x=width+1). Water surface at y=62,
+     * shore at y=63: an ordinary coastline with the water one block lower.
      */
     private static FakeCells strait(int width) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, width + 12, 76, 8));
@@ -486,15 +486,15 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().anyMatch(PathStep::boating),
-                "40マスの水面はボートで渡る: " + movements(result));
+                "40 blocks of water are crossed by boat: " + movements(result));
         assertEquals(1, result.steps().stream().filter(step -> step.movement() == MovementType.BOAT
                         && step.cost() > ActionCosts.BOAT_LAUNCH_TICKS).count(),
-                "出す・乗る手間を払うのは漕ぎ出す1回だけ: " + movements(result));
+                "the cost of placing and boarding is paid only once, on launch: " + movements(result));
     }
 
     /**
-     * 同じ形でも20マスの水路ならボートは出さない。出して乗る手間と、降りて壊して拾う手間
-     * （{@code BOAT_LAUNCH_TICKS}・{@code BOAT_STOW_TICKS}）が泳ぎとの差を上回るため。
+     * Same shape but a 20-block channel doesn't get a boat. The cost of placing and boarding, plus exiting, breaking
+     * and picking it up ({@code BOAT_LAUNCH_TICKS}, {@code BOAT_STOW_TICKS}) outweighs the difference from swimming.
      */
     @Test
     void swimsAcrossANarrowChannelInsteadOfLaunchingABoat() {
@@ -504,24 +504,24 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().noneMatch(PathStep::boating),
-                "20マスの水路はそのまま泳いで渡る: " + movements(result));
+                "a 20-block channel is just swum across: " + movements(result));
     }
 
     /**
-     * すでに乗っているなら、乗り込む手間をもう一度払わせない。払わせると、残りの水面が短い場面で
-     * 「降りて泳いだ方が安い」という案内になる。
+     * If already aboard, don't charge the boarding cost again. Charging it would, when little water remains,
+     * produce guidance saying "getting out and swimming is cheaper".
      */
     @Test
     void doesNotChargeBoardingAgainWhileAlreadyRiding() {
         CellSource cells = strait(40).boatAvailable(true).ridingBoat(true);
 
-        // 始点は水面（乗っている位置）。目的地は対岸
+        // the start is on the water surface (where it's aboard). The destination is the far shore
         PathResult result = search(cells, new BlockPos(1, 62, 0), new BlockPos(41, 63, 0));
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().allMatch(step -> !step.boating()
                         || step.cost() < ActionCosts.BOAT_LAUNCH_TICKS),
-                "乗り込む手間を払う区間が残っている: "
+                "a segment still pays the boarding cost: "
                         + result.steps().stream().filter(PathStep::boating)
                                 .map(PathStep::cost).toList());
     }
@@ -532,18 +532,18 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 63, 0), new BlockPos(41, 63, 0));
 
-        assertTrue(result.complete(), "ボートが無くても泳いで渡れる");
+        assertTrue(result.complete(), "can swim across without a boat");
         assertTrue(result.steps().stream().noneMatch(PathStep::boating),
-                "持っていないボートを出せとは言わない: " + movements(result));
+                "doesn't ask to place a boat it doesn't have: " + movements(result));
     }
 
     /**
-     * 水中の採掘は息をそのぶん使う。1マスに数十tickかかるので、息の残りを<b>マス数</b>で数えると
-     * 40tickの採掘が「1マス」にしかならず、水中を掘り進む経路が上限をすり抜けていた。
+     * Mining underwater uses up breath accordingly. A block takes tens of ticks, so counting remaining breath in
+     * <b>blocks</b> made a 40-tick mine count as just "1 block", letting underwater digging routes slip past the limit.
      */
     @Test
     void countsUnderwaterDiggingAgainstTheBreathLimit() {
-        // 水没した石の壁。掘り抜く以外に道が無い（上下は岩盤）
+        // A submerged stone wall. No way but to dig through (bedrock above and below)
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 12, 76, 8));
         for (int x = -1; x <= 4; x++) {
             cells.set(x, 60, 0, FakeCells.BEDROCK);
@@ -553,15 +553,15 @@ class AStarPathfinderTest {
             }
         }
 
-        // 上限45tick＝泳ぎ8マス相当。石1マスの採掘(40tick)を水中で5倍払う時点で超える
+        // Limit 45 ticks = about 8 blocks of swimming. Paying 5x for mining one stone block (40 ticks) underwater exceeds it
         PathResult limited = search(cells.maxSubmergedTicks(45), new BlockPos(0, 61, 0),
                 new BlockPos(3, 61, 0));
 
         assertFalse(limited.complete(),
-                "息が続かないので水中の壁は掘り抜けない: " + movements(limited));
+                "out of breath, so it can't dig through the underwater wall: " + movements(limited));
     }
 
-    /** {@link #countsUnderwaterDiggingAgainstTheBreathLimit}が空振りしていないことの裏付け。 */
+    /** Confirms {@link #countsUnderwaterDiggingAgainstTheBreathLimit} isn't passing vacuously. */
     @Test
     void diggingUnderwaterIsStillAllowedWithinTheBreathLimit() {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 12, 76, 8));
@@ -576,14 +576,14 @@ class AStarPathfinderTest {
         PathResult unlimited = search(cells.maxSubmergedTicks(0), new BlockPos(0, 61, 0),
                 new BlockPos(3, 61, 0));
 
-        assertTrue(unlimited.complete(), "上限が無ければ掘り抜ける");
+        assertTrue(unlimited.complete(), "without a limit it can dig through");
         assertTrue(unlimited.steps().stream().anyMatch(PathStep::digging),
-                "掘って抜ける経路になる: " + movements(unlimited));
+                "becomes a path that digs through: " + movements(unlimited));
     }
 
     /**
-     * 水中で掘る手は、到着先の頭がこれから掘る固体でも、掘っている間の頭は水なので割増が乗る。
-     * 始点が壁の隣だと到着先だけを見る判定では陸と同じ値段になっていた（実機の水路の出口で発生）。
+     * An underwater dig move gets the surcharge even if the landing head cell is a solid about to be dug, since the head is in water while digging.
+     * When the start was next to the wall, a check looking only at the landing cell priced it like land (seen at a real channel exit).
      */
     @Test
     void chargesTheUnderwaterDigPenaltyWhenDiggingFromTheStart() {
@@ -598,19 +598,19 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells.maxSubmergedTicks(0), new BlockPos(0, 61, 0), new BlockPos(2, 61, 0));
 
-        assertTrue(result.complete(), "到達できない: " + movements(result));
+        assertTrue(result.complete(), "unreachable: " + movements(result));
         List<PathStep> digs = result.steps().stream().filter(PathStep::digging).toList();
-        assertFalse(digs.isEmpty(), "掘らない経路になった: " + movements(result));
+        assertFalse(digs.isEmpty(), "ended up as a path that doesn't dig: " + movements(result));
         for (PathStep step : digs) {
             double raw = step.digCells().stream()
                     .mapToDouble(pos -> CellData.digTicks(cells.cell(pos.getX(), pos.getY(), pos.getZ())))
                     .sum();
             assertTrue(step.cost() >= raw * ActionCosts.SUBMERGED_DIG_PENALTY,
-                    "水中の採掘が割増なし: 素の掘削=" + raw + ", 移動込み=" + step.cost());
+                    "underwater mining has no surcharge: raw dig=" + raw + ", with move=" + step.cost());
         }
     }
 
-    /** 水底(y=54)から水面(y=70)まで開けた深い海。x方向に長く、途中に遮るものは無い。 */
+    /** A deep sea open from the seabed (y=54) to the surface (y=70). Long in x, with nothing in the way. */
     private static FakeCells openSea(int length) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 44, -8, length + 12, 86, 8));
         for (int x = -1; x <= length + 1; x++) {
@@ -625,8 +625,8 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 深い海に出たら、潜ったまま横断せず<b>まず水面へ上がる</b>。息を減らしながら進むのは水平移動なので、
-     * 先に解消してから渡る方が安全で、水面ならボートも使える。
+     * Out in deep sea, <b>rise to the surface first</b> instead of crossing submerged. The horizontal travel is what would drain breath,
+     * so it's safer to get out from under the water first and then cross, and on the surface a boat can be used too.
      */
     @Test
     void surfacesBeforeCrossingOpenWater() {
@@ -642,54 +642,54 @@ class AStarPathfinderTest {
                 break;
             }
         }
-        assertTrue(surfacedAt >= 0, "水面に出る: " + result.steps().stream().map(PathStep::pos).toList());
-        // 水底(55)から水面(70)まで15マス。1手ごとに1マス上がるので、無駄なく上がれば15手で着く
-        assertTrue(surfacedAt <= 16, "寄り道せずに浮上する（浮上までの手数）: " + (surfacedAt + 1));
-        // その間ずっと目的地の方へ進んでいる＝真上に上がってから横へ、のL字にならない
+        assertTrue(surfacedAt >= 0, "surfaces: " + result.steps().stream().map(PathStep::pos).toList());
+        // 15 blocks from the seabed (55) to the surface (70). One block up per step, so rising without waste takes 15 steps
+        assertTrue(surfacedAt <= 16, "surfaces without detours (steps until surfacing): " + (surfacedAt + 1));
+        // keeps moving toward the destination the whole time = not an L shape of straight up and then sideways
         int advancedWhileRising = result.steps().get(surfacedAt).pos().getX();
         assertTrue(advancedWhileRising >= 10,
-                "目的地へ向かいながら斜めに上がる（浮上までに進んだ水平距離）: " + advancedWhileRising);
+                "rises diagonally while heading to the destination (horizontal distance covered while surfacing): " + advancedWhileRising);
     }
 
     /**
-     * 外洋を渡る間、経路は<b>水面の層に貼り付く</b>。
+     * While crossing open sea, the path <b>sticks to the water-surface layer</b>.
      *
-     * <p>渡っている間の高さは案内としての中身が無い（水の中はどの層も等しく通れる）ので、上下に
-     * 折れるぶんはそのまま線のノイズになる。ここが揺れると、描画が水面を基準に線を置いている
-     * （{@code PathGeometry}）前提も、水中で縦のずれを逸脱に数えない前提
-     * （{@code PathfindingState#offPathDistance}）も同時に崩れる。
+     * <p>The height while crossing carries no guidance content (every layer of water is equally passable), so any
+     * bending up or down becomes pure noise in the line. If this wobbles, both the assumption that rendering places
+     * the line relative to the water surface ({@code PathGeometry}) and the assumption that vertical offset underwater
+     * isn't counted as deviation ({@code PathfindingState#offPathDistance}) break at once.
      *
-     * <p>貼り付く理由は{@link ActionCosts#SUBMERGED_TRAVEL_PENALTY}——水面のセルは頭が水の外に
-     * 出るので割増が乗らず、1マスでも潜ると乗る。
+     * <p>It sticks because of {@link ActionCosts#SUBMERGED_TRAVEL_PENALTY}: a water-surface cell has the head out of
+     * the water, so no surcharge applies, while dipping even one block applies it.
      */
     @Test
     void staysOnTheSurfaceLayerWhileCrossingOpenWater() {
-        // 水面(y=70)から対岸まで58マス。潜っても浮いても水しか無いので、層を選ぶのはコストだけ
+        // 58 blocks from the surface (y=70) to the far shore. Submerged or afloat it's all water, so only cost picks the layer
         CellSource cells = openSea(60);
 
         PathResult result = search(cells, new BlockPos(0, 70, 0), new BlockPos(58, 70, 0));
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().allMatch(step -> step.pos().getY() == 70),
-                "水面の層から離れない: " + result.steps().stream().map(PathStep::pos).toList());
+                "does not leave the water-surface layer: " + result.steps().stream().map(PathStep::pos).toList());
         assertEquals(58, result.steps().size(),
-                "1手1マスで真っ直ぐ渡る: " + result.steps().size() + "手");
+                "crosses straight at one block per step: " + result.steps().size() + " steps");
     }
 
     /**
-     * 岸へ上がる直前に一旦水中へ戻らない。
+     * Does not dip back underwater right before climbing onto the shore.
      *
-     * <p>浅瀬（足が着く水）を「水底を歩く」値段で数えていた頃は、それが遊泳の1.64倍あったので、
-     * <b>浅瀬を避けて深い方へ沈み、泳いでから上がる</b>のが安くなっていた。実機で
-     * 「地面に上がる前に一旦水中に戻る軌道」として見えていたのがこれ。
+     * <p>Back when shallows (water where the feet touch bottom) were priced as "walking on the bed", that was 1.64x
+     * swimming, so <b>avoiding the shallows, sinking into deeper water and swimming before climbing out</b> was
+     * cheaper. That is what showed up in-game as "a trajectory that dips back into the water before going ashore".
      *
-     * <p>バニラの{@code LivingEntity#travel}は水中分岐を{@code isInWater()}だけで選び、
-     * 足が着いているかは装備の係数にしか使わない——立っていても泳いでいても速度は同じなので、
-     * 浅瀬を割高にする理由が無い。
+     * <p>Vanilla's {@code LivingEntity#travel} picks the water branch on {@code isInWater()} alone, and whether
+     * the feet touch bottom only feeds an equipment factor. Speed is the same standing or swimming, so there is no
+     * reason to make shallows more expensive.
      */
     @Test
     void staysAtTheSurfaceInsteadOfDivingBackBeforeComingAshore() {
-        // 傾斜した浜: 海底が x=8 の y=60 から x=15 の y=65 まで1マスずつ上がる。水面は y=65
+        // A sloping beach: the seabed rises one block at a time from y=60 at x=8 to y=65 at x=15. Water surface at y=65
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 50, -8, 30, 86, 8));
         for (int x = -1; x <= 25; x++) {
             int floorTop = x < 8 ? 60 : Math.min(60 + (x - 8), 65);
@@ -710,20 +710,20 @@ class AStarPathfinderTest {
         List<PathStep> steps = result.steps();
         for (int i = 1; i < steps.size(); i++) {
             assertTrue(steps.get(i).pos().getY() >= steps.get(i - 1).pos().getY(),
-                    "岸へ向かう途中で沈んでいる: " + steps.stream().map(PathStep::pos).toList());
+                    "sinks on the way to the shore: " + steps.stream().map(PathStep::pos).toList());
         }
     }
 
     /**
-     * 水面へ向かうとき、XとZの両方へ進みながら上がれる。
+     * When heading for the water surface, it can rise while advancing in both X and Z.
      *
-     * <p>浮上がカーディナル4方向しか無かった頃は「真っ直ぐ進んでから上がる」か「上がってから
-     * 斜めに進む」に分解され、水面へ向かう区間だけ経路が直角に折れていた（実機報告
-     * 「水面で斜めっていう選択肢が入っていない」）。
+     * <p>Back when surfacing had only the four cardinal directions, it got decomposed into "go straight, then rise" or
+     * "rise, then go diagonally", and the path bent at a right angle just on the stretch toward the surface (in-game
+     * report: "there's no diagonal option at the water surface").
      */
     @Test
     void risesDiagonallyTowardsASurfaceGoalOffTheAxis() {
-        // 十分に広い水塊。目的地は斜め上（XもZもZ方向も動かす必要がある）
+        // A sufficiently large body of water. The destination is diagonally above (X, Z and the Z direction all need to change)
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 30, -8, 40, 86, 40));
         for (int x = -1; x <= 30; x++) {
             for (int z = -1; z <= 30; z++) {
@@ -750,19 +750,19 @@ class AStarPathfinderTest {
             }
         }
         assertTrue(roseDiagonally,
-                "浮上がカーディナル4方向に縛られ、上がる区間だけ直角に折れている: "
+                "surfacing is tied to the four cardinal directions, bending at a right angle only on the rising stretch: "
                         + steps.stream().map(PathStep::pos).toList());
     }
 
     /**
-     * 上と同じ「跳ねて割増を回避する」の<b>斜め版</b>。既存の番人は幅1の一本道なので斜めの手が
-     * そもそも生成されず、斜め浮上を足したときの跳ねを検出できない。開けた水中で見る。
+     * The <b>diagonal version</b> of the same "bounce to dodge the surcharge" check above. The existing guard is a 1-wide
+     * corridor, so diagonal moves are never generated and it can't catch bouncing once diagonal surfacing is added. This one checks open water.
      */
     @Test
     void doesNotBobDiagonallyToDodgeTheSubmergedPenalty() {
-        // 天井と床のある水没した部屋。<b>目的地は真っ直ぐではなく斜め</b>——跳ねが得になるのは
-        // 「正直に進んでも斜めの値段を払う」区間だけで、カーディナルに進める区間では
-        // 斜め跳ね(√3+√2·P)より素直な水平2手(2·P)の方が元から安く、番人にならない
+        // A flooded room with a ceiling and floor. <b>The destination is diagonal, not straight ahead</b>: bouncing only pays off
+        // on stretches that "pay the diagonal price even when moving honestly"; where it can move cardinally,
+        // two plain horizontal steps (2·P) are already cheaper than a diagonal bounce (√3+√2·P), so it wouldn't guard anything
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 24, 76, 24));
         for (int x = -1; x <= 13; x++) {
             for (int z = -1; z <= 13; z++) {
@@ -786,18 +786,18 @@ class AStarPathfinderTest {
             }
         }
         assertEquals(0, climbs,
-                "水面へ出るためでもないのに浮上している＝割増を跳ねて回避している: "
+                "rises even though it isn't heading out of the water = bouncing to dodge the surcharge: "
                         + steps.stream().map(PathStep::pos).toList());
     }
 
     /**
-     * 浮上の割増免除を悪用して上下に跳ねない。斜め浮上だけが割増の対象外なので、値を大きくしすぎると
-     * 「斜めに上がって斜めに降りる」を繰り返すのが水平移動より安くなり、水中で延々と波打つ経路になる。
-     * {@code SUBMERGED_TRAVEL_PENALTY}の上限はここから決まっている。
+     * Does not bounce up and down to exploit the surfacing surcharge exemption. Only diagonal surfacing is exempt,
+     * so if the value is too large, repeatedly "rising diagonally and sinking diagonally" becomes cheaper than moving
+     * horizontally, giving an endlessly undulating path underwater. The cap on {@code SUBMERGED_TRAVEL_PENALTY} comes from this.
      */
     @Test
     void doesNotBobUpAndDownToDodgeTheSubmergedPenalty() {
-        // 天井のある水没した一本道。カーディナルにしか進めないので、上下に跳ねる以外の抜け道が無い
+        // A flooded corridor with a ceiling. It can only move cardinally, so bouncing up and down is the only loophole
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 24, 76, 8));
         for (int x = -1; x <= 13; x++) {
             cells.set(x, 60, 0, FakeCells.BEDROCK);
@@ -818,17 +818,17 @@ class AStarPathfinderTest {
                 climbs++;
             }
         }
-        assertTrue(climbs <= 1, "水中で上下に波打っている: "
+        assertTrue(climbs <= 1, "undulating up and down underwater: "
                 + steps.stream().map(step -> step.pos().getY()).toList());
     }
 
     /**
-     * 水面へ出られない場所では形が変わらない。水没した洞窟や天井のある水路では割増が一様に
-     * 乗るだけで、潜ったまま進む以外の選択肢がそもそも無い。
+     * Where it can't surface, the shape doesn't change. In flooded caves or roofed channels the surcharge just applies
+     * uniformly, and there is no option other than staying submerged anyway.
      */
     @Test
     void stillSwimsThroughAFloodedTunnelWithNoSurfaceAbove() {
-        // y=61〜62 だけが水で、y=63 が岩盤の天井。浮上できない水没坑道
+        // Only y=61-62 is water, with a bedrock ceiling at y=63. A flooded tunnel with no way to surface
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 24, 76, 8));
         for (int x = -1; x <= 13; x++) {
             cells.set(x, 60, 0, FakeCells.BEDROCK);
@@ -840,12 +840,12 @@ class AStarPathfinderTest {
         PathResult result = search(cells.maxSubmergedTicks(0), new BlockPos(0, 61, 0),
                 new BlockPos(12, 61, 0));
 
-        assertTrue(result.complete(), "浮上できなくても水没坑道は通れる");
+        assertTrue(result.complete(), "a flooded tunnel is passable even without surfacing");
         assertTrue(result.steps().stream().allMatch(step -> step.pos().getY() <= 62),
-                "天井があるので高さは変わらない: " + result.steps().stream().map(PathStep::pos).toList());
+                "the ceiling keeps the height unchanged: " + result.steps().stream().map(PathStep::pos).toList());
     }
 
-    /** 水底40、水41〜70、その上は空の深い海。 */
+    /** A deep sea: bed at 40, water at 41-70, sky above. */
     private static FakeCells deepSea(int length) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 30, -8, length + 12, 86, 8));
         for (int x = -1; x <= length + 1; x++) {
@@ -860,11 +860,11 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 遠い水中の目的地へは、息継ぎに水面へ出てから向かう。
+     * For a distant underwater destination, it first surfaces for air and then heads there.
      *
-     * <p>息の上限を<b>マス数</b>で持っていた頃はここが到達不能だった——水底から水面へ浮上する
-     * だけで上限を超えるので、息継ぎに行くことすらできず経路が途中で切れていた。上限がtickに
-     * なったことで、浮上・横断・潜降がそれぞれ空気1回分に収まるか正しく測れる。
+     * <p>Back when the breath limit was held in <b>blocks</b>, this was unreachable: just surfacing from the bed
+     * exceeded the limit, so it couldn't even go up for air and the path got cut off midway. Now that the limit is
+     * in ticks, it correctly measures whether surfacing, crossing and diving each fit within one breath.
      */
     @Test
     void surfacesToBreatheOnTheWayToADistantUnderwaterGoal() {
@@ -872,14 +872,14 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 45, 0), new BlockPos(60, 45, 0));
 
-        assertTrue(result.complete(), "息継ぎを挟めば深い水中の目的地にも届く: " + result.termination());
+        assertTrue(result.complete(), "with breathing stops it reaches even a deep underwater destination: " + result.termination());
         assertTrue(result.steps().stream().anyMatch(step -> step.pos().getY() == 70),
-                "途中で水面まで出る: " + result.steps().stream().mapToInt(step -> step.pos().getY()).max());
+                "goes up to the surface along the way: " + result.steps().stream().mapToInt(step -> step.pos().getY()).max());
     }
 
     /**
-     * 息が続く範囲の水中の目的地へは、わざわざ水面へ寄らずまっすぐ向かう。安全のための
-     * 割増（{@code SUBMERGED_TRAVEL_PENALTY}）が、息に余裕のある近距離まで遠回りにしないこと。
+     * For an underwater destination within breath range, it heads straight there without detouring to the surface. The
+     * safety surcharge ({@code SUBMERGED_TRAVEL_PENALTY}) must not turn short distances with breath to spare into detours.
      */
     @Test
     void goesStraightToANearbyUnderwaterGoal() {
@@ -889,13 +889,13 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().allMatch(step -> step.pos().getY() == 45),
-                "息が続くなら浮上せず直行する: " + result.steps().stream().map(PathStep::pos).toList());
+                "goes straight without surfacing if breath lasts: " + result.steps().stream().map(PathStep::pos).toList());
     }
 
     @Test
     void samePathIsReturnedForTheSameTerrain() {
-        // 展開ノード数で打ち切るのは、同じ入力なら同じ経路を返させるため。
-        // 時間で打ち切ると、そのときのマシン負荷で線が変わって案内が落ち着かない
+        // Cutting off by expanded-node count makes the same input return the same path.
+        // Cutting off by time would change the line with the machine load at the moment, and guidance wouldn't settle
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ..........
                 ....##....
@@ -911,8 +911,8 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 幅{@code gapBlocks}マスの割れ目。両岸は岩盤で、掘って降りることも回り込むこともできない。
-     * 断面の外（z≠0）も岩盤で埋めて、跳ぶ以外の道を残さない。
+     * A gap {@code gapBlocks} wide. Both banks are bedrock, so it can neither dig down nor go around.
+     * Outside the cross-section (z≠0) is filled with bedrock too, leaving no way but jumping.
      */
     private static FakeCells chasm(int gapBlocks) {
         FakeCells cells = FakeCells.of(0, 60, 0, "B".repeat(gapBlocks + 4))
@@ -922,7 +922,7 @@ class AStarPathfinderTest {
                 cells.set(x, y, 0, FakeCells.AIR);
             }
         }
-        // 割れ目は x=2 から gapBlocks マス。床を抜き、落ちても足場が無いよう深く空ける
+        // The gap is gapBlocks wide starting at x=2. Remove the floor and hollow it out deep so a fall finds no footing
         for (int x = 2; x < 2 + gapBlocks; x++) {
             for (int y = 40; y <= 60; y++) {
                 cells.set(x, y, 0, FakeCells.AIR);
@@ -938,69 +938,69 @@ class AStarPathfinderTest {
 
             PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(2 + gap, 61, 0));
 
-            assertTrue(result.complete(), gap + "マスの割れ目は跳んで渡れるはず");
+            assertTrue(result.complete(), gap + "-block gap should be jumpable");
             assertTrue(movements(result).contains(MovementType.JUMP),
-                    gap + "マスの割れ目を跳ばずに渡った: " + movements(result));
+                    gap + "-block gap crossed without jumping: " + movements(result));
         }
     }
 
     @Test
     void doesNotJumpOffSoulSand() {
-        // 1マスの割れ目。踏み切り地点(x=1)だけをソウルサンドにする
+        // A one-block gap. Only the takeoff point (x=1) is soul sand
         CellSource cells = chasm(1).set(1, 60, 0, FakeCells.SOUL_SAND);
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 61, 0));
 
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "減速したまま踏み切ると届かない。跳べと言ってはいけない: " + movements(result));
+                "taking off while slowed falls short. Must not say to jump: " + movements(result));
     }
 
     @Test
     void doesNotJumpOverLava() {
-        // 1マスの割れ目の底を溶岩で埋める。跳べる幅ではあるが、外せば死ぬ
+        // Fill the bottom of a one-block gap with lava. It's a jumpable width, but missing is death
         FakeCells cells = chasm(1);
         cells.set(2, 60, 0, FakeCells.LAVA);
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 61, 0));
 
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "溶岩の上は跳ばない: " + movements(result));
+                "doesn't jump over lava: " + movements(result));
     }
 
     /**
-     * 蜘蛛の巣は{@code WebBlock#entityInside}が移動量そのものに0.25を掛けるので、踏み切り地点が
-     * 巣の中では疾走で乗せた速度もジャンプの初速も踏み出した瞬間に大きく削られる。理論上届く
-     * 場合もあるが、外して落ちる確率が高すぎるので跳べとは案内しない。
+     * Cobweb multiplies the movement itself by 0.25 in {@code WebBlock#entityInside}, so with the takeoff point
+     * inside a web, both the sprint speed and the jump's initial speed are cut sharply the moment it steps off. It may
+     * reach in theory, but the chance of missing and falling is too high, so it doesn't guide a jump.
      */
     @Test
     void doesNotJumpFromACobweb() {
-        // 1マスの割れ目。踏み切り地点(x=1)そのものを蜘蛛の巣にする
+        // A one-block gap. The takeoff point (x=1) itself is a cobweb
         CellSource cells = chasm(1).set(1, 61, 0, FakeCells.COBWEB);
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 61, 0));
 
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "蜘蛛の巣の上からは跳ばない: " + movements(result));
+                "doesn't jump from on top of a cobweb: " + movements(result));
     }
 
     /**
-     * 蜘蛛の巣は当たり判定が無いので{@code clearWithoutDigging}は素通りするが、滞空中に体が
-     * かすめれば同じ理由で速度を削られる。踏み切りだけ見ていては防げない。
+     * Cobweb has no collision box, so {@code clearWithoutDigging} passes through it, but if the body grazes it
+     * mid-air the speed gets cut for the same reason. Looking only at the takeoff doesn't prevent that.
      */
     @Test
     void doesNotJumpThroughACobwebInTheGap() {
-        // 3マスの割れ目のうち、跳び越える空間の手前(x=2)を蜘蛛の巣で埋める
+        // In a 3-block gap, fill the near side (x=2) of the space jumped over with cobweb
         CellSource cells = chasm(3).set(2, 61, 0, FakeCells.COBWEB);
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(5, 61, 0));
 
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "蜘蛛の巣をかすめる跳躍は生成しない: " + movements(result));
+                "does not generate a jump that grazes a cobweb: " + movements(result));
     }
 
     @Test
     void stillJumpsWhenThereIsAFloorAboveTheLava() {
-        // 溶岩はあるが、その上に床がある割れ目。落ちても溶岩には触れないので跳んでよい
+        // A gap with lava below but a floor above it. Falling wouldn't touch the lava, so jumping is fine
         FakeCells cells = chasm(1);
         cells.set(2, 55, 0, FakeCells.LAVA).set(2, 56, 0, FakeCells.STONE);
 
@@ -1008,18 +1008,18 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(movements(result).contains(MovementType.JUMP),
-                "溶岩との間に床があるなら跳べる: " + movements(result));
+                "can jump if there's a floor between it and the lava: " + movements(result));
     }
 
     @Test
     void doesNotJumpGapsBeyondSprintJumpRange() {
-        // 4マスの割れ目は疾走ジャンプの到達限界を超える
+        // A 4-block gap exceeds the reach of a sprint jump
         CellSource cells = chasm(4);
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(6, 61, 0));
 
-        assertFalse(result.complete(), "届かない距離を跳べと言ってはいけない");
-        assertFalse(movements(result).contains(MovementType.JUMP), "跳躍は生成されない: " + movements(result));
+        assertFalse(result.complete(), "must not say to jump an unreachable distance");
+        assertFalse(movements(result).contains(MovementType.JUMP), "no jump is generated: " + movements(result));
     }
 
     @Test
@@ -1028,11 +1028,11 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
-        assertTrue(result.complete(), "跳べなくてもブロックを置けば渡れる");
+        assertTrue(result.complete(), "even without jumping, it can cross by placing blocks");
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "跳躍を切っているのに跳んだ: " + movements(result));
+                "jumped even though jumping is disabled: " + movements(result));
         assertTrue(result.steps().stream().anyMatch(PathStep::bridging),
-                "跳ぶ代わりに足場を置いて渡る: " + movements(result));
+                "crosses by placing footing instead of jumping: " + movements(result));
     }
 
     @Test
@@ -1041,12 +1041,12 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
-        assertFalse(result.complete(), "跳ぶことも置くこともできない割れ目は渡れない");
+        assertFalse(result.complete(), "a gap it can neither jump nor bridge is uncrossable");
     }
 
     @Test
     void landsOnTheNearestBankRatherThanJumpingFarther() {
-        // 2マスの割れ目の対岸(x=4)の先に、さらに割れ目(x=5)がある。手前の岸に降りるべき
+        // Past the far bank (x=4) of a 2-block gap there is another gap (x=5). It should land on the near bank
         FakeCells cells = chasm(2);
         for (int y = 40; y <= 60; y++) {
             cells.set(5, y, 0, FakeCells.AIR);
@@ -1056,12 +1056,12 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
         assertTrue(result.complete());
-        assertEquals(new BlockPos(4, 61, 0), last(result).pos(), "手前の岸に降りる");
+        assertEquals(new BlockPos(4, 61, 0), last(result).pos(), "lands on the near bank");
     }
 
     /**
-     * 掘って登ることも迂回することもできない断崖。Pillarでしか上がれない。
-     * 断面の外（z≠0）を岩盤で埋めるのは、そこが空気のままだと橋を架けて回り込めてしまうため。
+     * A cliff it can neither dig up nor go around. Only Pillar gets it up.
+     * Outside the cross-section (z≠0) is filled with bedrock because if it stayed air, it could bridge around.
      */
     private static FakeCells bedrockCliff() {
         return FakeCells.of(0, 60, 0, """
@@ -1080,12 +1080,12 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 64, 0));
 
-        assertTrue(result.complete(), "ブロックを積めば断崖の上に出られる");
+        assertTrue(result.complete(), "pillaring up blocks gets it on top of the cliff");
         assertTrue(result.steps().stream().anyMatch(PathStep::bridging),
-                "登るためにブロックを置く区間が出る: " + movements(result));
+                "a stretch places blocks to climb: " + movements(result));
         assertTrue(result.steps().stream().filter(PathStep::bridging)
                         .allMatch(step -> step.movement() == MovementType.ASCEND),
-                "積んで登る区間は上昇として案内する: " + movements(result));
+                "a pillaring stretch is guided as ascending: " + movements(result));
     }
 
     @Test
@@ -1094,26 +1094,26 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 64, 0));
 
-        assertFalse(result.complete(), "置くブロックが無ければ断崖は越えられない");
+        assertFalse(result.complete(), "without blocks to place, the cliff can't be climbed");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "持っていないブロックを置けとは言わない: " + result.steps());
+                "doesn't ask to place blocks it doesn't have: " + result.steps());
     }
 
     @Test
     void doesNotPillarThroughAnUnbreakableCeiling() {
-        // 断崖と同じ地形だが、積み上がる列(x=0)の頭上が岩盤で塞がっている
+        // Same terrain as the cliff, but the headroom above the pillaring column (x=0) is blocked by bedrock
         CellSource cells = bedrockCliff().set(0, 63, 0, FakeCells.BEDROCK).canPlaceBlocks(true);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 64, 0));
 
-        assertFalse(result.complete(), "掘れない天井の下では積み上がれない");
-        assertTrue(result.steps().stream().noneMatch(PathStep::bridging), "積む区間は出ない: " + result.steps());
+        assertFalse(result.complete(), "can't pillar up under an undiggable ceiling");
+        assertTrue(result.steps().stream().noneMatch(PathStep::bridging), "no pillaring stretch: " + result.steps());
     }
 
     /**
-     * 岩盤に囲まれた溶岩の水路。足元(y=60)の4マスが溶岩なので、歩くには広すぎ跳ぶには遠すぎる。
-     * 周囲を岩盤で埋めてあるので、迂回も掘削も空中への足場設置もできない——渡る唯一の手が
-     * 溶岩そのものに足場を置くことになる。
+     * A lava channel enclosed in bedrock. The 4 blocks underfoot (y=60) are lava: too wide to walk, too far to jump.
+     * The surroundings are filled with bedrock, so it can't detour, dig, or place footing in mid-air; the only way
+     * across is to place footing on the lava itself.
      */
     private static FakeCells lavaPond() {
         return FakeCells.of(0, 60, 0, """
@@ -1130,9 +1130,9 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
-        assertTrue(result.complete(), "詰むくらいなら溶岩に足場を置いて渡る");
+        assertTrue(result.complete(), "rather than getting stuck, it places footing on the lava to cross");
         assertTrue(result.steps().stream().anyMatch(PathStep::bridging),
-                "溶岩の上は設置で渡る: " + movements(result));
+                "lava is crossed by placing: " + movements(result));
     }
 
     @Test
@@ -1141,15 +1141,15 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
-        assertFalse(result.complete(), "切っている以上、溶岩は渡れないままでよい");
+        assertFalse(result.complete(), "with it disabled, lava may stay uncrossable");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "溶岩に足場を置く案内はしない: " + result.steps());
+                "does not guide placing footing on lava: " + result.steps());
     }
 
-    /** 溶岩の橋は最後の手段。乾いた迂回路があるなら、多少遠回りでもそちらを通る。 */
+    /** A lava bridge is a last resort. If there's a dry detour, it takes that even if it's somewhat longer. */
     @Test
     void prefersADryDetourOverBridgingLava() {
-        // 溶岩の水路と同じ地形に、z=1側だけ素の地面の迂回路を彫る
+        // Same terrain as the lava channel, with a bare-ground detour carved only on the z=1 side
         FakeCells cells = lavaPond();
         for (int x = 0; x <= 5; x++) {
             cells.set(x, 60, 1, FakeCells.STONE);
@@ -1159,19 +1159,19 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
-        assertTrue(result.complete(), "迂回路があるので到達できる");
+        assertTrue(result.complete(), "reachable thanks to the detour");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "迂回できるのに溶岩へ足場を置いた: " + movements(result));
+                "placed footing on lava even though it could detour: " + movements(result));
     }
 
     /**
-     * ネザーのしだれツタ・ねじれツタは体が通り抜けられるが、バニラでは<b>replaceableではない</b>ので
-     * ブロックを置けない（狙っても隣のセルへ飛ぶ）。当たり判定の有無だけで設置可能と判断してはいけない。
+     * Nether weeping and twisting vines can be walked through, but in vanilla they are <b>not replaceable</b>, so
+     * blocks can't be placed there (aiming at them sends it to the neighboring cell). Don't judge placeability by collision alone.
      */
     @Test
     void neverPlacesABlockWhereVanillaWouldRefuseIt() {
         FakeCells cells = chasm(2).canPlaceBlocks(true).jumpGapEnabled(false);
-        // 隙間の床の高さをしだれツタで埋める。体は通り抜けられるが、そこへ足場は置けない
+        // Fill the gap at floor height with weeping vines. The body passes through, but footing can't be placed there
         cells.set(2, 60, 0, FakeCells.NETHER_VINE);
         cells.set(3, 60, 0, FakeCells.NETHER_VINE);
 
@@ -1181,12 +1181,12 @@ class AStarPathfinderTest {
                         .map(PathStep::placedBlockPos)
                         .filter(pos -> pos != null)
                         .noneMatch(pos -> pos.getY() == 60 && pos.getX() >= 2 && pos.getX() < 4),
-                "置けないしだれツタの位置へ足場を置いている: " + result.steps());
+                "places footing where weeping vines prevent placement: " + result.steps());
     }
 
     /**
-     * 梯子・ツタに掴まっている間は{@code onGround()}がfalseで{@code jumpFromGround()}が呼ばれない。
-     * 掴まったまま接地していても{@code handleOnClimbable}が水平速度を±0.15に固定する。
+     * While holding onto a ladder or vine, {@code onGround()} is false and {@code jumpFromGround()} isn't called.
+     * Even if grounded while holding on, {@code handleOnClimbable} clamps horizontal speed to ±0.15.
      */
     @Test
     void doesNotJumpWhileHangingOnAClimbable() {
@@ -1198,13 +1198,13 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "梯子に掴まったままでは跳べない: " + movements(result));
+                "can't jump while holding onto a ladder: " + movements(result));
     }
 
     /**
-     * addPillarと同じ理由（{@code onGround()}がfalse・{@code handleOnClimbable}が速度を固定）で、
-     * 梯子・ツタを掴んでいる間はaddBridgeも踏み切れない。通路の全幅が梯子で覆われていると、
-     * 掴まったまま橋を架けるという不可能な手しか無いので、到達できないのが正しい（issue #46）。
+     * For the same reason as addPillar ({@code onGround()} is false, {@code handleOnClimbable} clamps speed),
+     * addBridge can't take off while holding a ladder or vine either. When the full width of the passage is covered
+     * by ladders, the only move is the impossible one of bridging while holding on, so unreachable is correct (issue #46).
      */
     @Test
     void doesNotBridgeWhileHangingOnAClimbable() {
@@ -1216,17 +1216,17 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
         assertFalse(result.complete(),
-                "梯子を掴んだまま橋を架ける以外に渡る手が無いので届かない: " + result.steps());
+                "unreachable, since the only way across is bridging while holding a ladder: " + result.steps());
     }
 
     /**
-     * addJumpGapと同じ理由（onGround()がfalseでjumpFromGround()が呼ばれない）で、
-     * addAscendも梯子・ツタを掴んだままでは踏み切れない。
+     * For the same reason as addJumpGap (onGround() is false, so jumpFromGround() isn't called),
+     * addAscend can't take off while holding a ladder or vine either.
      */
     @Test
     void doesNotAscendWhileHangingOnAClimbable() {
-        // x=2,3に1マスの段差がある地形（掘って迂回できないよう岩盤で作る）。
-        // 踏み切り位置(x=1)を梯子で覆う
+        // Terrain with a one-block step at x=2,3 (built from bedrock so it can't dig around it).
+        // Cover the takeoff position (x=1) with a ladder
         CellSource cells = FakeCells.of(0, 60, 0, """
                 ......
                 .HBB..
@@ -1234,11 +1234,11 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 62, 0));
 
-        assertFalse(result.complete(), "梯子を掴んだままでは跳んで段差へ登れない: " + result.steps());
+        assertFalse(result.complete(), "can't jump up the step while holding a ladder: " + result.steps());
     }
 
     /**
-     * 斜め昇り(addDiagonalAscend)も同じ理由でaddAscendと同じ制約を受ける。
+     * The diagonal ascent (addDiagonalAscend) is subject to the same constraint as addAscend for the same reason.
      */
     @Test
     void doesNotDiagonalAscendWhileHangingOnAClimbable() {
@@ -1249,14 +1249,14 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 62, 1));
 
-        assertFalse(result.complete(), "梯子を掴んだままでは斜めにも跳んで登れない: " + result.steps());
+        assertFalse(result.complete(), "can't jump up diagonally either while holding a ladder: " + result.steps());
     }
 
     /**
-     * 降りる・落ちる側はジャンプを要らないので生成そのものは禁止しないが（addAscend系と違い
-     * {@code onGround()}は無関係）、{@code handleOnClimbable}が水平速度を±0.15ブロック/tickに
-     * 固定するぶん、疾走前提の値段より確実に高くつく必要がある
-     * （{@link ActionCosts#CLIMBABLE_TAKEOFF_SPEED_FACTOR}）。
+     * Descending or falling needs no jump, so generation itself isn't forbidden (unlike the addAscend family,
+     * {@code onGround()} is irrelevant), but since {@code handleOnClimbable} clamps horizontal speed to ±0.15 blocks/tick,
+     * it must reliably cost more than the sprint-based price
+     * ({@link ActionCosts#CLIMBABLE_TAKEOFF_SPEED_FACTOR}).
      */
     @Test
     void costsMoreToDescendOffAClimbableThanOffOrdinaryGround() {
@@ -1276,19 +1276,19 @@ class AStarPathfinderTest {
         assertEquals(List.of(MovementType.DESCEND), movements(ordinaryResult));
         assertEquals(List.of(MovementType.DESCEND), movements(climbableResult));
         assertTrue(climbableResult.steps().get(0).cost() > ordinaryResult.steps().get(0).cost(),
-                "梯子を掴んだ地点から降りる方が疾走前提より高くつくはず: "
+                "descending from a ladder-holding point should cost more than the sprint-based price: "
                         + climbableResult.steps().get(0).cost() + " vs " + ordinaryResult.steps().get(0).cost());
     }
 
     /**
-     * 助走が要る。疾走の最高速度は静止から約5tick（≒1マス）かけて乗り、滞空中はほとんど加速
-     * できないので、到達距離は踏み切り速度でそのまま決まる。1マス幅の足場からは自分のマスの中しか
-     * 助走できない。
+     * It needs a run-up. Top sprint speed takes about 5 ticks (about 1 block) to reach from standstill, and there's
+     * almost no acceleration in mid-air, so reach is set directly by the takeoff speed. From a 1-block-wide ledge it
+     * can only run up within its own block.
      */
     @Test
     void doesNotJumpFromAOneBlockPerchWithNoRunUp() {
         FakeCells cells = chasm(2).jumpGapEnabled(true).canPlaceBlocks(false);
-        // 踏み切り(x=1)の手前を塞いで、助走できない1マス幅の足場にする
+        // Block off the space before the takeoff (x=1), making a 1-block-wide ledge with no run-up
         for (int z = -1; z <= 1; z++) {
             cells.set(0, 61, z, FakeCells.BEDROCK);
         }
@@ -1296,12 +1296,12 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
         assertFalse(movements(result).contains(MovementType.JUMP),
-                "助走できない足場から跳ばせてはいけない: " + movements(result));
+                "must not make it jump from a ledge with no run-up: " + movements(result));
     }
 
     /**
-     * ソウルサンドの平地の脇に、同じソウルサンドの1マスの尾根を置く。上がっても地面は同じで
-     * 何一つ速くならないので、上下動は純粋な損。
+     * Next to flat soul sand, place a 1-block ridge of the same soul sand. Going up gives the same ground and
+     * nothing gets any faster, so climbing up and down is a pure loss.
      */
     private static FakeCells soulSandFlatWithRidge(char ridgeTop) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 52, -8, 16, 76, 8));
@@ -1314,8 +1314,8 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 速度倍率は水平移動にしか掛かっていなかったので、ソウルサンドの上では「1マス登る」(4.633)が
-     * 「1マス歩く」(8.909)より安く、鋸歯状に登り降りするのが最安経路になっていた。
+     * The speed factor was applied only to horizontal movement, so on soul sand "climb one block" (4.633) was
+     * cheaper than "walk one block" (8.909), and sawtoothing up and down became the cheapest path.
      */
     @Test
     void crossesSoulSandFlatInsteadOfHoppingOntoTheRidgeBeside() {
@@ -1325,11 +1325,11 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().allMatch(step -> step.pos().getY() == 61),
-                "同じソウルサンドなら尾根へ登る意味は無い: " + movements(result));
+                "with the same soul sand there's no point climbing the ridge: " + movements(result));
     }
 
     /**
-     * 「上下動を一律に嫌う」実装にしてはいけない。尾根の上が本当に速い地面なら、登る価値はある。
+     * Must not be implemented as "uniformly dislike vertical movement". If the ridge top really is faster ground, climbing is worth it.
      */
     @Test
     void stillClimbsOntoARidgeThatIsGenuinelyFaster() {
@@ -1339,10 +1339,10 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().anyMatch(step -> step.pos().getY() > 61),
-                "石の尾根は本当に2.5倍速いので登るべき: " + movements(result));
+                "the stone ridge really is 2.5x faster, so it should climb: " + movements(result));
     }
 
-    /** 障害物の無い平坦な通路。ゴールの扱い（座標一致か領域か）だけを見るための地形。 */
+    /** A flat corridor with no obstacles. Terrain for looking only at goal handling (exact coordinate or region). */
     private static FakeCells flatCorridor() {
         return FakeCells.of(0, 60, 0, """
                 ..........
@@ -1352,8 +1352,8 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 中間目標は「通る場所」ではなく「向かう方角」でしかないので、そこへ座標ぴったり寄せるために
-     * 遠回りしてはいけない。ゴールを半径付きの領域にすると、触れた時点で終われる。
+     * An intermediate target is only "a direction to head", not "a place to pass through", so it must not detour
+     * to land exactly on its coordinate. Making the goal a region with a radius lets it finish on first touch.
      */
     @Test
     void aRadiusGoalStopsAsSoonAsTheRegionIsTouched() {
@@ -1366,11 +1366,11 @@ class AStarPathfinderTest {
 
         assertTrue(exact.complete() && region.complete());
         assertTrue(region.steps().size() < exact.steps().size(),
-                "半径ぶん手前で終われるはず: " + region.steps().size() + " vs " + exact.steps().size());
-        assertEquals(5, region.steps().size(), "半径4なら x=5 で領域に触れる");
+                "should finish a radius short: " + region.steps().size() + " vs " + exact.steps().size());
+        assertEquals(5, region.steps().size(), "with radius 4 it touches the region at x=5");
     }
 
-    /** 半径0（本来の目的地）は従来どおり座標の完全一致。 */
+    /** Radius 0 (the real destination) is an exact coordinate match, as before. */
     @Test
     void aZeroRadiusGoalStillRequiresAnExactMatch() {
         PathResult result = new AStarPathfinder(flatCorridor())
@@ -1381,13 +1381,13 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 中間目標が壁の中のような到達不能な点でも、領域なら近くを通り抜けるだけで済む。
-     * 層1はチャンク平均しか見ないので、waypointが到達不能な点に落ちること自体は避けられない。
+     * Even when an intermediate target is unreachable, e.g. inside a wall, a region lets it just pass nearby.
+     * Layer 1 only looks at chunk averages, so a waypoint landing on an unreachable point can't be avoided in itself.
      */
     @Test
     void aRadiusGoalSucceedsEvenWhenItsCentreIsUnreachable() {
         FakeCells cells = flatCorridor();
-        // 目標の座標そのものを岩盤で埋める。座標一致のゴールでは永久に到達しない
+        // Fill the target coordinate itself with bedrock. An exact-coordinate goal never reaches it
         BlockPos unreachable = new BlockPos(5, 61, 0);
         for (int z = -1; z <= 1; z++) {
             cells.set(5, 61, z, FakeCells.BEDROCK);
@@ -1399,13 +1399,13 @@ class AStarPathfinderTest {
         PathResult region = new AStarPathfinder(cells)
                 .search(new BlockPos(0, 61, 0), unreachable, NOT_CANCELLED, 4);
 
-        assertFalse(exact.complete(), "座標一致では岩盤の中には入れない");
-        assertTrue(region.complete(), "領域なら手前で触れて済む");
+        assertFalse(exact.complete(), "an exact-coordinate goal can't get inside the bedrock");
+        assertTrue(region.complete(), "a region is satisfied by touching it from just before");
     }
 
     /**
-     * 幅{@code width}の溶岩の水路。両岸は岩盤で、渡るには溶岩へ足場を置き続けるしかない。
-     * {@link #lavaPond}を任意の幅にした版で、橋の連続長の上限を試すために使う。
+     * A lava channel {@code width} wide. Both banks are bedrock, and the only way across is to keep placing footing on the lava.
+     * A variant of {@link #lavaPond} with arbitrary width, used to test the cap on consecutive bridge length.
      */
     private static FakeCells lavaChannel(int width) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 40, -8, width + 12, 80, 8))
@@ -1420,8 +1420,8 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 上限は「コストを重くする」のではなく「移動そのものを作らない」で効かせている。重みで
-     * 抑えるとA*は安い辺から展開するので、橋に手を伸ばす前に周囲を展開し尽くして予算を焼く。
+     * The cap works by "not creating the move at all", not by "making it costly". Holding it back with weight,
+     * A* expands from cheap edges, so it would exhaust the surroundings and burn the budget before reaching for the bridge.
      */
     @Test
     void refusesToBridgeBeyondTheConfiguredRun() {
@@ -1429,9 +1429,9 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(13, 61, 0));
 
-        assertFalse(result.complete(), "上限を超える橋しか無いなら渡らない");
+        assertFalse(result.complete(), "doesn't cross if the only bridges exceed the cap");
         assertTrue(result.steps().stream().filter(PathStep::bridging).count() <= 6,
-                "上限を超えて橋を伸ばしてはいけない: " + movements(result));
+                "must not extend a bridge past the cap: " + movements(result));
     }
 
     @Test
@@ -1440,23 +1440,23 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(5, 61, 0));
 
-        assertTrue(result.complete(), "上限内の橋は今までどおり渡れる");
+        assertTrue(result.complete(), "bridges within the cap are crossed as before");
         assertTrue(result.steps().stream().anyMatch(PathStep::bridging), "" + movements(result));
     }
 
-    /** 上限0は無制限。設定で切ったときに従来どおりの挙動へ戻ることの確認。 */
+    /** A cap of 0 is unlimited. Confirms that disabling it in the config restores the previous behavior. */
     @Test
     void aZeroCapMeansNoLimit() {
         CellSource cells = lavaChannel(12).maxBridgeRunBlocks(0);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(13, 61, 0));
 
-        assertTrue(result.complete(), "上限0なら長さに関わらず渡る");
+        assertTrue(result.complete(), "with a cap of 0 it crosses regardless of length");
     }
 
     /**
-     * 溶岩の上だけを別の上限で切れる。空洞に架ける橋は外しても落ちるだけだが、溶岩の上では
-     * 即死するので、同じ長さでも許してよい範囲が違う。
+     * Bridges over lava alone can be cut off with a separate cap. Missing a bridge over a void just means a fall,
+     * but over lava it's instant death, so the acceptable range differs even for the same length.
      */
     @Test
     void refusesToBridgeOverLavaBeyondTheLavaRunEvenWhenTheGeneralCapIsOff() {
@@ -1464,10 +1464,10 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(13, 61, 0));
 
-        assertFalse(result.complete(), "溶岩側の上限を超える橋しか無いなら渡らない");
+        assertFalse(result.complete(), "doesn't cross if the only bridges exceed the lava cap");
     }
 
-    /** 溶岩側の上限は溶岩の上でだけ効く。空洞に架ける橋は今までどおりmaxBridgeRunBlocksが見る。 */
+    /** The lava cap applies only over lava. Bridges over a void are governed by maxBridgeRunBlocks as before. */
     @Test
     void theLavaRunCapLeavesBridgesOverEmptySpaceAlone() {
         CellSource cells = chasm(6).jumpGapEnabled(false).canPlaceBlocks(true)
@@ -1475,22 +1475,22 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(8, 61, 0));
 
-        assertTrue(result.complete(), "溶岩の無い割れ目は溶岩側の上限に縛られない: " + movements(result));
+        assertTrue(result.complete(), "a gap without lava isn't bound by the lava cap: " + movements(result));
     }
 
-    /** 溶岩の上では両方の上限が掛かる。厳しい方が勝つ。 */
+    /** Over lava both caps apply. The stricter one wins. */
     @Test
     void theStricterOfTheTwoCapsWinsOverLava() {
         CellSource cells = lavaChannel(12).maxBridgeRunBlocks(6).maxLavaBridgeRunBlocks(0);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(13, 61, 0));
 
-        assertFalse(result.complete(), "溶岩側が無制限でも、橋そのものの上限は残る");
+        assertFalse(result.complete(), "even with the lava cap unlimited, the bridge's own cap remains");
     }
 
     /**
-     * 段差の下に低い棚があるだけの地形。落差{@code drop}は落下ダメージ許容が無ければ渡れない。
-     * ジ・エンドで「低い島へ降りる」形を、奈落抜きで最小化したもの。
+     * Terrain with just a low shelf below a drop. The {@code drop} can't be crossed without fall-damage tolerance.
+     * A minimized version of "descending to a lower island" in the End, without the void.
      */
     private static FakeCells ledgeBelow(int drop) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-4, 20, -4, 12, 90, 4))
@@ -1509,38 +1509,38 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 落下ダメージの許容量<b>だけ</b>が足りずに着地を捨てたことを報告する。詰み時に許容量を
-     * 段階的に緩める探し直し（{@code PathfindingExecutor}）の発動条件になる。
+     * Reports that it discarded a landing <b>only</b> because the fall-damage tolerance fell short. This triggers the
+     * re-search that gradually loosens the tolerance when stuck ({@code PathfindingExecutor}).
      *
-     * <p>奈落や未ロードで捨てた場合に立ててはいけない——そちらは緩めても着地点が現れない。
+     * <p>Must not be set when discarded because of the void or unloaded chunks: loosening won't make a landing appear there.
      */
     @Test
     void reportsWhenOnlyTheFallDamageAllowanceBlockedALanding() {
         AStarPathfinder blocked = new AStarPathfinder(ledgeBelow(8).maxFallDamagePoints(0));
         PathResult result = blocked.search(new BlockPos(0, 61, 0), new BlockPos(6, 53, 0), NOT_CANCELLED);
-        assertFalse(result.complete(), "許容0なら8マスの落下は提示しない");
-        assertTrue(blocked.fallDamageCapBlocked(), "床は読めていて落差だけが問題なので、緩める価値がある");
+        assertFalse(result.complete(), "with tolerance 0 it doesn't offer an 8-block fall");
+        assertTrue(blocked.fallDamageCapBlocked(), "the floor is readable and only the drop is the problem, so loosening is worth it");
 
         AStarPathfinder allowed = new AStarPathfinder(ledgeBelow(8).maxFallDamagePoints(8));
         assertTrue(allowed.search(new BlockPos(0, 61, 0), new BlockPos(6, 53, 0), NOT_CANCELLED).complete(),
-                "許容を開ければ同じ地形で降りられる");
+                "with tolerance opened it can descend on the same terrain");
     }
 
     /**
-     * 底が無い（奈落）場合は、落下ダメージをいくら緩めても着地点が現れない。ここでフラグを立てると
-     * 緩和の梯子を最後まで空回りさせることになる。
+     * With no bottom (the void), no amount of loosening fall damage makes a landing appear. Setting the flag here
+     * would make the relaxation ladder spin uselessly to the end.
      */
     @Test
     void doesNotBlameTheFallAllowanceForABottomlessDrop() {
         AStarPathfinder pathfinder =
                 new AStarPathfinder(bottomlessGap(6).canPlaceBlocks(false).maxFallDamagePoints(0));
         pathfinder.search(new BlockPos(0, 61, 0), new BlockPos(9, 61, 0), NOT_CANCELLED);
-        assertFalse(pathfinder.fallDamageCapBlocked(), "奈落は許容量の問題ではない");
+        assertFalse(pathfinder.fallDamageCapBlocked(), "the void isn't a tolerance problem");
     }
 
     /**
-     * {@link Tolerances}で許容量を上書きすると、{@link CellSource#maxFallDamagePoints()}が0でも
-     * その落下が生成される。詰み時の緩和はこの経路で効く。
+     * Overriding the tolerance with {@link Tolerances} generates the fall even if {@link CellSource#maxFallDamagePoints()} is 0.
+     * Relaxation when stuck works through this path.
      */
     @Test
     void tolerancesOverrideTheViewsFallAllowance() {
@@ -1549,10 +1549,10 @@ class AStarPathfinderTest {
                 new Tolerances(RunCaps.of(cells), 8, true, cells.placedBlockBudget(), false));
 
         assertTrue(loosened.search(new BlockPos(0, 61, 0), new BlockPos(6, 53, 0), NOT_CANCELLED).complete(),
-                "許容量を上書きしても落下が生成されないなら、緩和の梯子は空回りする");
+                "if overriding the tolerance doesn't generate the fall, the relaxation ladder spins uselessly");
     }
 
-    /** 上限で移動を捨てたかどうかは、上限を外して探し直す価値があるかの判定に使う。 */
+    /** Whether a move was discarded by the cap decides whether re-searching without the cap is worth it. */
     @Test
     void reportsWhetherTheCapActuallyBlockedAnything() {
         AStarPathfinder blocked = new AStarPathfinder(lavaChannel(12).maxBridgeRunBlocks(6));
@@ -1565,9 +1565,9 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 割れ目の底が見えない空洞で、遥か下（20マス）に溶岩がある。足元1マス下は空気なので、
-     * 隣接判定（{@code hasAdjacentLava}）だけでは溶岩に気付かない——{@code addBridge}の
-     * lavaFarBelow判定が無いと「危険なし」として溶岩橋切り禁止をすり抜けてしまう。
+     * A gap in a cavern with no visible bottom, with lava far below (20 blocks). One block below the feet is air, so
+     * the adjacency check ({@code hasAdjacentLava}) alone doesn't notice the lava. Without the lavaFarBelow check in
+     * {@code addBridge}, it would slip past the lava-bridge ban as "no danger".
      */
     private static FakeCells voidWithLavaFarBelow(int gapBlocks) {
         FakeCells cells = chasm(gapBlocks);
@@ -1586,14 +1586,14 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
-        assertFalse(result.complete(), "遥か下が溶岩でも、溶岩橋を切っている以上渡ってはいけない");
+        assertFalse(result.complete(), "even with lava far below, it must not cross while lava bridges are disabled");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "足元が空気に見えるだけで、遥か下の溶岩を見逃して橋を架けてはいけない: " + result.steps());
+                "must not miss the lava far below and bridge just because the feet look like air: " + result.steps());
     }
 
     @Test
     void prefersADryDetourOverBridgingAVoidWithLavaFarBelow() {
-        // 遥か下が溶岩の割れ目と同じ地形に、z=1側だけ素の地面の迂回路を彫る
+        // Same terrain as the gap with lava far below, with a bare-ground detour carved only on the z=1 side
         FakeCells cells = voidWithLavaFarBelow(2);
         for (int x = 0; x <= 5; x++) {
             cells.set(x, 60, 1, FakeCells.STONE);
@@ -1603,15 +1603,15 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(4, 61, 0));
 
-        assertTrue(result.complete(), "迂回路があるので到達できる");
+        assertTrue(result.complete(), "reachable thanks to the detour");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "遥か下が溶岩と気付かず、迂回できるのに橋を架けた: " + movements(result));
+                "bridged without noticing lava far below even though it could detour: " + movements(result));
     }
 
     /**
-     * 1マスの割れ目に低い天井を張ったもの。<b>渡る高さを y=61（設置先は y=60）に固定する</b>ため。
-     * 天井が無いと「柱を1マス積んで1段高い所を渡る」経路が出て、ツタから離れた別のセルへ
-     * 足場を置いてしまい、ツタの判定を問えなくなる。
+     * A 1-block gap with a low ceiling. This is to <b>pin the crossing height at y=61 (placement at y=60)</b>.
+     * Without the ceiling, a path "pillar one block and cross one level higher" appears, placing footing in a
+     * different cell away from the vine, so the vine check can't be tested.
      */
     private static FakeCells vinedChasm() {
         FakeCells cells = chasm(1).jumpGapEnabled(false).canPlaceBlocks(true);
@@ -1622,24 +1622,24 @@ class AStarPathfinderTest {
     }
 
     /**
-     * ツタは{@code replaceable}なので「置ける」判定は通るが、狙うと視線がツタに当たり、
-     * ブロックはツタのセルへ入ってしまう。案内した位置には置かれない。
+     * Vines are {@code replaceable}, so they pass the "placeable" check, but aiming hits the vine with the line of sight,
+     * and the block goes into the vine's cell. It doesn't get placed where guided.
      */
     @Test
     void doesNotBridgeIntoVines() {
-        // 割れ目を1マスにして設置先を(2,60,0)の1つに絞る。ツタを足元より上に置くと、
-        // 橋の代わりにツタを伝って渡る経路（addClimb）が出て、何を測ったのか分からなくなる
+        // Make the gap 1 block to narrow the placement target down to (2,60,0). Putting the vine above the feet
+        // produces a path climbing the vine instead of bridging (addClimb), muddying what's measured
         FakeCells cells = vinedChasm();
         cells.set(2, 60, 0, FakeCells.VINE);
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 61, 0));
 
-        assertFalse(result.complete(), "ツタのセルを足場にして渡ってはいけない");
+        assertFalse(result.complete(), "must not cross using a vine cell as footing");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "ツタのセルを設置先に選んではいけない: " + movements(result));
+                "must not pick a vine cell as the placement target: " + movements(result));
     }
 
-    /** ツタの隣も同じ。1マス離れていても、置く先を狙う視線はツタを通る。 */
+    /** The same goes for next to a vine. Even one block away, the line of sight to the placement target passes through the vine. */
     @Test
     void doesNotBridgeNextToVines() {
         FakeCells cells = vinedChasm();
@@ -1647,29 +1647,29 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 61, 0));
 
-        assertFalse(result.complete(), "ツタに接する場所へ足場を置いて渡ってはいけない");
+        assertFalse(result.complete(), "must not cross by placing footing next to a vine");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "ツタに隣接するセルを設置先に選んではいけない: " + movements(result));
+                "must not pick a cell adjacent to a vine as the placement target: " + movements(result));
     }
 
-    /** ツタが無ければ従来どおり架かる。上の2件が「橋そのものを消した」だけでないことの確認。 */
+    /** Without the vine it bridges as before. Confirms the two above didn't just "remove bridging altogether". */
     @Test
     void stillBridgesTheSameGapWithoutVines() {
         CellSource cells = vinedChasm();
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(3, 61, 0));
 
-        assertTrue(result.complete(), "ツタが無ければ渡れる: " + movements(result));
+        assertTrue(result.complete(), "crossable without the vine: " + movements(result));
         assertTrue(result.steps().stream().anyMatch(PathStep::bridging), "" + movements(result));
     }
 
     /**
-     * 底の無い割れ目（ジ・エンドの島間）。{@code fillWith}を呼ばないので書かれていない座標は空気のまま
-     * ——探索範囲の下端まで空気が続き、その先は範囲外になる。{@code ChunkView}は範囲外も未ロードも同じ
-     * {@code ABSENT}で返すので、区別しなければ「下に何があるか読めない」と誤読される地形そのもの。
+     * A bottomless gap (between End islands). {@code fillWith} isn't called, so unwritten coordinates stay air,
+     * with air continuing down to the bottom of the search bounds and out of bounds beyond. {@code ChunkView} returns the same
+     * {@code ABSENT} for out-of-bounds and unloaded, so this is exactly the terrain misread as "can't read what's below" unless distinguished.
      */
     private static FakeCells bottomlessGap(int gapBlocks) {
-        // z方向は1列だけ。横へ回り込んで奈落を避ける経路が出ると、橋そのものを問えなくなる
+        // Only one column in z. If a path sidesteps around the void, the bridge itself can't be tested
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 28, 0, gapBlocks + 12, 93, 0))
                 .canPlaceBlocks(true);
         for (int x = -1; x <= gapBlocks + 2; x++) {
@@ -1681,13 +1681,13 @@ class AStarPathfinderTest {
     }
 
     /**
-     * ジ・エンドの島渡りそのもの。出発の島 → 奈落{@code gapBlocks}マス → {@code dropBlocks}だけ
-     * 低い到着の島。橋は水平にしか架けられないので、到着の島へは<b>落ちる</b>しかない。
+     * The End island hop itself. Departure island → {@code gapBlocks} blocks of void → arrival island {@code dropBlocks}
+     * lower. Bridges can only be built horizontally, so the only way onto the arrival island is to <b>fall</b>.
      */
     private static FakeCells islandsAcrossVoid(int gapBlocks, int dropBlocks) {
         int landingY = 60 - dropBlocks;
-        // 下端は着地の島より十分下に取る。ここが着地の島と同じだと、奈落の走査が範囲外で止まって
-        // NOTHING_BELOWではなくなり、何を測っているのか分からなくなる
+        // Take the bottom well below the landing island. If it equaled the landing island, the void scan would stop out of bounds
+        // and no longer be NOTHING_BELOW, muddying what's measured
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, landingY - 40, 0, gapBlocks + 12, 93, 0))
                 .canPlaceBlocks(true);
         for (int x = -1; x <= 0; x++) {
@@ -1700,13 +1700,13 @@ class AStarPathfinderTest {
     }
 
     /**
-     * <b>ユーザーが実際に困っていた形の通し検証。</b>「エリトラを持たない人が、奈落を挟んだ
-     * 低い島へ徒歩で渡れるか」。
+     * <b>End-to-end check of the exact shape the user was stuck on.</b> "Can someone without an elytra walk to a
+     * lower island across the void?"
      *
-     * <p>下向きの橋はサバイバルでは作れない（虚空側にクリックする面が無い）ので、渡る手順は
-     * 「水平に橋を架けて奈落を越え、縁から落ちて着地する」しかない。落下ダメージの許容量が
-     * 足りないうちは<b>経路そのものが存在しない</b>——これが実機で hop2 が全条件で失敗していた
-     * 構造的な理由で、詰み時に許容量を緩める梯子はここを開けるために入れた。
+     * <p>Downward bridges can't be built in survival (no face to click on the void side), so the only procedure is
+     * "bridge horizontally across the void, then fall off the edge and land". While the fall-damage tolerance is
+     * insufficient, <b>the path doesn't exist at all</b>. This is the structural reason hop2 failed under every condition
+     * in-game, and the ladder that loosens the tolerance when stuck was added to open this up.
      */
     @Test
     void walksAcrossVoidAndDropsOntoALowerIsland() {
@@ -1717,25 +1717,25 @@ class AStarPathfinderTest {
 
         AStarPathfinder strict = new AStarPathfinder(islandsAcrossVoid(6, drop).maxFallDamagePoints(0));
         PathResult blocked = strict.search(start, goal, NOT_CANCELLED);
-        assertFalse(blocked.complete(), "許容0で8マス落ちる経路が出てはいけない: " + movements(blocked));
-        assertTrue(strict.fallDamageCapBlocked(), "緩める価値があることを報告しないと梯子が動かない");
+        assertFalse(blocked.complete(), "with tolerance 0 there must be no path falling 8 blocks: " + movements(blocked));
+        assertTrue(strict.fallDamageCapBlocked(), "unless it reports that loosening is worth it, the ladder won't run");
 
-        // 詰み時の緩和が渡すのと同じ形で許容量を開ける
+        // open the tolerance the same way relaxation when stuck passes it
         PathResult opened = new AStarPathfinder(terrain, SearchLimits.DEFAULT, null,
                 new Tolerances(RunCaps.of(terrain), drop - ActionCosts.SAFE_FALL_BLOCKS, true,
                         terrain.placedBlockBudget(), false))
                 .search(start, goal, NOT_CANCELLED);
 
-        assertTrue(opened.complete(), "許容量を開ければ渡れるはず: " + movements(opened));
+        assertTrue(opened.complete(), "should be crossable once the tolerance is opened: " + movements(opened));
         assertTrue(opened.steps().stream().anyMatch(PathStep::bridging),
-                "奈落は橋で越える: " + movements(opened));
+                "the void is crossed by bridging: " + movements(opened));
         assertEquals(drop, biggestDrop(start, opened),
-                "低い島へは1手で落ちて降りる（痛い落下が経路に乗っている）: " + movements(opened));
+                "it drops onto the lower island in one step (a damaging fall is on the path): " + movements(opened));
     }
 
     /**
-     * 同じ高さの島なら落下ダメージは要らない。<b>層1が回り込みで狙わせる先がこれ</b>——
-     * 「遠回りして同じYの島へ」が成立するのは、着いた先が既定の設定のまま渡れるから。
+     * An island at the same height needs no fall damage. <b>This is what layer 1 aims it at with a detour</b>:
+     * "detour to an island at the same Y" works because the destination is crossable with the default settings.
      */
     @Test
     void reachesASameHeightIslandWithoutAnyFallDamage() {
@@ -1743,25 +1743,25 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(8, 61, 0));
 
-        assertTrue(result.complete(), "同じ高さの島へは既定の設定で渡れる: " + movements(result));
+        assertTrue(result.complete(), "an island at the same height is crossable with default settings: " + movements(result));
         assertTrue(biggestDrop(new BlockPos(0, 61, 0), result) <= ActionCosts.SAFE_FALL_BLOCKS,
-                "同じ高さなのに痛い落下が混ざっている: " + movements(result));
+                "a damaging fall is mixed in despite the same height: " + movements(result));
     }
 
     /**
-     * <b>柱にも連続長の上限を掛ける。</b>{@code addPillar}は{@code bridgeRun}を増やすのに上限を
-     * 検査していなかったので、塔が探索範囲の天井まで伸び放題だった。
+     * <b>Pillars get the consecutive-length cap too.</b> {@code addPillar} incremented {@code bridgeRun} without
+     * checking the cap, so towers could grow freely up to the ceiling of the search bounds.
      *
-     * <p>これが実機（the_end、2026-08-27）で効いていた: 島の立てるセルすべてから約150段の塔が
-     * 展開対象になり、<b>51万セル</b>を焼いて{@code NODE_BUDGET}で終わっていた。
-     * <b>本当の害はノード数ではなく、そのせいで{@code EXHAUSTED}に到達できないこと</b>——
-     * 橋の上限を緩める梯子（{@code PathfindingExecutor}）は「範囲内に道が無いと証明できた」ときにしか
-     * 走らないので、予算切れで終わる限り<b>一度も発動しない</b>。エンドで橋が上限30に張り付いたまま
-     * 渡り切れなかったのはこれ。
+     * <p>This hit in-game (the_end, 2026-08-27): towers of about 150 levels from every standable cell on the island
+     * became expansion targets, burning <b>510k cells</b> and ending at {@code NODE_BUDGET}.
+     * <b>The real harm isn't the node count but that it prevents reaching {@code EXHAUSTED}</b>: the ladder that
+     * loosens the bridge cap ({@code PathfindingExecutor}) only runs once it "proved there's no way within bounds",
+     * so as long as it ends by running out of budget it <b>never fires</b>. That's why bridges in the End stayed stuck
+     * at the cap of 30 and never made it across.
      */
     @Test
     void pillarsRespectTheRunCap() {
-        // 1マスの足場だけがある空中。塔を伸ばす以外にできることが無いので、上限がそのまま高さになる
+        // Mid-air with only a 1-block footing. Growing the tower is the only thing it can do, so the cap becomes the height
         FakeCells cells = FakeCells.empty(new SearchBounds(-4, 20, -4, 4, 200, 4))
                 .canPlaceBlocks(true)
                 .maxBridgeRunBlocks(8)
@@ -1770,31 +1770,31 @@ class AStarPathfinderTest {
         AStarPathfinder pathfinder = new AStarPathfinder(cells);
         PathResult result = pathfinder.search(new BlockPos(0, 61, 0), new BlockPos(0, 190, 0), NOT_CANCELLED);
 
-        assertFalse(result.complete(), "上限8で129マスの塔が建ってはいけない");
-        assertTrue(pathfinder.bridgeRunCapBlocked(), "上限で捨てたことを報告しないと緩和の梯子が走らない");
+        assertFalse(result.complete(), "with a cap of 8, a 129-block tower must not be built");
+        assertTrue(pathfinder.bridgeRunCapBlocked(), "unless it reports discarding by the cap, the relaxation ladder won't run");
         assertEquals(PathResult.Termination.EXHAUSTED, result.termination(),
-                "上限が効いていれば探索は尽きる。予算切れで終わると詰み検知も緩和も動かない: "
-                        + result.expandedNodes() + "ノード");
+                "if the cap works, the search is exhausted. Ending by running out of budget leaves stuck detection and relaxation idle: "
+                        + result.expandedNodes() + " nodes");
     }
 
     /**
-     * <b>奈落上の浮遊障害物を横に迂回できない既知の穴を可視化する回帰fixture。</b>
-     * 奈落の上でのbridgeは「目的地へ近づく向きにしか架けない」よう制限されている
-     * （このクラス内、{@code voidBelow}の判定コメント参照）。橋は水平にしか架からず、
-     * このテストの壁は探索範囲の天井まで塞いであるので柱で越えることもできないため、
-     * 唯一の迂回路（隣の列へ1歩ずれてから戻る）が「目的地に近づかない向き」として
-     * 一律に拒否され、経路そのものを失う。
+     * <b>A regression fixture that visualizes the known gap of not being able to sidestep a floating obstacle over the void.</b>
+     * Bridging over the void is restricted to "only toward the destination"
+     * (see the comment on the {@code voidBelow} check in this class). Bridges are only horizontal, and
+     * this test's wall blocks up to the ceiling of the search bounds so it can't be pillared over either, so
+     * the only detour (shift one step to the adjacent column, then come back) is uniformly rejected as
+     * "a direction not approaching the destination", and the path is lost entirely.
      *
-     * <p>コード自身が「既知の穴」「踏んだら緩めること」と書いている通り、これは<b>直すべき
-     * 制限</b>であって仕様ではない。このテストは<b>現状の制限をそのまま固定する</b>——
-     * いつか緩和したら、このアサーションを「到達できる」側へ書き換えること。書き換えずに
-     * 緩和すると、このテストが落ちて気付ける（disabledにしていないのはそのため）。
+     * <p>As the code itself says, "known gap" and "loosen it when hit", this is <b>a limitation to fix</b>,
+     * not the spec. This test <b>pins the current limitation as-is</b>. Once it's relaxed someday, rewrite
+     * this assertion to the "reachable" side. Relaxing without rewriting it makes this test fail so it gets
+     * noticed (that's why it isn't disabled).
      */
     @Test
     void bridgeCannotDetourSidewaysAroundAFloatingObstacleOverTheVoid() {
-        // 出発の島（x=-2..0）と到着の島（x=9..11）、間はz=-1..1の3列とも奈落（未設定＝空気で
-        // 床が無い）。x=5だけ、z=0の列を床から探索範囲の天井まで塞ぐ壁を置く——
-        // z=±1は素通しなので、そちらへ1歩ずれれば物理的には迂回できる地形になっている
+        // Departure island (x=-2..0) and arrival island (x=9..11), with void in all three columns z=-1..1 between (unset = air,
+        // no floor). Only at x=5, put a wall blocking the z=0 column from the floor up to the ceiling of the search bounds.
+        // z=±1 is open, so physically the terrain can be bypassed by shifting one step that way
         FakeCells cells = FakeCells.empty(new SearchBounds(-3, 20, -2, 12, 64, 2))
                 .canPlaceBlocks(true);
         for (int x = -2; x <= 0; x++) {
@@ -1810,13 +1810,13 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(10, 61, 0));
 
         assertFalse(result.complete(),
-                "既知の穴が塞がれた（迂回できるようになった）ならこのテストを直すこと: " + movements(result));
+                "if the known gap has been closed (it can now detour), fix this test: " + movements(result));
     }
 
     /**
-     * 上のテストと同じ壁・同じ迂回幅を、奈落ではなく地面の上に置いた対照実験。迂回そのものは
-     * 普通に成立する——上のテストが失敗するのは地形が迂回不可能だからではなく、{@code voidBelow}が
-     * 「目的地に近づかない向きの橋」を一律に拒む<b>その制限のせい</b>だと示す。
+     * A control experiment putting the same wall and same detour width on the ground instead of the void. The detour
+     * itself works normally. This shows the test above fails not because the terrain can't be bypassed, but
+     * <b>because of the limitation</b> where {@code voidBelow} uniformly rejects "bridges not approaching the destination".
      */
     @Test
     void walksAroundTheSameObstacleWhenTheFloorIsSolidInsteadOfVoid() {
@@ -1832,22 +1832,22 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(10, 61, 0));
 
-        assertTrue(result.complete(), "地面の上なら壁を迂回できるはず: " + movements(result));
+        assertTrue(result.complete(), "on the ground it should be able to go around the wall: " + movements(result));
     }
 
     /**
-     * <b>奈落・溶岩の上では、掘らないと通れない場所へ橋を架けない。</b>
+     * <b>Over the void or lava, it doesn't bridge into places that can't be passed without digging.</b>
      *
-     * <p>1手の中に「床を置く」と「身体のセルを掘る」が同居すると、案内は<b>順序を表現できない</b>。
-     * 実機（the_end、2026-08-27）でユーザーが踏んだのがこれで、症状は2つに見えていた——
-     * 「掘るはずのブロックの横にブロックを置けと言われる」（置く枠が掘る枠の真下に出る）と
-     * 「そのまま掘ったら奈落にダイブする」（見えている掘る枠を先に掘ると、足元が奈落の上の空気になる）。
+     * <p>When "place a floor" and "dig a body cell" coexist in one step, the guidance <b>can't express the order</b>.
+     * This is what the user hit in-game (the_end, 2026-08-27), and it showed up as two symptoms:
+     * "told to place a block next to the block that should be dug" (the place box appears right below the dig box) and
+     * "digging it right away dives into the void" (digging the visible dig box first leaves air over the void underfoot).
      *
-     * <p>正しい順序は「先に床を置く→後で掘る」だが、掘る枠が見えている以上そちらを先にやるのが自然で、
-     * 外したときに死ぬ。空中では掘れないので{@link #addJumpGap}や斜め移動が
-     * {@code clearWithoutDigging}を要求しているのと同じ規律を、橋にも掛ける。
+     * <p>The correct order is "place the floor first → dig after", but since the dig box is visible it's natural to do that
+     * first, and a mistake is fatal. You can't dig in mid-air, so the same discipline by which {@link #addJumpGap} and
+     * diagonal moves require {@code clearWithoutDigging} is applied to bridges too.
      *
-     * <p>底のある空洞では掛けない。掘って落ちても1マス下の床に着くだけで、結末がまるで違う。
+     * <p>Not applied in cavities with a bottom. Digging and falling just lands on the floor one block below, a completely different outcome.
      */
     @Test
     void doesNotBridgeIntoACellThatNeedsDiggingOverVoid() {
@@ -1857,7 +1857,7 @@ class AStarPathfinderTest {
         for (int x = 4; x <= 8; x++) {
             cells.set(x, 60, 0, FakeCells.BEDROCK);
         }
-        // 奈落の上に張り出した岩。跨いで越える回避路は天井で消してあるので、掘り抜く以外に手が無い
+        // Rock jutting out over the void. The route stepping over it is removed by the ceiling, so digging through is the only way
         cells.set(2, 61, 0, FakeCells.STONE).set(2, 62, 0, FakeCells.STONE);
         for (int x = -1; x <= 8; x++) {
             cells.set(x, 63, 0, FakeCells.BEDROCK);
@@ -1867,14 +1867,14 @@ class AStarPathfinderTest {
 
         for (PathStep step : result.steps()) {
             assertTrue(step.placedBlockPos() == null || step.digCells().isEmpty(),
-                    "1手で置くと掘るが同居している（順序を表現できないので奈落へ落ちる）: "
+                    "placing and digging coexist in one step (the order can't be expressed, so it falls into the void): "
                             + step.placedBlockPos() + " / " + step.digCells());
         }
     }
 
     /**
-     * 奈落の上でも橋は架かる。読めるセルだけを辿って底に当たらなかったのは「分からない」ではなく
-     * 「本当に底が無い」と分かったということで、渡ってよいかの判断はコストと上限が受け持つ。
+     * Bridges are built over the void too. Following only readable cells and never hitting bottom doesn't mean
+     * "unknown"; it means it's known "there really is no bottom", and cost and caps decide whether to cross.
      */
     @Test
     void bridgesOverABottomlessGap() {
@@ -1882,12 +1882,12 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(7, 61, 0));
 
-        assertTrue(result.complete(), "奈落の上にも橋は架けられる: " + movements(result));
+        assertTrue(result.complete(), "bridges can be built over the void too: " + movements(result));
         assertEquals(6, result.steps().stream().filter(PathStep::bridging).count(),
-                "割れ目のマス数ぶんの足場を置いて渡る: " + movements(result));
+                "crosses by placing as much footing as the gap is wide: " + movements(result));
     }
 
-    /** 未ロードチャンクで走査が止まった列は「奈落」ではない。下が水かもしれない以上、置いてはいけない。 */
+    /** A column where the scan stopped at an unloaded chunk is not "void". There might be water below, so don't place. */
     @Test
     void doesNotBridgeWhenTheColumnBelowIsUnreadable() {
         FakeCells cells = bottomlessGap(6);
@@ -1897,18 +1897,18 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(7, 61, 0));
 
-        assertFalse(result.complete(), "下が読めない列へは足場を置けない");
+        assertFalse(result.complete(), "can't place footing into a column whose bottom can't be read");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "読めない列を奈落と取り違えて橋を架けた: " + movements(result));
+                "mistook an unreadable column for void and bridged: " + movements(result));
     }
 
     /**
-     * 横に架けた橋の上からは積み始めない。1マス幅の足場の上で跳んで足元に置く動作で、
-     * 奈落の上ではまず外す。
+     * Doesn't start pillaring from on top of a sideways bridge. Jumping and placing underfoot on 1-wide footing
+     * is almost certain to miss over the void.
      *
-     * <p>地形は「出発点の頭上を塞いだ足場 → 奈落 → 4マス高い目的地」。塔を立てられるのは
-     * 橋の上だけなので、そこを塞げば届かない。出発点で先に積んでから高い所を渡る抜け道は
-     * 天井で潰してある。
+     * <p>The terrain is "footing with the headroom over the start blocked → void → destination 4 blocks higher".
+     * A tower can only go up on the bridge, so blocking that leaves it out of reach. The loophole of pillaring
+     * at the start first and crossing high is closed by the ceiling.
      */
     @Test
     void doesNotStartAPillarFromABridge() {
@@ -1920,13 +1920,13 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(6, 65, 0));
 
-        assertFalse(result.complete(), "橋の上で塔を立てて登ってはいけない: " + movements(result));
+        assertFalse(result.complete(), "must not build a tower on the bridge to climb: " + movements(result));
     }
 
     /**
-     * 奈落の上では目標へ近づく向きにしか橋を伸ばさない。これが無いと、岸のあらゆるセルから
-     * 全方位へ上限いっぱいの橋が展開対象になり、既定の予算では広い割れ目を渡り切れない
-     * （実測: この地形で10万ノードを焼いて予算切れ → 約1.4万ノードで到達）。
+     * Over the void, bridges only extend toward the target. Without this, cap-length bridges in every direction
+     * from every cell of the shore become expansion targets, and a wide gap can't be crossed on the default budget
+     * (measured: on this terrain, 100k nodes burned until out of budget → reached in about 14k nodes).
      */
     @Test
     void crossesAWideVoidGapWithinTheDefaultBudget() {
@@ -1945,21 +1945,21 @@ class AStarPathfinderTest {
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(63, 61, 0));
 
         assertTrue(result.complete(),
-                "60マスの奈落を既定の予算で渡り切れない（" + result.termination()
-                        + "、展開ノード " + result.expandedNodes() + "）");
+                "can't cross a 60-block void on the default budget (" + result.termination()
+                        + ", expanded nodes " + result.expandedNodes() + ")");
     }
 
-    /** 奈落の上だけを別の上限で切れる。溶岩側の上限と同じ考え方。 */
+    /** Bridges over the void alone can be cut off with a separate cap. Same idea as the lava cap. */
     @Test
     void refusesToBridgeOverAVoidBeyondTheVoidRun() {
         CellSource cells = bottomlessGap(12).maxVoidBridgeRunBlocks(6);
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(13, 61, 0));
 
-        assertFalse(result.complete(), "奈落側の上限を超える橋しか無いなら渡らない");
+        assertFalse(result.complete(), "doesn't cross if the only bridges exceed the void cap");
     }
 
-    /** 奈落側の上限は奈落の上でだけ効く。底のある割れ目は今までどおりmaxBridgeRunBlocksが見る。 */
+    /** The void cap applies only over the void. Gaps with a bottom are governed by maxBridgeRunBlocks as before. */
     @Test
     void theVoidRunCapLeavesBridgesOverFlooredGapsAlone() {
         CellSource cells = chasm(6).jumpGapEnabled(false).canPlaceBlocks(true)
@@ -1967,16 +1967,16 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(1, 61, 0), new BlockPos(8, 61, 0));
 
-        assertTrue(result.complete(), "底のある割れ目は奈落側の上限に縛られない: " + movements(result));
+        assertTrue(result.complete(), "a gap with a bottom isn't bound by the void cap: " + movements(result));
     }
 
     /**
-     * 幅12の溶岩の水路。手前(x≦5)だけ低い天井が張り出していて、そこでは柱を立てられない。
+     * A 12-wide lava channel. Only the near part (x≦5) has a low overhanging ceiling, where pillars can't be built.
      *
-     * <p>天井が要るのは、上限を柱で迂回する経路を<b>1本に絞る</b>ため。頭上が全面的に開けていると、
-     * 「初手で柱を立ててから高い側を渡る」という同コストの経路が別に生まれ、そちらは連続長を
-     * 積んだまま到達する——{@code bridgeRun}はノードの同一性に入らないので、同コストなら
-     * どちらの連続長が残るかは展開順しだいになり、上限の抜け穴を問うテストにならない。
+     * <p>The ceiling is needed to <b>narrow down to one</b> path that sidesteps the cap with a pillar. With the sky fully open,
+     * a separate equal-cost path "pillar on the first move, then cross on the high side" appears, and it arrives with the run
+     * length still accumulated. {@code bridgeRun} isn't part of node identity, so at equal cost which run length
+     * survives depends on expansion order, and the test would no longer probe the cap loophole.
      */
     private static FakeCells lavaChannelWithLowCeiling(int width) {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 40, -8, width + 12, 90, 8))
@@ -1984,7 +1984,7 @@ class AStarPathfinderTest {
                 .canPlaceBlocks(true);
         for (int x = -1; x <= width + 1; x++) {
             cells.set(x, 60, 0, x >= 1 && x <= width ? FakeCells.LAVA : FakeCells.BEDROCK);
-            // 天井は x≦5 で y=63。渡るのに要る2マス(y=61,62)は空いているが、柱を立てる余地は無い
+            // The ceiling is at y=63 for x≦5. The 2 blocks needed to cross (y=61,62) are free, but there's no room for a pillar
             int ceiling = x <= 5 ? 62 : 78;
             for (int y = 61; y <= ceiling; y++) {
                 cells.set(x, y, 0, FakeCells.AIR);
@@ -1994,13 +1994,13 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 柱を立てても橋の連続長は数え直されない。柱は足場を要求しない（自分が直前に置いたブロックの上に
-     * 立つ）ので、ここで0に戻していた頃は「上限まで架ける→1マス積む→また上限まで架ける」で
-     * 上限を破れた。
+     * Pillaring doesn't reset the bridge run length. A pillar needs no footing (it stands on the block it just placed),
+     * so back when this reset it to 0, "bridge up to the cap → pillar one block → bridge up to the cap again"
+     * could break the cap.
      *
-     * <p>連続長が数え直されないことより、{@code bridgeRunCapBlocked}が立つことの方が実害が大きい。
-     * 柱で迂回できてしまうと上限が原因の詰みとして報告されず、{@code PathfindingExecutor}の
-     * 上限緩和（×2→×4→無制限）が一度も走らないまま階段状の経路が確定する。
+     * <p>The bigger real harm than the run length not resetting is whether {@code bridgeRunCapBlocked} gets set.
+     * If a pillar can sidestep the cap, the dead end isn't reported as caused by the cap, and the staircase path is
+     * finalized without the {@code PathfindingExecutor} cap relaxation (×2→×4→unlimited) ever running.
      */
     @Test
     void pillaringDoesNotResetTheBridgeRun() {
@@ -2009,16 +2009,16 @@ class AStarPathfinderTest {
 
         PathResult result = pathfinder.search(new BlockPos(0, 61, 0), new BlockPos(13, 61, 0), NOT_CANCELLED);
 
-        assertFalse(result.complete(), "柱を挟んでも上限を超えて渡ってはいけない: " + movements(result));
+        assertFalse(result.complete(), "must not cross beyond the cap even with a pillar in between: " + movements(result));
         assertTrue(result.steps().stream().filter(PathStep::bridging).count() <= 6,
-                "置いた足場の総数が上限を超えている＝柱で数え直されている: " + movements(result));
+                "total footing placed exceeds the cap = the run was reset by a pillar: " + movements(result));
         assertTrue(pathfinder.bridgeRunCapBlocked(),
-                "上限が原因の詰みとして報告されないと、上限を緩めた探し直しが走らない");
+                "unless the dead end is reported as caused by the cap, the re-search with a loosened cap won't run");
     }
 
     /**
-     * 底のある小さな割れ目を渡り切った先が、渡れない奈落で行き止まりになっている地形。
-     * 渡り終えた橋と、渡り切れない橋を1つの経路の中で区別できる。
+     * Terrain where, past a small gap with a bottom, it dead-ends at an uncrossable void.
+     * Distinguishes a finished bridge from an unfinishable one within a single path.
      */
     private static FakeCells crossingThenDeadEnd() {
         FakeCells cells = FakeCells.empty(new SearchBounds(-8, 28, 0, 40, 93, 0))
@@ -2028,21 +2028,21 @@ class AStarPathfinderTest {
         for (int x = 0; x <= 1; x++) {
             cells.set(x, 60, 0, FakeCells.BEDROCK);
         }
-        // x=2..3 は底のある割れ目。落ちて登り直すには深すぎるので、渡るなら橋しか無い
+        // x=2..3 is a gap with a bottom. Too deep to fall in and climb back out, so bridging is the only way across
         for (int x = 2; x <= 3; x++) {
             cells.set(x, 50, 0, FakeCells.BEDROCK);
         }
         for (int x = 4; x <= 6; x++) {
             cells.set(x, 60, 0, FakeCells.BEDROCK);
         }
-        // x>=7 は底の無い奈落。上限1では渡り切れない
+        // x>=7 is a bottomless void. A cap of 1 can't get across it
         return cells;
     }
 
     /**
-     * 打ち切られた経路から落とすのは<b>末尾の</b>設置区間だけ。渡り終えて向こう岸に立った橋は、
-     * その先で経路が途切れていても案内として正しい。切りすぎると、渡れる割れ目の手前で
-     * 毎回案内が止まることになる。
+     * From a cut-off path, only the <b>trailing</b> placement stretch is dropped. A bridge already crossed, standing
+     * on the far bank, is correct guidance even if the path breaks off beyond it. Cutting too much would stop the
+     * guidance before every crossable gap.
      */
     @Test
     void keepsBridgesThatWereAlreadyCrossed() {
@@ -2050,19 +2050,19 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(20, 61, 0));
 
-        assertFalse(result.complete(), "奈落の先へは届かない");
+        assertFalse(result.complete(), "can't reach past the void");
         List<PathStep> steps = result.steps();
         assertTrue(steps.stream().anyMatch(PathStep::bridging),
-                "渡り終えた橋まで消してはいけない: " + movements(result));
+                "must not erase even the finished bridge: " + movements(result));
         assertFalse(steps.get(steps.size() - 1).bridging(),
-                "渡り切れない橋の途中で経路を終わらせてはいけない: " + movements(result));
+                "must not end the path in the middle of an unfinishable bridge: " + movements(result));
     }
 
     /**
-     * 打ち切られた経路は、自分で置く足場の上では終わらせない。ゴールへ届かなかった経路は
-     * 「そこまでは進める」という意味しか持たないが、末尾が橋の途中だと
-     * <b>ブロックを消費して渡り切れるかも分からない行き止まりに立たされる</b>ことになる。
-     * 渡る手段が橋しか無い場所では、案内できる経路が一本も残らないのが正しい。
+     * A cut-off path doesn't end on footing it places itself. A path that didn't reach the goal only means
+     * "you can get this far", but ending in the middle of a bridge would
+     * <b>leave the player at a dead end, spending blocks without knowing whether it can be crossed</b>.
+     * Where bridging is the only way across, having no guidable path at all is correct.
      */
     @Test
     void doesNotEndAPartialPathOnBlocksThePlayerHasToPlace() {
@@ -2072,13 +2072,13 @@ class AStarPathfinderTest {
 
         assertFalse(result.complete());
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "渡り切れると証明できていない橋は案内に出さない: " + movements(result));
+                "does not guide a bridge not proven to be crossable: " + movements(result));
     }
 
     /**
-     * 水面より高い岩盤の断崖に面した縦穴。水面(y=63)からは縁(y=67)へ登れないので、
-     * 上に出る手段は「水中から積み上げる」しか無い。壁を水面より高くしてあるのが要点で、
-     * 同じ高さだと泳ぎ上がって縁へ{@code Ascend}できてしまい、積むかどうかを問えない。
+     * A shaft facing a bedrock cliff higher than the water surface. From the surface (y=63) it can't climb to the edge (y=67),
+     * so the only way up is "pillar up from in the water". The key is that the wall is higher than the surface;
+     * at the same height it could swim up and {@code Ascend} onto the edge, and whether it pillars couldn't be tested.
      */
     private static FakeCells floodedShaft() {
         return FakeCells.of(0, 60, 0, """
@@ -2100,14 +2100,14 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 67, 0));
 
-        assertFalse(result.complete(), "水中から積み上げられない以上、断崖の上には出られない");
+        assertFalse(result.complete(), "since it can't pillar from in the water, it can't get on top of the cliff");
         assertTrue(result.steps().stream().noneMatch(PathStep::bridging),
-                "水中から積み上げる案内はしない: " + result.steps());
+                "does not guide pillaring up from in the water: " + result.steps());
     }
 
     /**
-     * {@link #doesNotPillarWhileFloatingInWater}が空振りしていないことの裏付け。同じ地形の
-     * 縦穴から水を抜けば、そこは積んで登れる＝登れない理由が水であることが確かめられる。
+     * Confirms {@link #doesNotPillarWhileFloatingInWater} isn't passing vacuously. Draining the water from the same
+     * shaft lets it pillar up = water is confirmed as the reason it can't climb.
      */
     @Test
     void pillarsUpTheSameShaftWhenItIsNotFlooded() {
@@ -2119,14 +2119,14 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, new BlockPos(0, 61, 0), new BlockPos(1, 67, 0));
 
-        assertTrue(result.complete(), "水が無ければ積んで登れる");
+        assertTrue(result.complete(), "without water it can pillar up");
         assertTrue(result.steps().stream().anyMatch(PathStep::bridging),
-                "積んで登る区間が出る: " + movements(result));
+                "a pillaring stretch appears: " + movements(result));
     }
 
     /**
-     * 高さ{@code drop}マスの一枚岩の崖。降りる手段は落下しかない——岩盤なので掘り下げられず、
-     * 断面の外は岩盤で埋めるので迂回もできない。始点は崖の上(x=0)、終点は崖下(x=1)。
+     * A monolithic cliff {@code drop} blocks high. Falling is the only way down: it's bedrock so it can't dig down,
+     * and outside the cross-section is filled with bedrock so it can't go around. Start on top (x=0), end at the bottom (x=1).
      */
     private static FakeCells sheerDrop(int drop) {
         StringBuilder diagram = new StringBuilder("......\n......\n");
@@ -2147,7 +2147,7 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, dropTop(3), DROP_BOTTOM);
 
-        assertTrue(result.complete(), "安全な高さの落下は設定に関係なく降りられる");
+        assertTrue(result.complete(), "a fall from a safe height is allowed regardless of settings");
         assertEquals(List.of(MovementType.DESCEND), movements(result));
     }
 
@@ -2157,17 +2157,17 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, dropTop(5), DROP_BOTTOM);
 
-        assertFalse(result.complete(), "既定では痛い落下を提示しない");
+        assertFalse(result.complete(), "by default it doesn't offer a damaging fall");
     }
 
     @Test
     void fallsWithDamageWhenTolerated() {
-        // 5マスの落下はダメージ2点。これを許容範囲に収める
+        // A 5-block fall does 2 damage. Bring this within tolerance
         CellSource cells = sheerDrop(5).maxFallDamagePoints(2);
 
         PathResult result = search(cells, dropTop(5), DROP_BOTTOM);
 
-        assertTrue(result.complete(), "許容範囲のダメージなら飛び降りて降りられる");
+        assertTrue(result.complete(), "with damage within tolerance it can jump down");
         assertEquals(List.of(MovementType.FALL_DAMAGE), movements(result));
     }
 
@@ -2177,17 +2177,17 @@ class AStarPathfinderTest {
 
         PathResult result = search(cells, dropTop(5), DROP_BOTTOM);
 
-        assertFalse(result.complete(), "許容量を超えるダメージの落下は提示しない");
+        assertFalse(result.complete(), "doesn't offer a fall whose damage exceeds the tolerance");
     }
 
     @Test
     void usesTheWaterBucketForDropsBeyondTheDamageTolerance() {
-        // 12マスの落下はダメージ9点。体力満タン(許容6点)でも耐えられないが、MLGなら無傷で降りられる
+        // A 12-block fall does 9 damage. Unsurvivable even at full health (tolerance 6), but an MLG lands unharmed
         CellSource cells = sheerDrop(12).maxFallDamagePoints(6).canMlgWaterBucket(true);
 
         PathResult result = search(cells, dropTop(12), DROP_BOTTOM);
 
-        assertTrue(result.complete(), "水バケツがあれば高さに関係なく降りられる");
+        assertTrue(result.complete(), "with a water bucket it can descend regardless of height");
         assertEquals(List.of(MovementType.FALL_MLG), movements(result));
     }
 
@@ -2199,19 +2199,19 @@ class AStarPathfinderTest {
 
         assertTrue(result.complete());
         assertEquals(List.of(MovementType.FALL_DAMAGE), movements(result),
-                "軽いダメージで済む落下に、わざわざ水バケツの手間はかけない");
+                "doesn't bother with a water bucket for a fall that only does light damage");
     }
 
     /**
-     * {@link PathResult#termination()}が打ち切り理由を正しく区別すること。展開数上限で切ったときと、
-     * openが尽きるまで探索し切って範囲内に道が無かったときとでは、呼び出し側の再挑戦の要否が
-     * まったく違う——両方を区別せず「未到達」だけで扱っていた頃は、詰みに対して延々と
-     * 無意味な再挑戦を仕掛け続けるバグがあった。
+     * {@link PathResult#termination()} must correctly distinguish the reason for stopping. Cutting off at the expansion
+     * limit versus searching until open runs out and finding no way within bounds call for completely different retry
+     * decisions by the caller. Back when both were treated as just "unreached", there was a bug that kept firing
+     * pointless retries at a dead end forever.
      */
     @Test
     void distinguishesNodeBudgetFromAnExhaustedSearchSpace() {
-        // 岩盤の箱に閉じ込められた1マスの空間。四方・天井・床すべて掘れない岩盤なので、
-        // 始点を展開しても後継が1つも生成されず、1回展開しただけでopenが尽きる
+        // A 1-block space trapped in a bedrock box. All sides, ceiling and floor are undiggable bedrock, so
+        // expanding the start generates no successors at all, and open runs out after a single expansion
         SearchBounds sealedBounds = new SearchBounds(-8, 55, -8, 8, 70, 8);
         CellSource sealed = FakeCells.empty(sealedBounds).fillWith(FakeCells.BEDROCK)
                 .set(0, 61, 0, FakeCells.AIR)
@@ -2221,9 +2221,9 @@ class AStarPathfinderTest {
 
         assertFalse(exhausted.complete());
         assertEquals(PathResult.Termination.EXHAUSTED, exhausted.termination());
-        assertFalse(exhausted.budgetExhausted(), "openが尽きたのは予算切れではなく詰み");
+        assertFalse(exhausted.budgetExhausted(), "open running out is a dead end, not running out of budget");
 
-        // 同じ地形でも、展開数の上限を1に絞れば始点を展開する前に上限へ当たる
+        // On the same terrain, narrowing the expansion limit to 1 hits the limit before expanding the start
         CellSource sameTerrain = FakeCells.empty(sealedBounds).fillWith(FakeCells.BEDROCK)
                 .set(0, 61, 0, FakeCells.AIR)
                 .set(0, 62, 0, FakeCells.AIR);
@@ -2233,12 +2233,12 @@ class AStarPathfinderTest {
 
         assertFalse(budgetHit.complete());
         assertEquals(PathResult.Termination.NODE_BUDGET, budgetHit.termination());
-        assertTrue(budgetHit.budgetExhausted(), "ノード上限に当たったのは予算切れ扱いにする");
+        assertTrue(budgetHit.budgetExhausted(), "hitting the node limit is treated as running out of budget");
     }
 
     /**
-     * {@link CostToGo}を注入する3引数コンストラクタの配線確認（段階4）。{@code null}を渡すと
-     * 2引数コンストラクタ（幾何学的な{@link Heuristic}のみ）と完全に同じ結果になる。
+     * Wiring check of the 3-arg constructor that injects {@link CostToGo} (stage 4). Passing {@code null}
+     * gives exactly the same result as the 2-arg constructor (geometric {@link Heuristic} only).
      */
     @Test
     void nullCostToGoBehavesExactlyLikeTheTwoArgumentConstructor() {
@@ -2257,11 +2257,11 @@ class AStarPathfinderTest {
     }
 
     /**
-     * 注入した{@link CostToGo}が実際に{@code node()}から呼ばれていること（配線の生きた確認）。
-     * 呼ばれた回数だけを見るので、値そのものの妥当性には依存しない——ここで確かめたいのは
-     * 「注入したインスタンスが探索の経路上に乗っているか」であって、ヒューリスティックとしての
-     * 良し悪しは{@link net.prason.xaeronav.pathfinding.coarse.CoarseRouterTest}や
-     * {@code PathfindingExecutorCoarseGuidedTest}が別に確認する。
+     * The injected {@link CostToGo} is actually called from {@code node()} (a live wiring check).
+     * It only looks at the call count, so it doesn't depend on the values being sensible. What this confirms is
+     * "whether the injected instance is on the search's path"; how good it is as a heuristic is checked separately
+     * by {@link net.prason.xaeronav.pathfinding.coarse.CoarseRouterTest} and
+     * {@code PathfindingExecutorCoarseGuidedTest}.
      */
     @Test
     void injectedCostToGoIsActuallyConsultedDuringSearch() {
@@ -2279,14 +2279,14 @@ class AStarPathfinderTest {
                 .search(new BlockPos(0, 61, 0), new BlockPos(5, 61, 0), NOT_CANCELLED);
 
         assertTrue(result.complete());
-        assertTrue(callCount[0] > 0, "注入したCostToGoが一度も呼ばれていない＝配線が繋がっていない");
+        assertTrue(callCount[0] > 0, "the injected CostToGo was never called = not wired up");
     }
 
     private static PathStep last(PathResult result) {
         return result.steps().get(result.steps().size() - 1);
     }
 
-    /** キャンセルされない{@code BooleanSupplier}。ラムダより意図が読める。 */
+    /** A {@code BooleanSupplier} that never cancels. Reads more clearly than a lambda. */
     private static final class BooleanSupplierNever implements java.util.function.BooleanSupplier {
         @Override
         public boolean getAsBoolean() {

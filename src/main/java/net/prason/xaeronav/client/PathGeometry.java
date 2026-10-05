@@ -14,114 +14,119 @@ import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.util.MathSupport;
 
 /**
- * ワールド内描画用に経路を焼き固めたもの。経路が変わったときにだけ組み直す。
+ * The route baked for in-world rendering. Rebuilt only when the route changes.
  *
- * <p>同色かつ一直線に続く区間は1本の区間へまとめる。平坦な地形では数十〜数百の区間が
- * 1本になり、描画する頂点数がそのまま桁で減る。まとめても両端は元のままなので見た目は変わらない。
+ * <p>Runs of segments that share a color and continue in a straight line are merged into one. On flat
+ * terrain, tens to hundreds of segments become one, cutting the vertex count by orders of magnitude. Both
+ * ends stay as they were, so it looks the same.
  *
- * <p>水中・ボートの区間と、同じ高さの平地を歩くだけの区間は、一直線でなくても<b>通せる限り</b>まとめる
- * （{@link #fluidShortcut}・{@link #landShortcut}）。1手ごとの位置に意味が無く、格子の目に沿った階段が
- * そのままジグザグに見えるため。
+ * <p>Underwater and boat segments, and segments that only walk across level ground at one height, are merged
+ * <b>as far as they can pass</b> even when not straight ({@link #fluidShortcut}, {@link #landShortcut}). The
+ * position of each move means nothing there, and the grid-aligned staircase would otherwise show as a zigzag.
  */
 final class PathGeometry {
 
-    /** 水面の区間の線を水面よりわずかに浮かせ、水面のテクスチャとのZファイティングを避ける。 */
+    /** Raises water-surface segment lines slightly above the surface to avoid Z-fighting with the water texture. */
     private static final double WATER_SURFACE_OFFSET = 0.05;
 
     /**
-     * 泳いで渡る区間の線を、水面からどれだけ沈めて描くか（ブロック）。
+     * How far below the water surface to draw lines for segments crossed by swimming (blocks).
      *
-     * <p><b>うつ伏せ泳ぎの目線は水面そのもの</b>（{@code Pose.SWIMMING}はeyeHeight 0.4で、
-     * 体は目が水面に来る高さで浮く）。そこへ線を水面に置くと、渡り切るまで画面の中央＝水平線の
-     * 上に棒が載り続ける。逃がす方向が下なのは、上へ逃がすと今度は見上げたときに同じことに
-     * なるのと、水中から見上げる場面で水面の描画に紛れるため。
+     * <p><b>When swimming prone, eye level is the water surface itself</b> ({@code Pose.SWIMMING} has
+     * eyeHeight 0.4, and the body floats with the eyes at the surface). A line on the surface would sit
+     * on the screen center, i.e. the horizon, until you finish crossing. It's moved down because moving it
+     * up causes the same problem when looking up, and from underwater looking up it blends into the
+     * rendered water surface.
      *
-     * <p>値は「近くでは視界の外、遠くではまだ読める」で決まる。1.25なら2マス先で視線の32度下
-     * （既定FOV70の縦の画角＝上下35度のすぐ外）、10マス先で7度下に来る。
+     * <p>The value is set by "out of view up close, still readable far away". At 1.25, it's 32 degrees below
+     * the line of sight 2 blocks ahead (just outside the vertical field of view of ±35 degrees at the
+     * default FOV 70) and 7 degrees below at 10 blocks ahead.
      *
-     * <p><b>ボートは沈めない。</b>あちらは目線が水面より1マス以上上にあるので、水面の線は
-     * 元から視界を塞がない。
+     * <p><b>Boats aren't sunk.</b> There the eye level is more than a block above the surface, so the
+     * surface line never blocks the view to begin with.
      */
     private static final double SWIM_LINE_DEPTH = 1.25;
 
-    /** 2区間を一直線とみなす外積の大きさの上限。区間長が約1ブロックなので、この値なら実質的に厳密一致。 */
+    /** Upper bound of the cross product for treating two segments as collinear. Segments are about one block long, so this is effectively an exact match. */
     private static final double COLLINEAR_EPSILON = 1.0e-6;
 
     /**
-     * ゴールに届かなかった経路の末端を、消えていくように描くステップ数。ここだけは直線でも
-     * まとめずに区間を分ける（濃さを段階的に落とすため）。
+     * Number of steps over which the end of a route that didn't reach the goal is drawn fading out. Only
+     * here are segments kept separate even when straight (to lower the opacity step by step).
      */
     private static final int FADE_TAIL_STEPS = 8;
 
     /**
-     * 水中・ボートの区間を1本の直線へ畳んでよい最大の長さ（ブロック）。
+     * Maximum length (blocks) of an underwater or boat run that may be folded into one straight line.
      *
-     * <p>畳める長さの上限が要るのは、判定が「区間の始点から候補までの弦を毎回走査し直す」形
-     * ——伸ばすたびに全長を見るのでO(長さ^2)——だから。長い直線が数本に分かれるだけで
-     * 見た目はほとんど変わらない（{@code FlightSmoother#LOOKAHEAD_POINTS}と同じ考え方）。
+     * <p>The cap is needed because the check "rescans the chord from the run's start to the candidate each
+     * time"; since each extension looks at the whole length, it's O(length^2). A long straight line just
+     * splits into a few, which barely changes the look (same idea as {@code FlightSmoother#LOOKAHEAD_POINTS}).
      */
     private static final int MAX_FLUID_SHORTCUT_BLOCKS = 32;
 
-    /** 平地の区間を1本の直線へ畳んでよい最大の長さ（ブロック）。理由は{@link #MAX_FLUID_SHORTCUT_BLOCKS}と同じ。 */
+    /** Maximum length (blocks) of a level-ground run that may be folded into one straight line. Same reason as {@link #MAX_FLUID_SHORTCUT_BLOCKS}. */
     private static final int MAX_LAND_SHORTCUT_BLOCKS = 32;
 
     /**
-     * 平地の近道で体の通り道を確かめる刻み（ブロック）。体の幅0.6より細かいので、弦が横切る列は取りこぼさない
-     * （角を刻みより浅く掠めるだけの列は見落としうるが、体が角に触れる程度）。
+     * Step size (blocks) for checking the body's path on level-ground shortcuts. Finer than the body width
+     * of 0.6, so no column the chord crosses is missed (a column only grazed at a corner shallower than the
+     * step can be missed, but at most the body brushes the corner).
      */
     private static final double LAND_SHORTCUT_SAMPLE_BLOCKS = 0.25;
 
-    /** プレイヤーの当たり判定の半幅（バニラ0.6）。 */
+    /** Half-width of the player's hitbox (vanilla 0.6). */
     private static final double PLAYER_HALF_WIDTH = 0.3;
 
-    /** 区間の端点。要素数は「区間数 + 1」。 */
+    /** Segment endpoints. Length is "segment count + 1". */
     final double[] pointX;
     final double[] pointY;
     final double[] pointZ;
-    /** 区間ごとのRGB（区間数 × 3）。 */
+    /** RGB per segment (segment count × 3). */
     final float[] segmentColor;
     /**
-     * 区間の終端にあたるステップ番号。通り過ぎた区間を描かないために使う（区間は一直線ごとに
-     * まとめられているので、ステップ番号から区間を引くにはこの対応が要る）。
+     * The step index at the end of each segment. Used to skip drawing segments already passed (segments
+     * are merged per straight run, so this mapping is needed to look up a segment from a step index).
      */
     final int[] segmentEndStep;
     /**
-     * 両端とも{@link #SWIM_LINE_DEPTH}ぶん沈めて描いた区間か。描画側が自分の周りを抜くために使う
-     * （{@code PathRenderer#SWIM_NEAR_CLIP_BLOCKS}）。
+     * Whether the segment was drawn with both ends sunk by {@link #SWIM_LINE_DEPTH}. Used by the renderer to
+     * cut out the area around the player ({@code PathRenderer#SWIM_NEAR_CLIP_BLOCKS}).
      */
     final boolean[] segmentSunk;
     /**
-     * 両端のセルがどちらも水の区間か。水の外から見ると、この区間は水の描画に深度で隠れる
-     * （{@code PathRenderer#THROUGH_WATER_ALPHA}）。
+     * Whether both end cells of the segment are water. Seen from outside the water, this segment is hidden
+     * by depth behind the rendered water ({@code PathRenderer#THROUGH_WATER_ALPHA}).
      */
     final boolean[] segmentInWater;
     /**
-     * 危険区間か（{@link PathColors.Kind#DANGER}）。色だけに頼らない識別のため、描画側が
-     * 破線で強調する（A11Y-01）。区間内のステップは同じ色＝同じ分類にまとめられているので、
-     * 区間ごとに1つ持てば足りる。
+     * Whether the segment is dangerous ({@link PathColors.Kind#DANGER}). So as not to rely on color alone,
+     * the renderer emphasizes it with a dashed line (A11Y-01). Steps within a segment are grouped by the
+     * same color, i.e. the same classification, so one flag per segment is enough.
      */
     final boolean[] segmentDashed;
 
     final int[] highlightX;
     final int[] highlightY;
     final int[] highlightZ;
-    /** ハイライトごとのRGB（ハイライト数 × 3）。 */
+    /** RGB per highlight (highlight count × 3). */
     final float[] highlightColor;
     /**
-     * ハイライトが「これから置く場所」か。置いた瞬間に枠を消すため、描画側が毎フレーム
-     * そのセルの現況を見る必要があるものだけを区別する（掘る場所は逆で、壊れるまで出し続ける）。
+     * Whether the highlight is "a place to put a block". To remove the outline the moment the block is placed,
+     * this marks only the cells whose current state the renderer must check every frame (dig spots are the
+     * opposite: shown until broken).
      */
     final boolean[] highlightPlacement;
     /**
-     * ハイライトごとの元の{@link PathStep}の添字（昇順）。通り過ぎたハイライトを描かないために要る。
+     * Index of the originating {@link PathStep} for each highlight (ascending). Needed to skip drawing highlights already passed.
      *
-     * <p>線の方は{@link #segmentEndStep}で切り詰めているのに、ハイライトには対応する情報が無く
-     * <b>枠だけが経路の引き直しまで残っていた</b>。設置予定地は「実際に置かれた」ときにしか枠が
-     * 消えない（{@code PathRenderer#placementPending}）ので、置かずに脇を通り過ぎた設置予定地は
-     * セルが{@code replaceable}のまま＝背後に青い枠が残り続ける。
+     * <p>Lines were already trimmed with {@link #segmentEndStep}, but highlights had no matching information,
+     * so <b>only the outlines lingered until the route was recomputed</b>. A placement outline only disappears
+     * once the block is "actually placed" ({@code PathRenderer#placementPending}), so a placement spot walked
+     * past without placing stays {@code replaceable}, leaving a blue outline behind you.
      */
     final int[] highlightStep;
-    /** この区間から先は打ち切られた末端。手前から順に薄くしていく。到達済みの経路では区間数と同じ。 */
+    /** Segments from here on are the truncated tail, fading out progressively. Equals the segment count for routes that reached the goal. */
     final int fadeFromSegment;
 
     private PathGeometry(double[] pointX, double[] pointY, double[] pointZ, float[] segmentColor,
@@ -146,7 +151,7 @@ final class PathGeometry {
         this.fadeFromSegment = fadeFromSegment;
     }
 
-    /** ハイライトの添字範囲 {@code [from, to)}。{@link #from} と {@link #to} が等しければ空。 */
+    /** A range of highlight indices {@code [from, to)}. Empty if {@link #from} equals {@link #to}. */
     record Range(int from, int to) {
         boolean contains(int index) {
             return index >= from && index < to;
@@ -158,10 +163,10 @@ final class PathGeometry {
     }
 
     /**
-     * {@code fromStep}以降で最初に掘るステップの、掘削セルのハイライト範囲。1手で複数セルを掘ることがあるので範囲で返す。
+     * The highlight range of the dig cells for the first digging step at or after {@code fromStep}. One move may dig several cells, so a range is returned.
      *
-     * <p>「次に掘る場所」は<b>いま居るステップから先</b>で探す。経路の先頭から決め打ちにすると、
-     * 掘る場所を通り過ぎた後もそこを濃く塗り続ける。
+     * <p>"The next place to dig" is searched for <b>from the current step onward</b>. Fixing it from the start of
+     * the route would keep painting a dig spot bold even after passing it.
      */
     Range nextDig(int fromStep) {
         for (int i = 0; i < highlightStep.length; i++) {
@@ -186,12 +191,12 @@ final class PathGeometry {
     }
 
     /**
-     * {@code step}をまだ通り過ぎていない最初の区間。すべて通り過ぎていれば区間数を返す。
+     * The first segment that hasn't yet passed {@code step}. Returns the segment count if all have been passed.
      *
-     * <p>境界は{@code >=}(以上)。{@code step}は「プレイヤーに最も近いステップ」であって
-     * 「到達済みのステップ」ではない――経路計算直後は自分の足元が最初のステップに最も近く、
-     * 1歩も動いていなくても{@code step}は0になる。{@code >}(より大きい)にすると、その最初の
-     * ステップで終わる区間まるごとが「通り過ぎた」扱いになり、真下から線が生えなくなる。
+     * <p>The boundary is {@code >=} (greater or equal). {@code step} is "the step closest to the player", not
+     * "a step already reached": right after a route is computed, your own feet are closest to the first step,
+     * so {@code step} is 0 even without moving. Using {@code >} (strictly greater) would treat the whole
+     * segment ending at that first step as "passed", and the line would no longer start from directly below you.
      */
     int firstSegmentFrom(int step) {
         for (int i = 0; i < segmentEndStep.length; i++) {
@@ -203,12 +208,12 @@ final class PathGeometry {
     }
 
     /**
-     * プレイヤーの現在地に対応する、区間{@code segment}の描き始めの点を{@code out}へ書く。
+     * Writes to {@code out} the starting point for drawing segment {@code segment} that corresponds to the player's current position.
      *
-     * <p><b>プレイヤーの連続座標そのもの</b>をその区間の弦へ射影する。以前は「最も近いステップの
-     * 位置」を代わりに射影していたが、その最寄りステップ探索は経路の始点(プレイヤー自身がまだ
-     * 立っている場所)を候補に含まない――そのため経路計算直後で1歩も動いていなくても最初の
-     * ステップが常に最寄りとなり、真下からではなくその1歩先から線が生え始めていた。
+     * <p>Projects <b>the player's continuous position itself</b> onto the segment's chord. Previously "the position
+     * of the nearest step" was projected instead, but that nearest-step search doesn't include the route's start
+     * (where the player is still standing) as a candidate, so right after the route was computed, even without
+     * moving, the first step was always the nearest and the line started one step ahead rather than from directly below.
      */
     void cutPoint(int segment, double playerX, double playerY, double playerZ, double[] out) {
         projectOntoSegment(playerX, playerY, playerZ,
@@ -216,7 +221,7 @@ final class PathGeometry {
                 pointX[segment + 1], pointY[segment + 1], pointZ[segment + 1], out);
     }
 
-    /** 点{@code p}を線分{@code a}-{@code b}へ射影した点（線分の外へは出さない）。 */
+    /** The projection of point {@code p} onto segment {@code a}-{@code b} (clamped to the segment). */
     static void projectOntoSegment(double px, double py, double pz,
                                    double ax, double ay, double az,
                                    double bx, double by, double bz, double[] out) {
@@ -239,18 +244,18 @@ final class PathGeometry {
         double[] rawY = new double[count + 1];
         double[] rawZ = new double[count + 1];
         float[][] rawColor = new float[count][];
-        // 描画位置とは別に、元のブロック座標も持っておく。水面の区間は線を水面の上へ持ち上げる
-        // ので、描画位置をそのまま通行判定に使うと1つ上の空気のセルを見てしまう
+        // Keep the original block coordinates separately from the draw positions. Water-surface segments
+        // lift the line above the surface, so using draw positions for passability would look at the air cell above
         BlockPos[] rawBlock = new BlockPos[count + 1];
 
-        // 沈めて描いた点。区間ごとの印（segmentSunk）を後から組み立てるために持つ
+        // Points drawn sunk. Kept so the per-segment flag (segmentSunk) can be assembled later
         boolean[] rawSunk = new boolean[count + 1];
         boolean[] rawInWater = new boolean[count + 1];
-        // 危険区間か（区間ごとの印segmentDashedを後から組み立てるために持つ、A11Y-01）
+        // Whether dangerous (kept so the per-segment flag segmentDashed can be assembled later, A11Y-01)
         boolean[] rawDangerous = new boolean[count];
 
         rawBlock[0] = start;
-        // 始点は、そこから出ていく1手と同じ扱いにする。別扱いにすると先頭の1区間だけ段差になる
+        // Treat the start the same as the move leaving it. Treating it differently makes just the first segment step up or down
         rawSunk[0] = center(level, start, steps.isEmpty() ? null : steps.get(0), rawX, rawY, rawZ, 0);
         rawInWater[0] = level.getFluidState(start).is(FluidTags.WATER);
         for (int i = 0; i < count; i++) {
@@ -276,7 +281,7 @@ final class PathGeometry {
         int fadeFromSegment = Integer.MAX_VALUE;
 
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
-        // いま伸ばしている区間の始点にあたる raw の添字。水中の近道判定はこの点からの弦を見る
+        // The raw index of the start of the segment currently being extended. The underwater shortcut check looks at the chord from this point
         int segmentStart = 0;
         for (int i = 1; i <= count; i++) {
             float[] color = rawColor[i - 1];
@@ -290,7 +295,7 @@ final class PathGeometry {
                 outX[points - 1] = rawX[i];
                 outY[points - 1] = rawY[i];
                 outZ[points - 1] = rawZ[i];
-                // 点の添字はステップの添字より1つ大きい（先頭の点はプレイヤーの現在地）
+                // Point indices are one greater than step indices (the first point is the player's current position)
                 outEndStep[segments - 1] = i - 1;
                 continue;
             }
@@ -319,13 +324,13 @@ final class PathGeometry {
             int endRaw = outEndStep[i] + 1;
             flatSegmentSunk[i] = rawSunk[startRaw] && rawSunk[endRaw];
             flatSegmentInWater[i] = rawInWater[startRaw] && rawInWater[endRaw];
-            // 区間内は同じ色＝同じ分類にまとめられているので、末尾ステップの判定で区間全体を代表できる
+            // Steps within a segment are grouped by the same color, i.e. the same classification, so the last step represents the whole segment
             flatSegmentDashed[i] = rawDangerous[outEndStep[i]];
             startRaw = endRaw;
         }
 
-        // 上限は事前に数えられる（1手につきdigCells()の数＋bridging分1個）ので、ArrayList<Boolean>/
-        // <Integer>のboxingを経由せずプリミティブ配列へ直接書き込む
+        // The upper bound can be counted in advance (the number of digCells() per move + 1 for bridging), so write
+        // directly into primitive arrays rather than boxing through ArrayList<Boolean>/<Integer>
         int highlightCapacity = 0;
         for (int i = 0; i < count; i++) {
             PathStep step = steps.get(i);
@@ -377,16 +382,16 @@ final class PathGeometry {
     }
 
     /**
-     * 水中・ボートの区間を、格子の目に沿った折れ線ではなく<b>通せる限りの直線</b>にしてよいか。
+     * Whether an underwater or boat run may become <b>a straight line as far as it can pass</b> rather than a grid-aligned polyline.
      *
-     * <p>陸の経路では段差・掘削・設置のある手の位置に意味がある（このブロックの上に立つ、という指示そのもの）。
-     * 水の中とボートの上には足場が無く、A*が返す階段状の並びは<b>探索格子の都合でしかない</b>——
-     * 地形が無いぶんその階段がそのまま線に出るので、開けた海では意味の無いジグザグに見える。
-     * 追うべきなのは向きだけ、という点で滑空中の線と同じ性質なので、扱いも揃える
-     * （{@code FlightSmoother}のstring pullと同じ考え方で、判定も同じ{@link VoxelRay}を使う）。
+     * <p>On land routes, the position of moves with steps, digging or placement matters (it is itself the instruction to stand on this block).
+     * In water and on a boat there is no footing, and the staircase that A* returns is <b>purely an artifact of the search grid</b>;
+     * with no terrain to hide it, the staircase shows up directly in the line, looking like a meaningless zigzag in open sea.
+     * Only the direction matters, the same property as lines while gliding, so it's handled the same way
+     * (same idea as the string pull in {@code FlightSmoother}, and the check uses the same {@link VoxelRay}).
      *
-     * <p>近道が通る全セルが水であること、かつその1つ上が掘らずに通れることを求める。前者だけだと
-     * 岬や浅瀬を突っ切る線になり、後者を見ないと天井の低い水路で体がつかえる線になる。
+     * <p>Requires every cell the shortcut passes through to be water, and the cell above each to be passable without digging. With only
+     * the former the line would cut across headlands and shallows; without the latter it would get the body stuck in low-ceilinged channels.
      */
     private static boolean fluidShortcut(Level level, BlockPos.MutableBlockPos cursor, float[] color,
                                          BlockPos from, BlockPos to) {
@@ -396,8 +401,8 @@ final class PathGeometry {
         if (from.distSqr(to) > (double) MAX_FLUID_SHORTCUT_BLOCKS * MAX_FLUID_SHORTCUT_BLOCKS) {
             return false;
         }
-        // 判定はブロック座標のセル中心どうしで行う。描画位置は水面の区間だけ持ち上げてあるので、
-        // そちらを渡すと1つ上の空気のセルを走査してしまう
+        // The check uses cell centers of block coordinates. Draw positions are lifted only for water-surface segments,
+        // so passing those would scan the air cell one above
         Vec3 a = new Vec3(from.getX() + 0.5, from.getY() + 0.5, from.getZ() + 0.5);
         Vec3 b = new Vec3(to.getX() + 0.5, to.getY() + 0.5, to.getZ() + 0.5);
         return VoxelRay.traverse(a, b, (x, y, z) -> {
@@ -411,14 +416,14 @@ final class PathGeometry {
     }
 
     /**
-     * 同じ高さの平地を歩くだけの区間を、格子の目に沿った階段ではなく<b>通せる限りの直線</b>にしてよいか。
+     * Whether a run that only walks across level ground at one height may become <b>a straight line as far as it can pass</b> rather than a grid-aligned staircase.
      *
-     * <p>探索は8方向の格子で解くので、斜め45度以外へ向かう平地の経路は斜めと直進の混ざった階段になる。
-     * 階段をそのまま歩くと直線より最大約8%長い（実地形の最適経路を直線へ引き直すと、ネザー・エンドで平均約3%）。
-     * 平地の歩きには掘る・置く・跳ぶが無く、1手ごとの位置に意味が無いので、水中と同じく向きだけを示す。
+     * <p>The search solves on an 8-direction grid, so level-ground routes heading anywhere other than 45-degree diagonals become a mix of diagonal and straight steps.
+     * Walking the staircase as-is is up to about 8% longer than a straight line (re-straightening optimal routes on real terrain averages about 3% in the Nether and End).
+     * Walking on level ground involves no digging, placing or jumping, and the position of each move means nothing, so as underwater, only the direction is shown.
      *
-     * <p>幅0.6の体が弦に沿って動く間に触れる列すべてで、足元が立てる床・体と頭が掘らずに通れる空気であることを求める。
-     * 列の中心を結ぶ弦だけを見ると、角の欠けた床や壁の角を擦る線になる。
+     * <p>Requires, in every column the 0.6-wide body touches while moving along the chord, a standable floor underfoot and air for body and head passable without digging.
+     * Looking only at the chord through column centers would produce lines that clip chipped floor corners or wall corners.
      */
     private static boolean landShortcut(Level level, BlockPos.MutableBlockPos cursor, float[] color,
                                         BlockPos from, BlockPos to) {
@@ -461,7 +466,7 @@ final class PathGeometry {
         return true;
     }
 
-    /** {@code b}が{@code a}から{@code c}への一直線上にあり、かつ折り返していないか。 */
+    /** Whether {@code b} lies on the straight line from {@code a} to {@code c} without turning back. */
     private static boolean continuesStraight(double ax, double ay, double az,
                                              double bx, double by, double bz,
                                              double cx, double cy, double cz) {
@@ -481,21 +486,22 @@ final class PathGeometry {
     }
 
     /**
-     * 経路のセルを線の通過点にする。沈めて描いたなら{@code true}。
+     * Turns a route cell into a point on the line. Returns {@code true} if drawn sunk.
      *
-     * <p><b>水面のセルだけ</b>は線をセル中心から動かす。水面のセルはブロックの高さで言えば
-     * 水の中なので、セル中心（+0.55）に描くと水面の描画に沈み、ボートに乗っていると自分の体の
-     * 真下になって見えない。水の上を進む区間（ボート・水面を泳ぐ）はこれが常態になる。
+     * <p><b>Only water-surface cells</b> move the line off the cell center. In terms of block height, a water-surface
+     * cell is inside the water, so drawing at the cell center (+0.55) sinks it into the rendered water surface, and
+     * when riding a boat it's directly under your own body and invisible. For segments that travel over water (boats,
+     * swimming at the surface), this is the normal case.
      *
-     * <p>動かす向きは<b>足場の有無</b>で分かれる。足が着いていれば目線は水面より上にあるので
-     * 水面の上へ持ち上げる（ボート・浅瀬を歩く区間）。足場が無い＝泳いでいる区間は目線が水面
-     * そのものなので、逆に{@link #SWIM_LINE_DEPTH}ぶん沈める。<b>沈める側は水面と水中の
-     * 段差も同時に消える</b>——持ち上げていた頃は、経路が1マス潜るだけで線が1.5マス落ちていた
-     * （水面セルが+1.05、その1つ下が+0.55）。
+     * <p>The direction it moves depends on <b>whether there is footing</b>. With your feet down, eye level is above the
+     * surface, so the line is lifted above the surface (boats, wading through shallows). With no footing, i.e. swimming,
+     * eye level is the surface itself, so instead it's sunk by {@link #SWIM_LINE_DEPTH}. <b>Sinking also removes the step
+     * between surface and underwater</b>: back when it was lifted, the line dropped 1.5 blocks when the route dipped just
+     * one block (the surface cell at +1.05, the one below at +0.55).
      *
-     * <p>水面のセル以外でセルのYをそのまま使うのは変えていない。以前は<b>水中のセルを列ごと
-     * 水面へ揃えて</b>いて、XZが同一でYだけ違う{@code SwimUp}/{@code SwimDown}が1点に潰れ、
-     * 潜降・浮上が区間長0になって描画ごと消えていた。
+     * <p>Using the cell's Y as-is for cells other than the water surface is unchanged. Previously <b>underwater cells were
+     * aligned to the surface column by column</b>, so {@code SwimUp}/{@code SwimDown}, which share XZ and differ only in Y,
+     * collapsed into one point, and diving and surfacing became zero-length segments that vanished from rendering.
      */
     private static boolean center(Level level, BlockPos pos, PathStep step,
                                   double[] outX, double[] outY, double[] outZ, int index) {
@@ -514,18 +520,18 @@ final class PathGeometry {
     }
 
     /**
-     * この水面のセルを、泳いでいる区間として沈めて描いてよいか。
+     * Whether this water-surface cell may be drawn sunk as part of a swimming segment.
      *
-     * <p>ボートを除くのは目線の高さが違うから（{@link #SWIM_LINE_DEPTH}）。足場を見るのは、
-     * 浅瀬を<b>歩いて</b>渡る区間も水面のセルを通るため——そこで沈めると、線が自分の歩いている
-     * 地面の下へ潜る。{@code MoveKind.SWIM}は足が着いていても付くので、種類ではなく足場で見る。
+     * <p>Boats are excluded because their eye level differs ({@link #SWIM_LINE_DEPTH}). Footing is checked because
+     * segments that <b>walk</b> through shallows also pass through water-surface cells; sinking there would put the
+     * line below the ground you're walking on. {@code MoveKind.SWIM} is set even with feet down, so footing is checked rather than the kind.
      */
     private static boolean sinkable(Level level, BlockPos pos, PathStep step) {
         return step != null && !step.boating()
                 && !CellData.standable(CellData.flagsOf(level.getBlockState(pos.below())));
     }
 
-    /** 水のセルで、かつ真上が水でない＝そこが水面。 */
+    /** A water cell whose cell above isn't water, i.e. the water surface. */
     private static boolean isWaterSurface(Level level, BlockPos pos) {
         return level.getFluidState(pos).is(FluidTags.WATER)
                 && !level.getFluidState(pos.above()).is(FluidTags.WATER);

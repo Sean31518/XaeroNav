@@ -10,20 +10,20 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 
 /**
- * Forge 1.16.5向けのMODが文字列で持っているSRG名（1.16ではMCP名と同じクラス名も含む）を、開発環境の名前（Mojang名）へ書き換える。
+ * Rewrites SRG names that Forge 1.16.5 mods hold as strings (in 1.16 this includes class names, which are the same as MCP names) to dev-environment names (Mojang names).
  *
- * <p>本番のForge 1.16.5はSRG名で動くので問題ないが、Loomの開発環境はMojang名で動き、Loomのremapはクラスファイルの
- * 型・メンバーの参照しか書き換えない。Xaeroは2か所で文字列を使っていて、そのままだと開発実行（runClient）が落ちる。
+ * <p>Production Forge 1.16.5 runs on SRG names so this is fine there, but Loom's dev environment runs on Mojang names, and Loom's remap only rewrites
+ * type and member references in class files. Xaero uses strings in two places, and left as-is, dev runs (runClient) crash.
  * <ul>
- *   <li>coremod（JavaScript）の注入先: `ToggleableKeyBinding`・`func_151470_d` → 起動時に`NoClassDefFoundError`</li>
- *   <li>リフレクションの`Class.forName("net.minecraft.client.renderer.RenderType$Type")` → ワールドに入ると`ClassNotFoundException`</li>
+ *   <li>coremod (JavaScript) injection targets: `ToggleableKeyBinding`, `func_151470_d` -> `NoClassDefFoundError` at startup</li>
+ *   <li>reflective `Class.forName("net.minecraft.client.renderer.RenderType$Type")` -> `ClassNotFoundException` on entering a world</li>
  * </ul>
- * クラスファイルの中は、文字列全体がクラス名であるものだけを書き換える（メンバー名はForgeの`ObfuscationReflectionHelper`が引く）。
+ * Inside class files, only strings that are a class name in their entirety are rewritten (member names are looked up by Forge's `ObfuscationReflectionHelper`).
  *
- * <p>jarをその場で書き換える。書き換え済みのjarにはSRG名が残っていないので、何度呼んでも結果は変わらない。
+ * <p>Rewrites the jar in place. A rewritten jar has no SRG names left, so calling this repeatedly gives the same result.
  *
- * @param tinyWithSrg Loomの`mappings-srg.tiny`（名前空間に`srg`と`named`を持つ）
- * @return 書き換えたファイルの数
+ * @param tinyWithSrg Loom's `mappings-srg.tiny` (with `srg` and `named` namespaces)
+ * @return the number of files rewritten
  */
 fun rewriteForgeCoremodNames(jar: Path, tinyWithSrg: Path): Int {
     val names = SrgToNamed.load(tinyWithSrg)
@@ -59,11 +59,11 @@ private class SrgToNamed(private val classes: Map<String, String>, private val m
         return MEMBER_NAME.replace(withClasses) { match -> members[match.value] ?: match.value }
     }
 
-    /** 文字列定数のうち、全体がMinecraftのクラス名であるものを書き換える。何も変えなければ`null`。 */
+    /** Rewrites string constants that are a Minecraft class name in their entirety. Returns `null` if nothing changed. */
     fun rewriteClassNameStrings(bytes: ByteArray): ByteArray? {
         val reader = ClassReader(bytes)
         var changed = false
-        // フレームや最大スタックは文字列定数を差し替えても変わらないので、計算し直さない（COMPUTE_*を付けない）
+        // Replacing string constants doesn't change frames or max stack, so don't recompute them (no COMPUTE_*)
         val writer = ClassWriter(reader, 0)
         reader.accept(object : ClassVisitor(Opcodes.ASM9, writer) {
             override fun visitMethod(
@@ -91,7 +91,7 @@ private class SrgToNamed(private val classes: Map<String, String>, private val m
         return if (name.contains('.')) named.replace('/', '.') else named
     }
 
-    /** `a.b.C.method`のように後ろへ続く場合があるので、対応表に当たるまで末尾を削って探す。 */
+    /** Can be followed by more, as in `a.b.C.method`, so trim from the end until it hits the mapping table. */
     private fun mapClass(name: String): String? {
         val dotted = name.contains('.')
         var candidate = name.replace('.', '/')
@@ -115,18 +115,18 @@ private class SrgToNamed(private val classes: Map<String, String>, private val m
         fun load(tiny: Path): SrgToNamed {
             val lines = Files.readAllLines(tiny)
             val header = lines.first().split('\t')
-            check(header[0] == "tiny" && header[1] == "2") { "tiny v2ではない: $tiny" }
+            check(header[0] == "tiny" && header[1] == "2") { "not tiny v2: $tiny" }
             val namespaces = header.drop(3)
             val srg = namespaces.indexOf("srg")
             val named = namespaces.indexOf("named")
-            check(srg >= 0 && named >= 0) { "srgとnamedの名前空間が無い: $tiny ($namespaces)" }
+            check(srg >= 0 && named >= 0) { "missing srg and named namespaces: $tiny ($namespaces)" }
             val classes = HashMap<String, String>()
             val members = HashMap<String, String>()
             for (line in lines.drop(1)) {
                 val columns = line.split('\t')
                 when {
                     columns[0] == "c" -> classes[columns[1 + srg]] = columns[1 + named]
-                    // メソッド・フィールドの行はクラスの下に1段下げて`m`/`f`、記述子、名前空間ごとの名前の順
+                    // Method and field lines are indented one level under the class: `m`/`f`, descriptor, then the name per namespace
                     columns.size > 3 && columns[0].isEmpty() && (columns[1] == "m" || columns[1] == "f") ->
                         members[columns[3 + srg]] = columns[3 + named]
                 }

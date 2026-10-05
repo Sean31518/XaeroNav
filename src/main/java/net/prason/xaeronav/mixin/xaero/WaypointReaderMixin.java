@@ -18,11 +18,11 @@ import xaero.map.mods.gui.Waypoint;
 import xaero.map.mods.gui.WaypointReader;
 
 /**
- * ウェイポイントの右クリックメニュー（Edit/Teleport/Share/Disable/Delete）の末尾に
- * 「ここへ経路探索」を追加する。{@code getRightClickOptions}はジェネリクス消去によるブリッジメソッドと
- * 同名で存在するため、記述子を明示して{@code Waypoint}版だけを対象にする。
+ * Adds "Pathfind here" to the end of the waypoint right-click menu (Edit/Teleport/Share/Disable/Delete).
+ * {@code getRightClickOptions} also exists under the same name as a bridge method from generic erasure,
+ * so the descriptor is given explicitly to target only the {@code Waypoint} version.
  *
- * <p>required=falseの専用mixin configに属し、対象メソッドが見つからない場合はこの機能だけが無効化される。
+ * <p>Belongs to a dedicated required=false mixin config; if the target method isn't found, only this feature is disabled.
  */
 @Mixin(WaypointReader.class)
 public abstract class WaypointReaderMixin implements XaeroHookMarker {
@@ -30,7 +30,7 @@ public abstract class WaypointReaderMixin implements XaeroHookMarker {
     @ModifyReturnValue(
             method = "getRightClickOptions(Lxaero/map/mods/gui/Waypoint;Lxaero/map/gui/IRightClickableElement;)Ljava/util/ArrayList;",
             at = @At("RETURN"),
-            // Xaero自身のメソッドなのでSRGの対応が無い。remapさせると1.20.1-forgeのAPがビルドを止める
+            // It's Xaero's own method, so there's no SRG mapping. Letting it remap makes the 1.20.1-forge AP stop the build
             remap = false
     )
     private ArrayList<RightClickOption> xaeronav$addGoHereOption(ArrayList<RightClickOption> original,
@@ -50,7 +50,7 @@ public abstract class WaypointReaderMixin implements XaeroHookMarker {
                 PathfindingState.INSTANCE.setGoal(new BlockPos(element.getX(), element.getY(), element.getZ()));
             }
         });
-        // 「ここへ経路探索」のすぐ下に置く。目的地が無い間は押しても意味が無いので灰色表示にする
+        // Placed right below "Pathfind here". Pressing it is pointless while there's no destination, so it's shown grayed out
         original.add(new RightClickOption("gui.xaeronav_clear_route", original.size(), target) {
             @Override
             public boolean isActive() {

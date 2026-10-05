@@ -9,33 +9,33 @@ import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.util.MathSupport;
 
 /**
- * 提示中の経路から「残りの道のり」「所要時間」「経路の終点が近いか」を求める。所要時間には、経路の終点から目的地までの
- * 見積もり（{@link GoalEta}）を足せる。
+ * Derives "remaining distance", "time required" and "whether the end of the route is near" from the route being shown. The time
+ * can include the estimate from the end of the route to the destination ({@link GoalEta}).
  *
- * <p>各地点までの累積は経路だけで決まるので、経路ごとに1度だけ組み立てて使い回す
- * （{@link Route}）。プレイヤーが進むたびに変わるのは「いま経路のどこにいるか」（{@link PathProgress}）
- * だけで、そこから先の問い合わせは累積の引き算で済む。
+ * <p>The cumulative totals up to each point depend only on the route, so they're built once per route and reused
+ * ({@link Route}). The only thing that changes as the player moves is "where on the route they are now" ({@link PathProgress}),
+ * and queries from there on are answered by subtracting cumulative totals.
  */
 final class NavGuidance {
 
-    /** これ以下まで近づいたら経路末端の案内を出す。 */
+    /** Show the end-of-route guidance once within this distance. */
     private static final int ARRIVAL_BLOCKS = 3;
 
     /**
-     * 実測の速さで所要時間を割り直すときの倍率の範囲。止まる直前の遅さや、乗り物での一瞬の速さを
-     * そのまま掛けると桁が変わってしまう。
+     * Range of the factor used when rescaling the time by the measured speed. Applying the slowness just before stopping,
+     * or a momentary burst of speed in a vehicle, as-is would change the order of magnitude.
      */
     private static final double PACE_FACTOR_MIN = 0.5;
     private static final double PACE_FACTOR_MAX = 4.0;
 
     /**
-     * 表示する秒数の刻み。実測の速さは常に揺れているので、1秒刻みで出すと数字が落ち着かず、
-     * かえって信用できない表示になる。
+     * Granularity of the displayed seconds. The measured speed always fluctuates, so showing it to the second makes the
+     * number restless, and the display ends up less trustworthy.
      */
     private static final int SECONDS_GRANULARITY = 5;
     /**
-     * 見積もりを含む秒数の刻み（1分以上・10分以上）。見積もりは窓が進むたびに数十秒単位で動くので、
-     * 5秒刻みでは精度があるように見えてしまう。
+     * Granularity of seconds that include an estimate (over 1 minute, over 10 minutes). The estimate moves by tens of seconds
+     * each time the window advances, so 5-second steps would suggest a precision it doesn't have.
      */
     private static final int ESTIMATE_GRANULARITY_MINUTE = 10;
     private static final int ESTIMATE_GRANULARITY_LONG = 30;
@@ -55,13 +55,13 @@ final class NavGuidance {
     }
 
     /**
-     * @param beyondTicks 経路の終点から目的地までの見積もり（tick）。経路が目的地に届いているなら0
+     * @param beyondTicks estimate (ticks) from the end of the route to the destination. 0 if the route reaches the destination
      */
     static NavGuidance forPath(PathResult result, BlockPos playerPos, double beyondTicks) {
         return ROUTES.get(result, Route::new).guidanceAt(playerPos, beyondTicks);
     }
 
-    /** 経路がまだ無いときの所要時間（秒）。{@code ticks}は{@link GoalEta}の見積もり。 */
+    /** Time required (seconds) when there is no route yet. {@code ticks} is the {@link GoalEta} estimate. */
     static int estimateSeconds(double ticks) {
         return roundSeconds(ticks * paceFactor(1.0 / ActionCosts.SPRINT_ONE_BLOCK) / 20.0, true);
     }
@@ -72,7 +72,7 @@ final class NavGuidance {
 
         double blocks = route.blocks[last] - route.blocks[from];
         double seconds = route.remainingTicks(from, beyondTicks) / 20.0;
-        // まだ道のりが残っているのに「約0秒」と出さない
+        // Don't show "about 0 seconds" while there's still distance remaining
         int rounded = Math.max(blocks > 0.0 ? SECONDS_GRANULARITY : 0, roundSeconds(seconds, beyondTicks > 0.0));
         return new NavGuidance((int) Math.round(blocks), rounded,
                 blocks <= ARRIVAL_BLOCKS, route.source.complete());
@@ -85,9 +85,9 @@ final class NavGuidance {
     }
 
     /**
-     * 所要時間を実測の速さで割り直す倍率。
+     * Factor for rescaling the time required by the measured speed.
      *
-     * @param assumed 見積もりが想定している速さ（ブロック/tick）
+     * @param assumed the speed the estimate assumes (blocks/tick)
      */
     private static double paceFactor(double assumed) {
         double actual = NavPace.INSTANCE.blocksPerTick();
@@ -95,20 +95,20 @@ final class NavGuidance {
     }
 
     /**
-     * 経路ごとの下ごしらえ。各ステップまでの累積（道のり・移動コスト・作業コスト）を持つ。
+     * Per-route preparation. Holds the cumulative totals up to each step (distance, movement cost, work cost).
      */
     private static final class Route {
 
         private final PathResult source;
-        /** 各ステップまでの道のり。 */
+        /** Distance up to each step. */
         private final double[] blocks;
-        /** 移動そのもののコストと、掘る・置く・開ける側のコスト。所要時間の補正で扱いを分ける。 */
+        /** The cost of movement itself, and the cost of digging, placing and opening. Treated differently when correcting the time. */
         private final double[] movementTicks;
         private final double[] movementBlocks;
         private final double[] actionTicks;
 
-        // プレイヤーが1マス動くまで案内は変わらない。HUDは毎フレーム描かれるので、
-        // 同じマスにいる間の問い合わせは作り直さない
+        // Guidance doesn't change until the player moves one block. The HUD is drawn every frame, so
+        // queries while on the same block don't rebuild it
         private BlockPos cachedPos;
         private double cachedBeyondTicks;
         private NavGuidance cached;
@@ -125,8 +125,8 @@ final class NavGuidance {
             for (int i = 1; i < size; i++) {
                 PathStep step = steps.get(i);
                 double distance = Math.sqrt(steps.get(i - 1).pos().distSqr(step.pos()));
-                // 掘る・置く・ボートを出す区間のコストは歩く速さとは無関係なので、
-                // 実測での割り直しから外す
+                // The cost of segments that dig, place or deploy a boat has nothing to do with walking speed,
+                // so exclude it from rescaling by measured speed
                 boolean action = step.digging() || step.bridging() || step.boating();
                 blocks[i] = blocks[i - 1] + distance;
                 movementBlocks[i] = movementBlocks[i - 1] + (action ? 0.0 : distance);
@@ -145,11 +145,11 @@ final class NavGuidance {
         }
 
         /**
-         * {@code from}から先の所要時間（tick）。移動の分と経路の先の見積もりを、プレイヤーの実測の速さで割り直す。
+         * Time required (ticks) from {@code from} on. The movement share and the estimate beyond the route are rescaled by the player's measured speed.
          *
-         * <p>基準にする速さは経路が想定している速さ（移動区間の平均）にする。スプリント固定で比べると、
-         * 泳ぎや水中歩行のように元々遅い経路で二重に遅く見積もることになる。経路の先の見積もりも同じ移動コストで
-         * 積んだ値なので、同じ倍率で割り直す。
+         * <p>The reference speed is the speed the route assumes (the average over movement segments). Comparing against a fixed sprint
+         * would doubly underestimate routes that are slow to begin with, such as swimming or walking underwater. The estimate beyond the
+         * route is built from the same movement costs, so it's rescaled by the same factor.
          */
         private double remainingTicks(int from, double beyondTicks) {
             int last = source.steps().size() - 1;

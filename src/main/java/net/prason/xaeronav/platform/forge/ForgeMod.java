@@ -14,8 +14,8 @@ import net.prason.xaeronav.config.ForgeConfigSpecStore;
 import net.prason.xaeronav.config.XaeroNavConfig;
 
 /^*
- * Forge 56以降（Minecraft 1.21.6以降）の入口。EventBus 7でイベントがそれぞれ自分のバスを持つ形に変わったので、
- * 注釈で購読する{@code ForgeEntry}とは別に、各バスへ明示的に登録する。
+ * Entry point for Forge 56+ (Minecraft 1.21.6+). With EventBus 7, each event has its own bus, so
+ * apart from {@code ForgeEntry}, which subscribes via annotations, it registers with each bus explicitly.
  ^/
 @Mod(XaeroNav.MOD_ID)
 public final class ForgeMod {
@@ -24,8 +24,8 @@ public final class ForgeMod {
         XaeroNav.LOGGER.info("XaeroNav initialized");
         context.registerConfig(ModConfig.Type.CLIENT, forgeConfigSpec());
         ModConfigEvent.Reloading.getBus(context.getModBusGroup()).addListener(ForgeMod::onConfigReloaded);
-        // Forgeの@Modにはdist指定が無く、専用サーバーでもここは呼ばれる。クライアントのクラスを
-        // 触る登録はForgeClientSetupへ分け、サーバーではそのクラス自体を読み込ませない
+        // Forge's @Mod has no dist setting, so this is called on dedicated servers too. Registrations that touch
+        // client classes are split into ForgeClientSetup so that the server never loads that class at all
         if (FMLEnvironment.dist == Dist.CLIENT) {
             ForgeClientSetup.register(context);
         }

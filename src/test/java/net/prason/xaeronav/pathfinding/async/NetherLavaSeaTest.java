@@ -17,43 +17,43 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>ネザーの溶岩の海を、橋を架けて渡り切れること。</b>地形は実機報告そのままの座標
- * （{@code -289,72,525}の細い足場から南へ）。ユーザー報告「ネザーのマグマが多いところは渡れない」。
+ * <b>A Nether lava sea can be crossed all the way by building bridges.</b> The terrain uses the exact coordinates from the real-game report
+ * (south from the narrow footing at {@code -289,72,525}). User report: "can't cross areas of the Nether with lots of magma".
  *
- * <p>地形の中身は<b>40ブロック下が溶岩の、開けた空</b>。足場は{@code z=528}で途切れ、そこから
- * 南は{@code y=35〜100}に何も無い。渡るには50ブロック以上の橋を空中に架けるしかなく、
- * {@code maxLavaBridgeRunBlocks}(30)を超えるので上限緩和まで進まないと道が生えない。
+ * <p>The terrain consists of <b>open sky with lava 40 blocks below</b>. The footing ends at {@code z=528}, and south of that
+ * there's nothing at {@code y=35-100}. The only way across is a 50+ block bridge built in midair,
+ * which exceeds {@code maxLavaBridgeRunBlocks}(30), so no path appears until the limit relaxation is reached.
  *
- * <p><b>見るのは深い予算の単発探索</b>（{@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}）。
- * 実機ではここが時間切れになり、その後に走る粗い経由地チェーンは<b>単発より重い</b>
- * （104万 対 57万ノード）ので連鎖して失敗していた——直す場所はチェーンではなくこちら。
+ * <p><b>What's checked is the single search with the deep budget</b> ({@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}).
+ * In the real game this timed out, and the coarse waypoint chain that runs afterward is <b>heavier than the single search</b>
+ * (1.04M vs 570k nodes), so it failed in a cascade. The place to fix is this, not the chain.
  *
- * <p><b>時間の上限は実機より緩く取る。</b>ここで測りたいのは「ノード上限が足りているか」で
- * あって実行速度ではない。実機と同じにするとCIの処理速度の違いだけで結果が変わる。
- * 実機に必要な秒数は{@code DEEP_SEARCH_MAX_MILLIS}のjavadocに書いてある。
+ * <p><b>The time limit is looser than in the real game.</b> What this wants to measure is "is the node cap sufficient",
+ * not execution speed. Using the real-game limit would make the result depend on CI's processing speed alone.
+ * The seconds needed in the real game are documented in the {@code DEEP_SEARCH_MAX_MILLIS} javadoc.
  */
 @Tag("slow")
 class NetherLavaSeaTest {
 
-    /** 実機の深い予算のノード上限（通常予算10万 × {@code DEEP_SEARCH_BUDGET_FACTOR}）。 */
+    /** The real game's deep-budget node cap (normal budget 100k x {@code DEEP_SEARCH_BUDGET_FACTOR}). */
     private static final SearchLimits DEEP_LIMITS = new SearchLimits(800_000, 60_000, 1.5);
 
-    /** 実機報告の地点。ここから南へ行こうとすると足場が尽きる。 */
+    /** The spot from the real-game report. Heading south from here, the footing runs out. */
     private static final BlockPos START = new BlockPos(-289, 72, 525);
 
     private static final BlockPos GOAL = new BlockPos(-296, 57, 584);
 
     /**
-     * 到達した経路が実際に溶岩を橋で渡っていること。<b>これが「徒歩で回り込める地形」との
-     * 切り分け</b>——回り込めるなら橋は要らないので、橋が並ぶこと自体がこの地形の証明になる。
-     * 実測は29本。
+     * The path that reached the goal actually crosses lava by bridge. <b>This is what distinguishes it from "terrain you can walk
+     * around"</b>: if you could walk around, no bridges would be needed, so a row of bridges itself proves the terrain.
+     * Measured: 29.
      */
     private static final int MIN_BRIDGES = 15;
 
     /**
-     * ネザーは天井のある次元なので、実機の探索範囲は<b>次元の全高</b>になる
-     * （{@code PathfindingState#verticalSearchMargin}）。箱の上端を岩盤天井の上に置くと
-     * 天井の上を歩けてしまい、地形が別物になる。
+     * The Nether is a dimension with a ceiling, so the real game's search range covers <b>the full height of the dimension</b>
+     * ({@code PathfindingState#verticalSearchMargin}). Putting the box's top above the bedrock ceiling lets
+     * the path walk on top of the ceiling, making it different terrain.
      */
     private static FakeCells terrain() throws IOException {
         return TerrainFixture.load("/nether_lava_sea.txt.gz", bounds -> FakeCells.empty(bounds)
@@ -72,13 +72,13 @@ class NetherLavaSeaTest {
         PathResult result = new PathfindingExecutor()
                 .submit(cells, START, GOAL, DEEP_LIMITS, true, 0).get();
         long bridges = result.steps().stream().filter(PathStep::bridging).count();
-        System.out.println(String.format(Locale.ROOT, "%s→%s %s %d手 橋%d本 %dノード %.1f秒",
+        System.out.println(String.format(Locale.ROOT, "%s->%s %s %d steps %d bridges %d nodes %.1fs",
                 START.toShortString(), GOAL.toShortString(), result.termination(),
                 result.steps().size(), bridges, result.expandedNodes(),
                 (System.currentTimeMillis() - began) / 1000.0));
-        assertTrue(result.complete(), "溶岩の海を渡り切れていない: " + result.termination()
-                + " (" + result.steps().size() + "手, " + result.expandedNodes() + "ノード)");
+        assertTrue(result.complete(), "Didn't make it across the lava sea: " + result.termination()
+                + " (" + result.steps().size() + " steps, " + result.expandedNodes() + " nodes)");
         assertTrue(bridges >= MIN_BRIDGES,
-                "橋が" + bridges + "本しか無い＝この地形が溶岩の海の対照になっていない");
+                "Only " + bridges + " bridges = this terrain isn't serving as a lava-sea control");
     }
 }

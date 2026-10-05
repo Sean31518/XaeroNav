@@ -6,14 +6,14 @@ import java.util.List;
 import net.prason.xaeronav.platform.ModPresence;
 
 /**
- * Xaero連携のmixinが実際に当たったかを、注入先のクラスに付く{@link XaeroHookMarker}で確かめる。
+ * Checks whether the Xaero integration mixins actually applied, via the {@link XaeroHookMarker} attached to the target classes.
  *
- * <p>このクラス自体は{@code xaero.*}を参照しない（{@link XaeroPresence}と同じ理由）。注入先は
- * クラス名の文字列でだけ指す。
+ * <p>This class itself doesn't reference {@code xaero.*} (same reason as {@link XaeroPresence}). Targets are
+ * referred to only by class name strings.
  */
 public final class XaeroHooks {
 
-    /** 注入先のクラス1つ＝ユーザーから見た機能1つ。 */
+    /** One target class = one feature from the user's point of view. */
     public enum Hook {
         WORLD_MAP("xaeroworldmap", "xaero.map.gui.GuiMap", "hud.xaeronav.hook_world_map"),
         WAYPOINT_MENU("xaeroworldmap", "xaero.map.mods.gui.WaypointReader", "hud.xaeronav.hook_waypoint_menu"),
@@ -37,7 +37,7 @@ public final class XaeroHooks {
             return className;
         }
 
-        /** 何が使えなくなったのかをユーザーへ示す文言のキー。 */
+    /** Key of the text telling the user what has stopped working. */
         public String nameKey() {
             return nameKey;
         }
@@ -46,7 +46,7 @@ public final class XaeroHooks {
     private XaeroHooks() {
     }
 
-    /** 連携先のMODは読み込まれているのに、mixinが当たっていない機能。空なら全て当たっている。 */
+    /** Features whose mixin didn't apply even though the integrated mod is loaded. Empty if all applied. */
     public static List<Hook> missing() {
         List<Hook> missing = new ArrayList<>();
         for (Hook hook : Hook.values()) {
@@ -57,20 +57,20 @@ public final class XaeroHooks {
         return List.copyOf(missing);
     }
 
-    /** その連携1つが実際に当たっているか。 */
+    /** Whether that one integration actually applied. */
     public static boolean applied(Hook hook) {
         return applied(hook.className());
     }
 
     private static boolean applied(String className) {
         try {
-            // initialize=false。mixinの適用はクラスの読み込み時点で終わっているので、目印を見るだけなら
-            // Xaero側の静的初期化まで走らせる必要は無い
+            // initialize=false. Mixins are applied by the time the class is loaded, so just checking the marker
+            // doesn't require running Xaero's static initialization
             Class<?> target = Class.forName(className, false, XaeroHooks.class.getClassLoader());
             return XaeroHookMarker.class.isAssignableFrom(target);
         } catch (ClassNotFoundException notFound) {
-            // 注入先のクラスごと名前が変わった。ユーザーから見た結果は「当たらなかった」と同じなので、
-            // ここで投げ直さずそのまま報告に載せる
+            // The target class itself was renamed. From the user's point of view the result is the same as "didn't apply",
+            // so don't rethrow here; just include it in the report
             return false;
         }
     }

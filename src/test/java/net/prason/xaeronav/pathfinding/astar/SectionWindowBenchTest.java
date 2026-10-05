@@ -24,8 +24,8 @@ import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * 窓の中の正確なグラフを<b>セクション単位で</b>組む値段。全体を並列に組む初回と、16ブロック歩いたぶんの
- * 帯だけ組む更新、組み立て＋逆Dijkstraを分けて測る。判定を持たない計測。
+ * The cost of building the exact in-window graph <b>section by section</b>. Measures separately the initial build of the whole thing in parallel,
+ * the update that builds only the strip walked over 16 blocks, and assembly + reverse Dijkstra. A measurement with no assertions.
  */
 @Tag("bench")
 class SectionWindowBenchTest {
@@ -34,11 +34,11 @@ class SectionWindowBenchTest {
     private static final int SHELL_HORIZONTAL = 8;
     private static final int SHELL_VERTICAL = 2;
 
-    /** 1セクションぶんの辺（出発点はセクションの中）。 */
+    /** Edges for one section (start points are inside the section). */
     record SectionEdges(long[] from, long[] to, float[] cost, int expanded) {
     }
 
-    /** 自然に立てる点のビット（列ごと、Yは世界の最小から）。チャンクごとに覚える。 */
+    /** Bits of naturally standable points (per column, Y counted from the world minimum). Remembered per chunk. */
     static final class Naturals {
         private final CellSource cells;
         private final int minY;
@@ -53,7 +53,7 @@ class SectionWindowBenchTest {
             this.words = (height + 63) >> 6;
         }
 
-        /** その列の自然なYのビット。 */
+        /** Bits of the column's natural Ys. */
         long[] column(int x, int z) {
             long[] chunk = chunks.computeIfAbsent(((long) (x >> 4) << 32) | ((z >> 4) & 0xFFFFFFFFL),
                     key -> scan(x >> 4, z >> 4));
@@ -97,7 +97,7 @@ class SectionWindowBenchTest {
         int span = 16 + 2 * SHELL_HORIZONTAL;
         int originX = (sx << 4) - SHELL_HORIZONTAL;
         int originZ = (sz << 4) - SHELL_HORIZONTAL;
-        // 周りの列の自然なビットを垂直に膨らませ、X方向・Z方向の順に水平へ膨らませる
+        // Dilate the surrounding columns' natural bits vertically, then horizontally along X and then Z
         long[][] area = new long[span * span][];
         for (int ax = 0; ax < span; ax++) {
             for (int az = 0; az < span; az++) {
@@ -202,7 +202,7 @@ class SectionWindowBenchTest {
         });
         long parallel = System.nanoTime();
 
-        // 16ブロック東へ歩いたぶんの帯（新しく窓へ入るセクションの列）を単スレッドで
+        // The strip walked over 16 blocks east (columns of sections newly entering the window), single-threaded
         List<long[]> strip = sectionsIn(cells, maxX + 1, Math.min(world.maxX(), maxX + 16), minZ, maxZ);
         Naturals fresh = new Naturals(cells);
         long stripBegan = System.nanoTime();
@@ -277,8 +277,8 @@ class SectionWindowBenchTest {
         }
         long dijkstra = System.nanoTime();
         System.out.printf(Locale.ROOT,
-                "%s: セクション%d 並列初回%dms（展開%d・辺%d・%dコア） 帯%dセクション%dms（辺%d） 組み立て%dms"
-                        + " Dijkstra%dms（ノード%d・確定%d）%n",
+                "%s: sections %d parallel initial %dms (expanded %d, edges %d, %d cores) strip %d sections %dms (edges %d) assembly %dms"
+                        + " Dijkstra %dms (nodes %d, settled %d)%n",
                 name, sections.size(), (parallel - began) / 1_000_000, expanded, edges,
                 Runtime.getRuntime().availableProcessors(), strip.size(), (stripDone - stripBegan) / 1_000_000,
                 stripEdges, (assembled - assembleBegan) / 1_000_000, (dijkstra - assembled) / 1_000_000, n, settled);
@@ -303,12 +303,12 @@ class SectionWindowBenchTest {
                     try {
                         return TerrainFixture.onGround(cells, cells.bounds(), new BlockPos(x + dx, 0, z + dz));
                     } catch (IllegalStateException e) {
-                        // この列には立てない。次の列を見る
+                        // Can't stand in this column. Look at the next one
                     }
                 }
             }
         }
-        throw new IllegalStateException("立てる列が無い: " + x + "," + z);
+        throw new IllegalStateException("no standable column: " + x + "," + z);
     }
 
     private static FakeCells overworld(String resource) throws IOException {
@@ -319,12 +319,12 @@ class SectionWindowBenchTest {
     @Test
     void sectionWindowCost() throws IOException {
         FakeCells wide = overworld("/overworld_wide.txt.gz");
-        measure("地上/広域", wide, StanceFinder.resolveStart(wide, standableNear(wide, 700, -80)));
+        measure("surface/wide", wide, StanceFinder.resolveStart(wide, standableNear(wide, 700, -80)));
         FakeCells mountains = overworld("/overworld_mountains.txt.gz");
-        measure("地上/山岳", mountains, StanceFinder.resolveStart(mountains, standableNear(mountains, -384, 16)));
+        measure("surface/mountains", mountains, StanceFinder.resolveStart(mountains, standableNear(mountains, -384, 16)));
         FakeCells end = overworld("/end_terrain_columns_2481.txt.gz");
-        measure("エンド", end, StanceFinder.resolveStart(end, standableNear(end, 2536, -432)));
+        measure("End", end, StanceFinder.resolveStart(end, standableNear(end, 2536, -432)));
         FakeCells nether = NetherLiveWalkTest.terrain();
-        measure("ネザー", nether, StanceFinder.resolveStart(nether, new BlockPos(-317, 44, 567)));
+        measure("Nether", nether, StanceFinder.resolveStart(nether, new BlockPos(-317, 44, 567)));
     }
 }

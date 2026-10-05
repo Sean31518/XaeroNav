@@ -5,26 +5,26 @@ import java.util.Arrays;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 
 /**
- * 辺の「移動」（相対座標と値段の組）に通し番号を振る表。辺はこの番号（2バイト）だけを持つ。
+ * Table assigning serial numbers to edge "moves" (pairs of relative coordinates and price). Edges hold only this number (2 bytes).
  *
- * <p>移動の種類は窓全体でも数千に満たない（実測: 広域の窓で相対座標は70種・値段は約100種、1セクションで最大319種）
- * ので、辺ごとに座標と値段を持つより5分の1で済む。
+ * <p>There are fewer than a few thousand move kinds even across a whole window (measured: 70 relative coordinates and about 100 prices in a wide-area window, at most 319 kinds in one section),
+ * so this takes a fifth of the space of holding coordinates and price per edge.
  *
- * <p>番号は追記するだけで振り直さない。{@link #view}で取った表は、それより前に振った番号をすべて引ける。
- * ワーカースレッドから並行に呼んでよい。
+ * <p>Numbers are only appended, never reassigned. A table taken with {@link #view} can look up every number assigned before it.
+ * May be called concurrently from worker threads.
  */
 final class MoveTable {
 
-    /** 番号は{@code char}に収める。 */
+    /** Numbers fit in a {@code char}. */
     private static final int CAPACITY = 1 << 16;
 
-    /** 引くための表。取った時点までの番号を読める。 */
+    /** Table for lookups. Can read the numbers assigned up to when it was taken. */
     static final class View {
         final byte[] dx;
         final short[] dy;
         final byte[] dz;
         final float[] cost;
-        /** 振った番号の値段の最小値。まだ1つも無ければ{@link Float#MAX_VALUE}。 */
+        /** Minimum price among assigned numbers. {@link Float#MAX_VALUE} if none yet. */
         final float minCost;
 
         private View(byte[] dx, short[] dy, byte[] dz, float[] cost, float minCost) {
@@ -48,16 +48,16 @@ final class MoveTable {
         return view;
     }
 
-    /** 相対座標の鍵 {@code dx(8) | dz(8) | dy(16)}。 */
+    /** Relative coordinate key {@code dx(8) | dz(8) | dy(16)}. */
     static int offsetKey(int dx, int dy, int dz) {
         return (dx & 0xFF) << 24 | (dz & 0xFF) << 16 | (dy & 0xFFFF);
     }
 
     /**
-     * {@code offsets[i]}（{@link #offsetKey}）と{@code costs[i]}の組に番号を振り、{@code ids[i]}へ書く。
+     * Assigns numbers to the pairs of {@code offsets[i]} ({@link #offsetKey}) and {@code costs[i]}, writing them to {@code ids[i]}.
      *
-     * @throws IllegalStateException 移動の種類が{@code char}に収まらない。値段がブロックごとにばらばらな世界でも
-     *                               数千種に留まるので、ここへ来るなら移動生成の側がおかしい
+     * @throws IllegalStateException if the move kinds don't fit in a {@code char}. Even in a world where prices vary block by block
+     *                               they stay at a few thousand kinds, so getting here means move generation is broken
      */
     synchronized void intern(int[] offsets, float[] costs, int count, char[] ids) {
         View current = view;
@@ -71,7 +71,7 @@ final class MoveTable {
             int id = index.get(key);
             if (id < 0) {
                 if (size == CAPACITY) {
-                    throw new IllegalStateException("移動の種類が" + CAPACITY + "を超えた");
+                    throw new IllegalStateException("Move kinds exceeded " + CAPACITY + " entries");
                 }
                 if (size == dx.length) {
                     int grown = Math.min(CAPACITY, size * 2);
@@ -90,7 +90,7 @@ final class MoveTable {
             }
             ids[i] = (char) id;
         }
-        // 読み手は番号を公開してからしか引かないので、配列を使い回したまま差し替えてよい
+        // Readers only look up numbers after they are published, so the array can be swapped while still being reused
         view = new View(dx, dy, dz, cost, minCost);
     }
 }

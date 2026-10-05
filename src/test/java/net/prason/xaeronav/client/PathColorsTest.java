@@ -11,7 +11,7 @@ import net.prason.xaeronav.pathfinding.astar.MovementType;
 import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
-/** 色以外の識別（A11Y-01）の分類が、既存の色分け優先順位（危険→作業→移動）と一致すること。 */
+/** The classification for non-color identification (A11Y-01) matches the existing color priority (danger → work → movement). */
 class PathColorsTest {
 
     private static PathStep step(MovementType movement, PathRisk risk, List<BlockPos> digCells,
@@ -27,7 +27,7 @@ class PathColorsTest {
             }
             assertEquals(PathColors.Kind.DANGER,
                     PathColors.kindFor(step(MovementType.TRAVERSE, risk, List.of(), null)),
-                    risk + "はDANGERであるべき");
+                    risk + " should be DANGER");
         }
     }
 
@@ -54,7 +54,7 @@ class PathColorsTest {
 
     @Test
     void riskOutranksWorkJustLikeForStepDoes() {
-        // digging()もbridging()も立っているが、riskが優先されるはず（forStepと同じ優先順位）
+        // Both digging() and bridging() are set, but risk should take priority (the same priority as forStep)
         PathStep dangerousDig = step(MovementType.TRAVERSE, PathRisk.LAVA_ADJACENT,
                 List.of(BlockPos.ZERO), BlockPos.ZERO);
         assertEquals(PathColors.Kind.DANGER, PathColors.kindFor(dangerousDig));

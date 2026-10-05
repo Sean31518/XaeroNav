@@ -5,24 +5,24 @@ import net.prason.xaeronav.XaeroNav;
 import net.prason.xaeronav.client.ClientCompat;
 
 /**
- * 「mixinは当たっているのに、地図へ実際には描かれていない」を見つける。
+ * Detects "the mixin applied, but nothing is actually drawn on the map".
  *
- * <p>{@link XaeroHooks}が見るのは注入先のクラスに目印が付いたかどうかだけで、注入は成功したが
- * Xaero側の描画の作りが変わって何も出なくなった、という壊れ方は素通りする。ユーザーからは
- * どちらも「地図に線が出ない」としか見えない。
+ * <p>{@link XaeroHooks} only checks whether the injection target class got a marker, so a failure where the injection
+ * succeeded but Xaero's rendering changed and nothing shows up slips through. To the user,
+ * both just look like "no line on the map".
  *
- * <p>判定は世界地図の画面が開いている間だけに限る。その間はこちらの注入点（{@code GuiMap#render}）が
- * 毎フレーム必ず通るので、通らないなら壊れていると断定できる。ミニマップ側は
- * ユーザーが表示を切れるため、「描かれない」ことが故障を意味しない。
+ * <p>The check is limited to while the world map screen is open. During that time our injection point ({@code GuiMap#render})
+ * is always passed every frame, so if it isn't, it's definitely broken. On the minimap side,
+ * the user can turn off the display, so "not drawn" doesn't mean a failure.
  */
 public final class XaeroHookHealth {
 
-    /** Xaeroの世界地図の画面。クラスを参照するとXaero未導入の環境でこのクラスごと読めなくなる。 */
+    /** Xaero's world map screen. Referencing the class would make this whole class unloadable without Xaero installed. */
     private static final String WORLD_MAP_SCREEN = "xaero.map.gui.GuiMap";
 
     /**
-     * 世界地図を開いてからこれだけのtickの間に注入点を1度も通らなければ壊れているとみなす。
-     * 画面を開いた最初の数フレームは地形の読み込みで描画が回らないことがあるので、少し待つ。
+     * If the injection point isn't passed even once within this many ticks of opening the world map, it's considered broken.
+     * For the first few frames after opening the screen, rendering may not run while terrain loads, so wait a little.
      */
     private static final int GRACE_TICKS = 40;
 
@@ -32,7 +32,7 @@ public final class XaeroHookHealth {
     private XaeroHookHealth() {
     }
 
-    /** 地図側の注入点から呼ばれる。ここへ到達している＝mixinが実際に動いている。 */
+    /** Called from the map-side injection point. Reaching here = the mixin is actually running. */
     public static void hookRan() {
         ticksWithMapOpen = 0;
         renderBroken = false;
@@ -49,12 +49,12 @@ public final class XaeroHookHealth {
         }
         if (++ticksWithMapOpen > GRACE_TICKS) {
             renderBroken = true;
-            XaeroNav.LOGGER.warn("XaeroNav: 世界地図のmixinは当たっているが、描画の注入点を一度も通っていない。"
-                    + "Xaeroの版が対応範囲の外にある可能性がある");
+            XaeroNav.LOGGER.warn("XaeroNav: the world map mixin applied, but the render injection point was never reached. "
+                    + "The Xaero version may be outside the supported range");
         }
     }
 
-    /** 世界地図への描き込みが届いていないと判断した状態。 */
+    /** The state where drawing onto the world map is judged not to be getting through. */
     public static boolean worldMapRenderBroken() {
         return renderBroken;
     }

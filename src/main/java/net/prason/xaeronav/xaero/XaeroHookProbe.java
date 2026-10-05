@@ -5,10 +5,10 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 
 /**
- * runtime CIで、Xaero向けmixinの注入点が「付いた」だけでなく実際に呼ばれたことを数える。
+ * In runtime CI, counts that the Xaero mixin injection points were not just "attached" but actually called.
  *
- * <p>通常起動ではsystem propertyが無いので、各注入点で行うのはboolean判定1回だけ。CI driver側から
- * countを増やすAPIは持たず、変換後のXaero対象メソッドを通ったときだけ記録される。
+ * <p>In normal launches the system property is absent, so each injection point only does a single boolean check. There's no
+ * API for the CI driver to increment the count; it's recorded only when the transformed Xaero target method is actually run.
  */
 public final class XaeroHookProbe {
 

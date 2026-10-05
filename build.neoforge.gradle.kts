@@ -9,12 +9,12 @@ fun dep(key: String) = stonecutter.properties.get<String>("deps.$key")
 
 val minecraftVersion = dep("minecraft")
 
-// xaeronav.common.gradle.ktsのtoolchain分岐と同じ境界線
+// Same boundary as the toolchain branch in xaeronav.common.gradle.kts
 val mixinCompatibilityLevel = mixinCompatibilityLevelFor(minecraftVersion)
 val packFormat = packFormatFor(minecraftVersion)
 
-// MC版の異なるXaero jarを同じmodsへ混在させない。1.21.1だけは最初のノードとして使ってきたrun/直下
-// （ワールド・設定・Xaeroの地図データがある）をそのまま使う
+// Don't mix Xaero jars for different MC versions in the same mods folder. Only 1.21.1 keeps using run/ itself,
+// which it has used since it was the first node (it holds the world, the config, and Xaero's map data)
 val runDir = rootProject.layout.projectDirectory.dir(
     if (stonecutter.current.project == "1.21.1-neoforge") "run" else "run/${stonecutter.current.project}")
 
@@ -27,74 +27,74 @@ neoForge {
         }
     }
 
-    // 単体テストからMinecraftの素の値型（BlockPos・Vec3・Mth）を使えるようにする。
-    // これが無いとtestCompileClasspathにMinecraftが載らず、経路探索コアのテストは
-    // 1行も書けない（既存テストがHeuristic等のMinecraft非依存クラスに限られていたのはこのため）。
-    // なお、ここで載るのはクラスパスだけで、Blocks/BuiltInRegistriesに触るにはBootstrapが要る。
-    // テストはレジストリを起動しなくても動く範囲に留めること。
+    // Lets unit tests use Minecraft's plain value types (BlockPos, Vec3, Mth).
+    // Without this, Minecraft isn't on testCompileClasspath and not a single line of pathfinding-core test
+    // can be written (which is why the existing tests were limited to Minecraft-independent classes like Heuristic).
+    // Note that this only adds the classpath; touching Blocks/BuiltInRegistries requires Bootstrap.
+    // Keep tests within what runs without starting the registries.
     addModdingDependenciesTo(sourceSets["test"])
 
-    // クライアント専用MOD（@Mod(dist = Dist.CLIENT)）なので、専用サーバーの実行設定は用意しない
+    // Client-only mod (@Mod(dist = Dist.CLIENT)), so no dedicated-server run config is provided
     runs {
         create("client") {
             client()
             gameDirectory = runDir
-            // `-Pxaeronav.quickPlay=<ワールド名>`でタイトル画面を飛ばして既存のワールドへ入る（手元の確認用）
+            // `-Pxaeronav.quickPlay=<world name>` skips the title screen and enters an existing world (for local checks)
             providers.gradleProperty("xaeronav.quickPlay").orNull?.let { programArguments.addAll("--quickPlaySingleplayer", it) }
-            // 既定のINFOだと生成されるlog4j設定のRootがINFOになり、配布版のNeoForgeなら debug.log に出る
-            // XaeroNavのDEBUGが開発クライアントではどこにも出ない。latest.logはINFOのままなので配布版と同じ出方になる
+            // With the default INFO, the generated log4j config's Root is INFO, so XaeroNav's DEBUG, which the release NeoForge writes to debug.log,
+            // shows up nowhere in the dev client. latest.log stays at INFO, so output matches the release build
             logLevel = org.slf4j.event.Level.DEBUG
-            // 既定のヒープは実機のメモリの1/4で、開発機では6GBになる。ランチャー既定の2GBで起きることは
-            // `-Pxaeronav.clientHeap=2G` で上限を絞らないと再現しない
+            // The default heap is 1/4 of physical memory, which is 6GB on the dev machine. Issues that occur with the launcher's default 2GB
+            // don't reproduce unless you cap it with `-Pxaeronav.clientHeap=2G`
             providers.gradleProperty("xaeronav.clientHeap").orNull?.let { jvmArgument("-Xmx$it") }
-            // 公式ランチャーはG1の調整フラグを付けて起動するので、GCが絡む重さはそれを渡さないと本番と同じ条件で測れない
+            // The official launcher starts with G1 tuning flags, so GC-related slowness can't be measured under production conditions without passing them
             providers.gradleProperty("xaeronav.clientJvmArgs").orNull?.split(" ")?.filter { it.isNotBlank() }
                 ?.forEach { jvmArgument(it) }
             providers.gradleProperty("xaeronav.jfr").orNull?.let {
                 jvmArgument("-XX:StartFlightRecording=settings=$it,filename=${rootProject.projectDir}/run/xaeronav.jfr,dumponexit=true")
             }
 
-            // ModDevGradleが生成するIDE実行構成はモジュール束縛を持たない。単一ローダーなら
-            // 「プロジェクト全体のクラスパス」＝そのローダーぶんだけで済むが、Stonecutterで
-            // fabricノードが並ぶとIntelliJが全モジュールのクラスパスを渡し、NeoForgeとFabricの
-            // Minecraftが同居してFMLが起動前に落ちる（Found multiple copies of MinecraftServer.class）。
-            // IDEからはneoforgeノードの runClient タスクで起動する。
+            // The IDE run configs ModDevGradle generates have no module binding. With a single loader,
+            // "the whole project's classpath" is just that loader's, but once Stonecutter adds
+            // fabric nodes, IntelliJ passes every module's classpath, NeoForge's and Fabric's
+            // Minecraft end up side by side, and FML crashes before startup (Found multiple copies of MinecraftServer.class).
+            // From the IDE, launch via the neoforge node's runClient task.
             disableIdeRun()
         }
     }
 }
 
-// artifactIdは "-forge-" ではなく "-neoforge-"。chocolateminecraft.comのmavenには両方存在し、
-// "-forge-"版はNeoForge実行時に「Forge用/古いNeoForge用のため読み込めません」で無視される。
+// The artifactId is "-neoforge-", not "-forge-". chocolateminecraft.com's maven has both, and
+// the "-forge-" build is ignored at NeoForge runtime as "for Forge/old NeoForge, cannot be loaded".
 val xaeroModules = xaeroModuleCoordinates(
     "neoforge", minecraftVersion, dep("xaerolib"), dep("xaero_worldmap"), dep("xaero_minimap"))
 
-// Xaeroを開発実行（runClient）へ載せるか。`./gradlew runClient -Pwith_xaero=false` で外せる。
-// このMODはXaero未導入でもワールド内描画だけで動く設計なので、その前提を実際に確かめる手段を残す
-// （xaeronav-xaero.mixins.jsonはrequired=falseなので、Xaeroが無ければ地図連携だけが黙って無効になる）。
+// Whether to put Xaero into the dev run (runClient). `./gradlew runClient -Pwith_xaero=false` removes it.
+// This mod is designed to work with in-world rendering alone even without Xaero, so keep a way to actually verify that
+// (xaeronav-xaero.mixins.json is required=false, so without Xaero only the map integration is silently disabled).
 val withXaero = withXaeroProperty()
 
-// XaeroはMODとして読み込ませる必要があるので、実行時クラスパスではなくrun/modsへ置く。
-// additionalRuntimeClasspathに載せるとクラスパスには現れるがFMLがMODとして検出せず、
-// Xaeroのクラスだけが「Minecraftのクラスを解決できないレイヤー」に置かれる。すると
-// ModList上は未導入なのにClass.forNameは成功するという食い違いが生まれ、触った瞬間に
-// NoClassDefFoundErrorでゲームごと落ちる。
+// Xaero must be loaded as a mod, so it goes into run/mods rather than the runtime classpath.
+// Putting it on additionalRuntimeClasspath makes it appear on the classpath, but FML doesn't detect it as a mod,
+// and only Xaero's classes land in "a layer that can't resolve Minecraft's classes". That creates
+// a mismatch where ModList says it isn't installed yet Class.forName succeeds, and the moment it's touched
+// the whole game crashes with NoClassDefFoundError.
 val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
 
 dependencies {
     annotationProcessor("org.spongepowered:mixin:0.8.7:processor")
 
-    // Xaeroはmods.toml上optionalな連携先。コンパイルにだけ必要で、配布物にも実行時依存にも含めない。
-    // implementationにするとruntimeClasspathへ載り、「Xaeroが無くても動く」が一度も検証されないまま
-    // 開発が進んでしまう。
+    // Xaero is an optional integration in mods.toml. Needed only for compilation; not included in the release or as a runtime dependency.
+    // Using implementation would put it on runtimeClasspath, and development would carry on without "works without Xaero"
+    // ever being verified.
     xaeroModules.forEach { compileOnly(it) }
     if (withXaero) {
         xaeroModules.forEach { xaeroRuntimeMods(it) }
     }
 }
 
-// Syncではなくコピーにして、手で入れた他のMODを消さない。バージョンを上げたときに古いjarが
-// 残るが、mods以下を消して入れ直せば済む。
+// Copy rather than Sync so manually added mods aren't deleted. Bumping the version leaves the old jar
+// behind, but clearing mods/ and reinstalling takes care of it.
 val installXaeroMods = tasks.register<Copy>("installXaeroMods") {
     from(xaeroRuntimeMods)
     into(runDir.dir("mods"))
@@ -104,7 +104,7 @@ tasks.matching { it.name == "runClient" }.configureEach {
     dependsOn(installXaeroMods, "prepareClientRun")
 }
 
-// CIの起動スモークテスト（mc-runtime-test）へ渡す一式。配布jarとXaeroを1箇所へ集める
+// The bundle passed to CI's startup smoke test (mc-runtime-test). Collects the release jar and Xaero in one place
 val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     from(xaeroRuntimeMods)
     from(tasks.named("jar"))
@@ -117,7 +117,7 @@ tasks.named<ProcessResources>("processResources").configure {
         "neoforge_loader_version_range" to dep("neoforge_loader_range"),
         "neoforge_version_range" to dep("neoforge_range"),
     ) + if (packFormat >= 65) {
-        // NeoForgeもForgeと同じく、MODのpack.mcmetaをデータパックとしても検証する（packFormatFields参照）
+        // Like Forge, NeoForge also validates the mod's pack.mcmeta as a data pack (see packFormatFields)
         mapOf("pack_format_fields" to packFormatFields(packFormat, dataPackFormatFor(minecraftVersion)))
     } else {
         emptyMap()
@@ -125,20 +125,20 @@ tasks.named<ProcessResources>("processResources").configure {
 
     inputs.properties(replaceProperties)
 
-    // Fabric/Forge側のMOD定義はNeoForgeのjarには要らない
+    // The Fabric/Forge mod definitions aren't needed in the NeoForge jar
     exclude("fabric.mod.json")
     exclude("xaeronav.accesswidener")
     exclude("META-INF/mods.toml")
-    // Forge専用のAT（NavRenderTypes.javaのコメント参照）。NeoForgeは元々RenderStateShardの
-    // 定数群を開放済みなので不要
+    // Forge-only AT (see the comment in NavRenderTypes.java). NeoForge already opens up RenderStateShard's
+    // constants, so it isn't needed
     exclude("META-INF/accesstransformer.cfg")
 
     filesMatching("META-INF/neoforge.mods.toml") {
         expand(replaceProperties)
     }
-    // NeoForge 20.4のFMLはMOD定義をMETA-INF/mods.tomlからしか読まない（neoforge.mods.tomlは20.5から）。
-    // 名前が違うとXaeroNavが丸ごと読み込まれない。
-    // renameはGradleの入力に数えられないので、明示しないとUP-TO-DATE扱いで古い出力が残る
+    // NeoForge 20.4's FML reads the mod definition only from META-INF/mods.toml (neoforge.mods.toml is from 20.5 on).
+    // With the wrong name, XaeroNav isn't loaded at all.
+    // rename isn't counted as a Gradle input, so without declaring it the task is UP-TO-DATE and stale output remains
     if (stonecutter.eval(minecraftVersion, "<1.20.5")) {
         rename("neoforge.mods.toml", "mods.toml")
         inputs.property("modsTomlName", "mods.toml")

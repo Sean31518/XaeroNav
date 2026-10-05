@@ -10,16 +10,16 @@ import net.minecraft.world.phys.Vec3;
 import net.prason.xaeronav.pathfinding.cost.FlightCosts;
 
 /**
- * 粗い空中地図（{@link CoarseAirMap}）の上で、目的地まで飛ぶ残りコストを全ての（チャンク, 帯）について
- * 求めた場。空中経路の探索の見積もりに使う。
+ * A field of the remaining cost to fly to the goal, computed for every (chunk, band) on the coarse aerial map
+ * ({@link CoarseAirMap}). Used for the aerial path search's estimates.
  *
- * <p>直線の見積もりだけで読み込み済みの範囲の縁（{@link FlightHorizon}）から出口を選ぶと、縁の先が
- * 行き止まりでも直線で目的地に近い側から出る。次の継ぎ足しでそれが分かって引き返す——ネザーで
- * 目的地から最大200ブロック遠ざかってから戻る経路が出ていた。歩行が層1の残りコストの場を窓の外の
- * 推定に使っているのと同じ直し方で、こちらは地図の上の回り道ごと見積もる。
+ * <p>Choosing an exit from the edge of the loaded range ({@link FlightHorizon}) with straight-line estimates alone exits on
+ * the side closest to the goal in a straight line even if it's a dead end beyond the edge. The next extension discovers that and turns back; in the Nether
+ * this produced paths that went up to 200 blocks away from the goal before coming back. It's the same fix as walking using layer 1's
+ * remaining-cost field to estimate outside the window; here the estimate includes the detours on the map.
  *
- * <p>辺のコストは{@link CoarseFlightRouter}と同じ（同じ地図で同じ経路を選ぶ）。向きのある辺なので、
- * 目的地から逆向きに解くときは「隣から自分へ入る」コストで緩和する。
+ * <p>Edge costs are the same as {@link CoarseFlightRouter} (same map, same route choice). Edges are directed, so
+ * when solving backward from the goal, relaxation uses the cost of "entering this cell from the neighbor".
  */
 public final class CoarseFlightField {
 
@@ -27,7 +27,7 @@ public final class CoarseFlightField {
     private static final int BAND_LINK_GAP_BLOCKS = 8;
     private static final double UNKNOWN_MULTIPLIER = 1.3;
 
-    /** チャンクを場から外すかどうか。 */
+    /** Whether to exclude a chunk from the field. */
     @FunctionalInterface
     public interface ChunkFilter {
         boolean test(int chunkX, int chunkZ);
@@ -45,7 +45,7 @@ public final class CoarseFlightField {
         this.cost = cost;
     }
 
-    /** {@code goal}への場。目的地が地図の外か壁の中なら{@code null}。 */
+    /** The field toward {@code goal}. {@code null} if the goal is outside the map or inside a wall. */
     public static CoarseFlightField toward(CoarseAirMap map, BlockPos goal, boolean rockets) {
         int goalX = goal.getX() >> 4;
         int goalZ = goal.getZ() >> 4;
@@ -58,8 +58,8 @@ public final class CoarseFlightField {
     }
 
     /**
-     * 同じ地図の上で、{@code excluded}のチャンクを一切通らずに{@code seeds}のどれかへ着く残りコストの場。
-     * 各点から先の残りは{@code seedCost}で与える。地図の外・壁の中・外したチャンクの点は使わない。
+     * On the same map, a field of the remaining cost to reach any of {@code seeds} without passing through any {@code excluded} chunk.
+     * The remainder beyond each seed is given by {@code seedCost}. Points outside the map, inside walls, or in excluded chunks aren't used.
      */
     public CoarseFlightField avoiding(List<Vec3> seeds, ToDoubleFunction<Vec3> seedCost, ChunkFilter excluded) {
         int[] states = new int[seeds.size()];
@@ -137,8 +137,8 @@ public final class CoarseFlightField {
     }
 
     /**
-     * その位置から目的地までの残りコスト（tick）。地図の外・地図の上で目的地へ繋がらない所は
-     * {@link Double#NaN}（分からない）——粗い地図の「繋がらない」はチャンク解像度の推定でしかない。
+     * Remaining cost (ticks) from that position to the goal. Outside the map, or where the map doesn't connect to the goal,
+     * it's {@link Double#NaN} (unknown); the coarse map's "doesn't connect" is only a chunk-resolution estimate.
      */
     public double estimate(double x, double y, double z) {
         int chunkX = (int) Math.floor(x) >> 4;
@@ -150,7 +150,7 @@ public final class CoarseFlightField {
         return value < Double.POSITIVE_INFINITY ? value : Double.NaN;
     }
 
-    /** 帯{@code [bottom, top]}から帯{@code [toBottom, toTop]}へ移るのに要る昇降（上が正）。 */
+    /** Climb or descent needed to move from band {@code [bottom, top]} to band {@code [toBottom, toTop]} (up is positive). */
     private static int gap(int bottom, int top, int toBottom, int toTop) {
         if (toBottom > top) {
             return toBottom - top;

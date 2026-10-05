@@ -6,9 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link ActionCosts}の定数同士が満たすべき大小関係の検証。
- * 数値そのものはバニラの実測値からの直接計算なので固定するテストは書かないが、
- * 「歩くより走る方が安い」のような、崩れると経路の質が静かに悪化する関係はここで縛る。
+ * Checks the ordering relations that {@link ActionCosts} constants must satisfy.
+ * The values themselves are computed directly from vanilla measurements, so no test pins them,
+ * but relations like "sprinting is cheaper than walking", whose breakage silently degrades path quality, are enforced here.
  */
 class ActionCostsTest {
 
@@ -35,9 +35,9 @@ class ActionCostsTest {
     }
 
     /**
-     * 斜め昇りは、水平1マス＋垂直1マスをカーディナル2手（登り+直進）に分解するより安くなければ
-     * 意味がない。逆転すると、探索が斜め移動を一度も選ばなくなる（{@code MIN_IMPROVEMENT}未満の
-     * 差ではなく明確に安いことを求める）。
+     * A diagonal ascent is pointless unless it's cheaper than splitting 1 horizontal + 1 vertical block into two cardinal
+     * moves (climb + straight). If reversed, the search never picks a diagonal move (requires it to be clearly cheaper,
+     * not by less than {@code MIN_IMPROVEMENT}).
      */
     @Test
     void diagonalAscendIsCheaperThanTwoCardinalHops() {
@@ -45,7 +45,7 @@ class ActionCostsTest {
                 < ActionCosts.ASCEND_ONE_BLOCK + ActionCosts.SPRINT_ONE_BLOCK);
     }
 
-    /** {@link #diagonalAscendIsCheaperThanTwoCardinalHops}の降り側。 */
+    /** The descending counterpart of {@link #diagonalAscendIsCheaperThanTwoCardinalHops}. */
     @Test
     void diagonalDescendIsCheaperThanTwoCardinalHops() {
         assertTrue(ActionCosts.DIAGONAL_DESCEND_ONE_BLOCK
@@ -53,15 +53,15 @@ class ActionCostsTest {
     }
 
     /**
-     * 斜めに1段登るのは、同じ距離を平らに斜め移動するより高くつく。ここが等しくなると
-     * 「ただで高さが稼げる」ことになり、{@code Heuristic}の上昇成分が丸ごと0になって
-     * 山の上を目指す経路で探索が不必要に広がる（カーディナル側は既にこの関係を満たしている）。
+     * Climbing one step diagonally costs more than the same distance moving diagonally on flat ground. If they become equal,
+     * height is "free", {@code Heuristic}'s ascent term becomes 0 entirely, and
+     * the search spreads unnecessarily on routes heading up mountains (the cardinal side already satisfies this relation).
      */
     @Test
     void climbingDiagonallyCostsMoreThanMovingDiagonallyOnFlatGround() {
         double diagonalOnFlat = ActionCosts.SPRINT_ONE_BLOCK * ActionCosts.DIAGONAL_DISTANCE;
         assertTrue(ActionCosts.DIAGONAL_ASCEND_ONE_BLOCK > diagonalOnFlat,
-                "斜めの登坂ペナルティが消えている: " + ActionCosts.DIAGONAL_ASCEND_ONE_BLOCK + " vs " + diagonalOnFlat);
+                "diagonal ascent penalty has vanished: " + ActionCosts.DIAGONAL_ASCEND_ONE_BLOCK + " vs " + diagonalOnFlat);
     }
 
     @Test
@@ -69,14 +69,14 @@ class ActionCostsTest {
         double previous = 0.0;
         for (int blocks = 1; blocks <= ActionCosts.SAFE_FALL_BLOCKS + 5; blocks++) {
             double cost = ActionCosts.fallCost(blocks);
-            assertTrue(cost > previous, blocks + "マスの落下は" + (blocks - 1) + "マスより高くつくはず");
+            assertTrue(cost > previous, "a " + blocks + "-block fall should cost more than " + (blocks - 1) + " blocks");
             previous = cost;
         }
     }
 
     /**
-     * 1マスの隙間跳びは、同じ2マスを走るより高くつく（滞空中は着地までコストを打ち切れない）。
-     * これが逆転すると、平地でも常に跳ぶ方が安くなり、無意味なジャンプだらけの経路になる。
+     * A 1-block gap jump costs more than sprinting the same 2 blocks (mid-air, the cost can't be cut short before landing).
+     * If this reverses, jumping is always cheaper even on flat ground, giving paths full of pointless jumps.
      */
     @Test
     void jumpingAcrossAGapCostsMoreThanSprintingTheSameDistance() {
@@ -84,27 +84,27 @@ class ActionCostsTest {
     }
 
     /**
-     * 跳ぶより歩く方が安い、をどの隙間幅でも保つ。ここが逆転すると、平地に迂回路があっても
-     * 跳ぶ経路が選ばれ、着地を外せば落ちる案内を勧めることになる。
+     * Keep walking cheaper than jumping at every gap width. If this reverses, a jumping path is chosen even when
+     * there is a detour on flat ground, recommending guidance that falls if the landing is missed.
      */
     @Test
     void jumpingAnyGapCostsMoreThanSprintingAroundIt() {
         for (int gap = 1; gap <= 3; gap++) {
-            // 着地点は隙間の1マス先。同じ距離を平地で走った場合と比べる
+            // The landing spot is 1 block past the gap. Compare with sprinting the same distance on flat ground
             double sprintSameDistance = (gap + 1) * ActionCosts.SPRINT_ONE_BLOCK;
             assertTrue(ActionCosts.jumpAcrossGap(gap) > sprintSameDistance,
-                    gap + "マスの隙間跳びが、同じ距離を走るより安くなっている");
+                    "a " + gap + "-block gap jump is cheaper than sprinting the same distance");
         }
     }
 
     @Test
     void widerGapsCostMore() {
         assertEquals(ActionCosts.JUMP_ACROSS_GAP, ActionCosts.jumpAcrossGap(1),
-                "1マスの隙間は従来どおり滞空時間そのもの");
+                "a 1-block gap is the air time itself, as before");
         double previous = ActionCosts.jumpAcrossGap(1);
         for (int gap = 2; gap <= 3; gap++) {
             double cost = ActionCosts.jumpAcrossGap(gap);
-            assertTrue(cost > previous, gap + "マスの隙間は" + (gap - 1) + "マスより高くつくはず");
+            assertTrue(cost > previous, "a " + gap + "-block gap should cost more than " + (gap - 1) + " blocks");
             previous = cost;
         }
     }
@@ -115,9 +115,9 @@ class ActionCostsTest {
     }
 
     /**
-     * 落下ダメージの許容量を緩める探し直しが成立する条件。許せる落差が伸びたら下降の下限は
-     * <b>必ず下がる</b>——ここが単調でないと、緩めた探索へ元の下限を渡し続けたときに
-     * ヒューリスティックが実コストを上回る（＝非許容）ことに気付けない。
+     * Condition for the retry that relaxes fall damage tolerance to hold. When the allowed drop grows, the descent lower bound
+     * <b>must go down</b>. If this isn't monotonic, passing the old lower bound to the relaxed search would make
+     * the heuristic exceed the actual cost (= inadmissible) without anyone noticing.
      */
     @Test
     void descentBoundNeverRisesAsTheAllowedDropGrows() {
@@ -125,51 +125,51 @@ class ActionCostsTest {
         for (int maxDrop = 1; maxDrop <= 40; maxDrop++) {
             double bound = ActionCosts.descentBoundForMaxDrop(maxDrop);
             assertTrue(bound <= previous + 1e-12,
-                    maxDrop + "マスまで落ちられるのに下限が上がった: " + previous + " -> " + bound);
+                    "lower bound went up even though falls up to " + maxDrop + " blocks are allowed: " + previous + " -> " + bound);
             previous = bound;
         }
     }
 
-    /** 下限は名前のとおり下限であること。実際の1マスあたりのコストを上回ってはいけない。 */
+    /** The lower bound must be, as named, a lower bound. It must not exceed the actual cost per block. */
     @Test
     void descentBoundStaysBelowTheRealPerBlockCost() {
         for (int maxDrop = 1; maxDrop <= 40; maxDrop++) {
             double bound = ActionCosts.descentBoundForMaxDrop(maxDrop);
             for (int drop = 1; drop <= maxDrop; drop++) {
                 assertTrue(bound <= ActionCosts.fallCost(drop) / drop + 1e-12,
-                        "落差" + drop + "マスの実コストを下限が上回っている（maxDrop=" + maxDrop + "）");
+                        "lower bound exceeds the actual cost of a " + drop + "-block drop (maxDrop=" + maxDrop + ")");
             }
         }
     }
 
     /**
-     * 足場を外したときの危険料は、落差に対して単調に増えて致死落差で頭打ちになること。
-     * <b>両端が従来の二値と一致する</b>ことが、この傾斜を入れても既存の振る舞いが動かない根拠。
+     * The risk penalty for missing a foothold rises monotonically with drop height and caps at the fatal drop.
+     * <b>Both ends matching the previous binary values</b> is why adding this slope doesn't change existing behavior.
      */
     @Test
     void dropRiskGrowsWithTheDropAndStopsAtTheFatalOne() {
         int fatal = 23;
         assertEquals(0.0, ActionCosts.dropRiskPenalty(0, fatal));
         assertEquals(0.0, ActionCosts.dropRiskPenalty(ActionCosts.SAFE_FALL_BLOCKS, fatal),
-                "安全に降りられる高さに危険料は付かない");
+                "no risk penalty at heights you can descend safely");
         assertEquals(ActionCosts.VOID_BRIDGE_PENALTY_TICKS, ActionCosts.dropRiskPenalty(fatal, fatal),
-                "致死落差では奈落と同額");
+                "a fatal drop costs the same as the void");
         assertEquals(ActionCosts.VOID_BRIDGE_PENALTY_TICKS,
-                ActionCosts.dropRiskPenalty(fatal + 100, fatal), "頭打ちを超えて増えない");
+                ActionCosts.dropRiskPenalty(fatal + 100, fatal), "does not increase past the cap");
 
         double previous = -1;
         for (int drop = 0; drop <= fatal + 5; drop++) {
             double penalty = ActionCosts.dropRiskPenalty(drop, fatal);
             assertTrue(penalty >= previous - 1e-12,
-                    "落差" + drop + "マスで危険料が下がった: " + previous + " -> " + penalty);
+                    "risk penalty dropped at a " + drop + "-block drop: " + previous + " -> " + penalty);
             assertTrue(penalty <= ActionCosts.VOID_BRIDGE_PENALTY_TICKS + 1e-12);
             previous = penalty;
         }
     }
 
     /**
-     * 掘削の手間は設置より軽いこと。「掘るのと積むのが同じくらいの手数に見える場面では掘る方を
-     * 選ばせたい」という{@link ActionCosts#PLACE_BLOCK_OVERHEAD_TICKS}の意図がこの順序。
+     * Digging costs less effort than placing. This ordering is the intent of {@link ActionCosts#PLACE_BLOCK_OVERHEAD_TICKS}:
+     * "when digging and stacking look like about the same number of moves, prefer digging".
      */
     @Test
     void diggingOverheadStaysLighterThanPlacing() {

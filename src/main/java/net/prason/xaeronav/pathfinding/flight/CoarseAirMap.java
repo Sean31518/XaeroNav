@@ -4,36 +4,37 @@ import net.prason.xaeronav.pathfinding.coarse.CoarseMap;
 import net.prason.xaeronav.util.MathSupport;
 
 /**
- * 空中の長距離ルート用の粗い地形。1セル＝1チャンクで、そのセルで<b>飛べる高度帯</b>だけを持つ。
+ * Coarse terrain for long-distance air routes. One cell = one chunk, holding only the <b>flyable altitude bands</b>
+ * of that cell.
  *
- * <p>{@link CoarseMap}（歩行の層1が使う、チャンクごと最大4層の床）から導く。床そのものではなく
- * 床と床の<b>あいだ</b>が飛行に使える空間なので、ここで持ち替える。
+ * <p>Derived from {@link CoarseMap} (up to 4 floor layers per chunk, used by walking layer 1). The space usable for
+ * flight is not the floors themselves but the space <b>between</b> floors, so we convert it here.
  *
- * <p><b>この近似が成り立つ根拠</b>: Xaeroの洞窟レイヤーは{@code caveStart}から下向きに走査して
- * 最初の不透明ブロックを記録する。開けた空間の上に岩の天井があれば、その天井自身が別のレイヤーの
- * 床として記録される——つまり高さ順に並んだ床は、実際に開いた空間を挟んでいる。
+ * <p><b>Why this approximation holds</b>: Xaero's cave layers scan downward from {@code caveStart} and record the
+ * first opaque block. If there is a rock ceiling above an open space, that ceiling itself is recorded as the floor of
+ * another layer, so floors sorted by height really do enclose open space.
  *
- * <p><b>抜けられる保証は無い</b>。チャンク解像度なので、帯の中に幅1チャンク未満の壁があっても
- * 見えない。歩行の層1とまったく同じ契約で、確実な区間は読み込み済みチャンクを見る{@link AirGrid}が
- * 受け持つ。
+ * <p><b>There is no guarantee you can get through.</b> It is chunk resolution, so a wall thinner than one chunk inside
+ * a band is invisible. Exactly the same contract as walking layer 1; the reliable stretch is handled by
+ * {@link AirGrid}, which looks at loaded chunks.
  *
- * <p>生成後は不変。メインスレッドで組み立ててワーカースレッドから読む。
+ * <p>Immutable after construction. Built on the main thread and read from worker threads.
  */
 public final class CoarseAirMap {
 
-    /** 1セルが持てる高度帯の上限。床がN層あれば帯はN個（最上段は次元の天井まで）。 */
+    /** Maximum number of altitude bands per cell. With N floor layers there are N bands (the top one reaches the dimension's ceiling). */
     public static final int MAX_BANDS = CoarseMap.MAX_FLOORS;
 
     /**
-     * 床のすぐ上は帯に含めない余白（ブロック）。床の高さはチャンク内の平均なので、
-     * 実際には数ブロック高い出っ張りが普通にある。
+     * Margin (blocks) just above a floor that is excluded from the band. Floor height is the average within the
+     * chunk, so bumps a few blocks higher are common in practice.
      */
     private static final int FLOOR_MARGIN = 4;
 
-    /** 天井のすぐ下も同じ理由で余白を取る。 */
+    /** A margin just below the ceiling too, for the same reason. */
     private static final int CEILING_MARGIN = 4;
 
-    /** これより薄い帯は捨てる（ブロック）。エリトラが余裕を持って通れる厚みの下限。 */
+    /** Bands thinner than this are discarded (blocks). The minimum thickness an elytra can pass with room to spare. */
     private static final int MIN_BAND_THICKNESS = 8;
 
     private final int minChunkX;
@@ -42,12 +43,13 @@ public final class CoarseAirMap {
     private final int chunksZ;
     private final int minY;
     private final int maxY;
-    /** セルごとの帯の数（0〜{@link #MAX_BANDS}）。 */
+    /** Number of bands per cell (0 to {@link #MAX_BANDS}). */
     private final byte[] bandCount;
     /**
-     * 元の{@link CoarseMap}に床があったか。<b>帯が0であることと、データが無いことは別</b>——
-     * 床が天井近くまで詰まっていて飛べる厚みが残らないセルも帯0になる。区別せずに「帯0＝未知＝
-     * 通行可」にすると、実際には塞がっている列を素通りする経路が出る。
+     * Whether the original {@link CoarseMap} had a floor. <b>Zero bands is not the same as no data</b>: a cell whose
+     * floor is packed up near the ceiling with no flyable thickness left also has zero bands. Treating "0 bands =
+     * unknown = passable" without distinguishing them produces routes that pass straight through columns that are
+     * actually blocked.
      */
     private final boolean[] known;
     private final short[] bottom;
@@ -68,12 +70,12 @@ public final class CoarseAirMap {
     }
 
     /**
-     * 床の並びから高度帯を導く。
+     * Derives altitude bands from the sequence of floors.
      *
-     * @param minY 飛べる高さの下限（次元の底＋余白）
-     * @param maxY 飛べる高さの上限。ネザーなら岩盤天井の<b>下</b>にすること——天井は不透明なので
-     *             洞窟レイヤーの床としては記録されず、ここで頭打ちにしないと最上段の帯が
-     *             岩の中まで伸びる
+     * @param minY lower bound of flyable height (the dimension's bottom + margin)
+     * @param maxY upper bound of flyable height. In the Nether, this must be <b>below</b> the bedrock ceiling: the
+     *             ceiling is opaque, so it is not recorded as a cave-layer floor, and without capping here the top
+     *             band extends into the rock
      */
     public static CoarseAirMap from(CoarseMap map, int minY, int maxY) {
         int cells = map.chunksX() * map.chunksZ();
@@ -90,10 +92,10 @@ public final class CoarseAirMap {
                 int floors = map.floorCount(chunkX, chunkZ);
                 known[cell] = floors > 0;
                 int count = 0;
-                // 奈落のセルは床が1枚あるが高さを持たない（CoarseMap.VOID）。歩く側では通行不能でも
-                // 飛ぶ側では上から下まで全部が空なので、次元の全高を1本の帯にする。
-                // heightAtFloorの番兵（UNKNOWN_HEIGHT）をそのまま足してminYへクランプさせても
-                // 同じ値にはなるが、番兵の値に依存した偶然に見えるので明示的に分ける
+                // A void cell has one floor but no height (CoarseMap.VOID). Impassable for walking, but for
+                // flying it is empty from top to bottom, so the full height of the dimension becomes one band.
+                // Adding heightAtFloor's sentinel (UNKNOWN_HEIGHT) as-is and clamping to minY would give
+                // the same value, but that looks like a coincidence relying on the sentinel's value, so we split it out explicitly
                 if (floors == 1 && map.kindAtFloor(chunkX, chunkZ, 0) == CoarseMap.VOID) {
                     bottom[cell * MAX_BANDS] = (short) minY;
                     top[cell * MAX_BANDS] = (short) maxY;
@@ -143,7 +145,7 @@ public final class CoarseAirMap {
         return localX >= 0 && localX < chunksX && localZ >= 0 && localZ < chunksZ;
     }
 
-    /** そのセルの飛べる高度帯の数。 */
+    /** Number of flyable altitude bands in the cell. */
     public int bandCount(int chunkX, int chunkZ) {
         if (!containsChunk(chunkX, chunkZ)) {
             return 0;
@@ -152,23 +154,23 @@ public final class CoarseAirMap {
     }
 
     /**
-     * Xaeroの地図にデータが無いセルか。未訪問なだけで飛べないとは限らないので、範囲全体を1つの
-     * 帯とみなす（歩行の層1が{@code NO_DATA}を通行可にしているのと同じ考え方）。
+     * Whether the cell has no data in Xaero's map. Merely unvisited does not mean unflyable, so the whole range is
+     * treated as one band (the same idea as walking layer 1 treating {@code NO_DATA} as passable).
      */
     public boolean unknown(int chunkX, int chunkZ) {
         return containsChunk(chunkX, chunkZ) && !known[cellIndex(chunkX, chunkZ)];
     }
 
     /**
-     * データはあるのに飛べる帯が1つも無いセルか。床が天井近くまで詰まっている＝<b>壁</b>。
-     * 粗い層が「通行不能」を表現できる唯一の形。
+     * Whether the cell has data but not a single flyable band. Floors packed up near the ceiling = a <b>wall</b>.
+     * The only way the coarse layer can express "impassable".
      */
     public boolean blocked(int chunkX, int chunkZ) {
         return !containsChunk(chunkX, chunkZ)
                 || (known[cellIndex(chunkX, chunkZ)] && bandCount[cellIndex(chunkX, chunkZ)] == 0);
     }
 
-    /** 探索の状態数。未知セルは「範囲全体」1つ、壁は0。 */
+    /** Number of search states. An unknown cell has one ("the whole range"), a wall has 0. */
     public int stateBands(int chunkX, int chunkZ) {
         if (blocked(chunkX, chunkZ)) {
             return 0;
@@ -184,12 +186,12 @@ public final class CoarseAirMap {
         return unknown(chunkX, chunkZ) ? maxY : top[cellIndex(chunkX, chunkZ) * MAX_BANDS + band];
     }
 
-    /** その帯の中で{@code y}に最も近い高さ。帯の中なら{@code y}そのもの。 */
+    /** The height within the band closest to {@code y}. {@code y} itself if it is inside the band. */
     public int clampToBand(int chunkX, int chunkZ, int band, int y) {
         return MathSupport.clamp(y, bandBottom(chunkX, chunkZ, band), bandTop(chunkX, chunkZ, band));
     }
 
-    /** {@code y}を含む帯。無ければ最も近い帯。セルに帯が1つも無ければ0（未知セル扱い）。 */
+    /** The band containing {@code y}, or the nearest band if none does. 0 if the cell has no bands (treated as an unknown cell). */
     public int bandAt(int chunkX, int chunkZ, int y) {
         int count = bandCount(chunkX, chunkZ);
         if (count == 0) {

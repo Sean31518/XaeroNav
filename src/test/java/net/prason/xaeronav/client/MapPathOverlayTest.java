@@ -17,20 +17,21 @@ import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 長距離ルートの点線が、地図上で現在地から切り離されないこと。
+ * The dotted line of a long-distance route must not get detached from the current position on the map.
  *
- * <p>粗いルートは目的地が変わらない限り引き直さないので、中間目標だけを順に結ぶと、進むほど
- * 点線の始点が「ルートを計算した当時の位置」に取り残される。地図上では古いルートが残って
- * いるようにしか見えず、実際に何度も誤診を招いた箇所なので、始点の連続性をここで固定する。
+ * <p>The coarse route is not re-planned unless the destination changes, so connecting only the intermediate targets
+ * in order leaves the start of the dotted line stranded at "where you were when the route was computed" as you
+ * advance. On the map it just looks like a stale route left behind, and it repeatedly led to misdiagnosis, so the
+ * continuity of the start is pinned down here.
  */
 class MapPathOverlayTest {
 
     private static final int Y = 64;
 
-    /** 目印の大きさは画面上のピクセルで決まる。テストは1ブロック＝1ピクセルの縮尺で見る。 */
+    /** Marker size is set in on-screen pixels. Tests use a scale of 1 block = 1 pixel. */
     private static final double PIXELS_PER_BLOCK = 1.0;
 
-    /** 粗いルートの点線（{@link PathColors#COARSE_ROUTE}）だけを拾う。 */
+    /** Picks up only the coarse route's dotted line ({@link PathColors#COARSE_ROUTE}). */
     private static List<BlockPos> coarseDots(MapPathOverlay.Snapshot snapshot) {
         List<BlockPos> dots = new ArrayList<>();
         MapPathOverlay.draw(snapshot, (x1, z1, x2, z2, red, green, blue) -> {
@@ -42,7 +43,7 @@ class MapPathOverlayTest {
         return dots;
     }
 
-    /** 目的地の目印を構成する矩形だけを拾う。 */
+    /** Picks up only the rectangles that make up the destination marker. */
     private static List<int[]> markerRects(MapPathOverlay.Snapshot snapshot) {
         return markerRects(snapshot, PIXELS_PER_BLOCK);
     }
@@ -67,7 +68,7 @@ class MapPathOverlayTest {
         return false;
     }
 
-    /** 目印を構成する矩形が覆うブロックの集合。 */
+    /** The set of blocks covered by the rectangles that make up the marker. */
     private static Set<BlockPos> markerBlocks(MapPathOverlay.Snapshot snapshot) {
         Set<BlockPos> blocks = new HashSet<>();
         for (int[] rect : markerRects(snapshot)) {
@@ -101,7 +102,7 @@ class MapPathOverlayTest {
                         player, waypoints, List.of(), 0, List.of());
 
         assertTrue(hasDotBetween(coarseDots(snapshot), 0, 100),
-                "最初の中間目標までの区間が描かれず、点線がプレイヤーから離れて浮いている");
+                "the segment to the first intermediate target is not drawn and the dotted line floats away from the player");
     }
 
     @Test
@@ -114,13 +115,14 @@ class MapPathOverlayTest {
                         player, waypoints, List.of(), 0, List.of());
 
         assertTrue(hasDotBetween(coarseDots(snapshot), 50, 150),
-                "詳細経路の末端と最初の中間目標の間が繋がっていない");
+                "the end of the detailed route is not connected to the first intermediate target");
     }
 
     /**
-     * 詳細経路が中間目標を辿っていない間（層2の精緻化中は本来の目的地へ直接向かう）、通過済みの
-     * 目印は進まないので未通過ぶんの先頭は現在地の遥か後ろに残る。そのまま順に結ぶと、後ろへ戻る線と
-     * ルート本体の線が並んで走り、黄色い点線が2本出ているようにしか見えない。
+     * While the detailed route does not follow the intermediate targets (during layer-2 refinement it heads straight
+     * for the real destination), the passed-target marker does not advance, so the first unpassed target stays far
+     * behind the current position. Connecting them in order makes a line running backward alongside the route's own
+     * line, so it just looks like two yellow dotted lines.
      */
     @Test
     void coarseRouteDoesNotRunBackToWaypointsAlreadyBehind() {
@@ -134,16 +136,17 @@ class MapPathOverlayTest {
                         player, waypoints, List.of(), 0, List.of());
 
         assertFalse(hasDotBetween(coarseDots(snapshot), 0, 340),
-                "経路の末端より後ろの中間目標まで点線が引き返し、黄色い点線が2本出ている");
+                "the dotted line doubles back to an intermediate target behind the route's end, showing two yellow dotted lines");
     }
 
     /**
-     * 経路の末端が中間目標を通り過ぎていて、次の中間目標が遠いとき。
+     * When the end of the route has passed an intermediate target and the next intermediate target is far away.
      *
-     * <p>「次の点が近い間だけ進む」形だと、次が遠いので通り過ぎた点で止まり、そこから末端まで
-     * <b>後ろ向きの線</b>が1本引かれる。中間目標の列は層1の生の列と層2の精緻版が入れ替わるので
-     * 添字では切れず（{@code PathfindingState#pathWorthKeeping}が経路を据え置くと張り直されない）、
-     * 切るなら折れ線への射影で切るしかない。ユーザー報告「更新されたときに黄色い点線が消えない」。
+     * <p>With a "advance only while the next point is close" approach, the next one is far, so it stops at the passed
+     * point and draws one <b>backward line</b> from there to the end. The intermediate target list swaps between layer
+     * 1's raw list and layer 2's refined version, so it cannot be cut by index (it is not re-laid when
+     * {@code PathfindingState#pathWorthKeeping} keeps the route), and the only way to cut it is by projecting onto the
+     * polyline. User report: "the yellow dotted line does not go away when it updates".
      */
     @Test
     void coarseRouteDoesNotDrawBackToAWaypointTheDetailPathOvershot() {
@@ -156,10 +159,10 @@ class MapPathOverlayTest {
                         player, waypoints, List.of(), 0, List.of());
 
         assertFalse(hasDotBetween(coarseDots(snapshot), 99, 150),
-                "通り過ぎた中間目標まで点線が引き返している");
+                "the dotted line doubles back to a passed intermediate target");
     }
 
-    /** 引き返しの読み飛ばしが、本当に後戻りするルート（始点が行き過ぎている）まで削らないこと。 */
+    /** Skipping double-backs must not trim a route that really does go backward (its start has overshot). */
     @Test
     void coarseRouteKeepsAGenuineBacktrack() {
         BlockPos player = new BlockPos(120, Y, 0);
@@ -169,12 +172,12 @@ class MapPathOverlayTest {
                         player, waypoints, List.of(), 0, List.of());
 
         assertTrue(coarseDots(snapshot).stream().anyMatch(dot -> dot.getZ() > 20 && dot.getZ() < 180),
-                "後戻りを含むルートの先頭が読み飛ばされ、点線がルートから外れている");
+                "the head of a route containing a backtrack was skipped and the dotted line strays from the route");
     }
 
     /**
-     * 目的地の目印は、経路や点線を消していても出ること。地図を開いて分からないのは
-     * 「どこへ向かっているのか」であって、そこは点線の設定とは別の話。
+     * The destination marker must show even when the route and dotted line are turned off. What you cannot tell when
+     * opening the map is "where am I heading", which is separate from the dotted line setting.
      */
     @Test
     void goalPinStandsOnTheDestinationWithoutTheDottedLine() {
@@ -183,11 +186,11 @@ class MapPathOverlayTest {
                 new BlockPos(0, Y, 0), List.of(), List.of(), 0, List.of());
 
         Set<BlockPos> blocks = markerBlocks(snapshot);
-        assertTrue(blocks.contains(goal), "ピンの先端が目的地のブロックを指していない");
+        assertTrue(blocks.contains(goal), "the pin's tip does not point at the destination block");
         assertTrue(blocks.stream().allMatch(block -> block.getZ() <= goal.getZ()),
-                "ピンが目的地より南へはみ出している（先端で指すのではなく目的地を跨いでいる）");
+                "the pin sticks out south of the destination (straddling it instead of pointing with its tip)");
         assertTrue(blocks.stream().anyMatch(block -> block.getZ() < goal.getZ() - 5),
-                "ピンに高さが無く、先端しか描かれていない");
+                "the pin has no height; only its tip is drawn");
     }
 
     @Test
@@ -196,13 +199,13 @@ class MapPathOverlayTest {
         MapPathOverlay.Snapshot snapshot = new MapPathOverlay.Snapshot(null, goal, true, false,
                 new BlockPos(0, Y, 0), List.of(), List.of(), 0, List.of());
 
-        assertTrue(markerRects(snapshot).isEmpty(), "設定で切っているのに目的地の目印が描かれている");
+        assertTrue(markerRects(snapshot).isEmpty(), "the destination marker is drawn even though it is turned off in the settings");
     }
 
     /**
-     * 目印は地図を縮小しても画面上の大きさを保つ＝縮尺が半分なら、覆うブロック数は倍になる。
-     * ここが崩れると、全体を見渡すために縮小したときに目印だけが小さくなって消える——
-     * 目的地を見失うのはまさにその場面なので、この性質が目印の存在意義そのものになる。
+     * The marker keeps its on-screen size when the map is zoomed out: at half scale, it covers twice as many blocks.
+     * If this breaks, the marker shrinks and disappears exactly when you zoom out to see the whole picture, which is
+     * precisely when you lose track of the destination, so this property is the marker's whole reason to exist.
      */
     @Test
     void goalMarkerKeepsItsSizeOnScreenAsTheMapZoomsOut() {
@@ -213,11 +216,11 @@ class MapPathOverlayTest {
         int zoomedOut = markerSpanBlocks(snapshot, 0.5);
 
         assertTrue(zoomedOut >= atOnePixelPerBlock * 2 - 2,
-                "縮小したのに目印がブロック数で大きくならず、画面上では小さくなっている（"
-                        + atOnePixelPerBlock + " → " + zoomedOut + "）");
+                "zoomed out but the marker did not grow in blocks, so it shrinks on screen ("
+                        + atOnePixelPerBlock + " → " + zoomedOut + ")");
     }
 
-    /** 目印が覆う範囲の一辺（ブロック）。 */
+    /** One side of the area the marker covers (blocks). */
     private static int markerSpanBlocks(MapPathOverlay.Snapshot snapshot, double pixelsPerBlock) {
         int min = Integer.MAX_VALUE;
         int max = Integer.MIN_VALUE;

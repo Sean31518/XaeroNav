@@ -16,30 +16,31 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import org.junit.jupiter.api.Test;
 
 /**
- * 持ち物のブロック数を経路の設置数の上限にする（{@code CellSource#placedBlockBudget}）。
+ * Uses the number of blocks in the inventory as the cap on placements along the route ({@code CellSource#placedBlockBudget}).
  *
- * <p>ユーザー報告「設置が多く、途中でブロックが尽きて結局掘る羽目になる。掘った方が早かった」。
- * 橋の長さの上限（{@code maxBridgeRunBlocks}）は<b>連続長</b>なので、短い橋を何度も架ける経路は
- * 素通りしていた。
+ * <p>User report: "Too many placements; I run out of blocks halfway and end up digging anyway. Digging would have been faster."
+ * The bridge length cap ({@code maxBridgeRunBlocks}) is a <b>run length</b>, so routes that build many short bridges
+ * slipped past it.
  *
- * <p><b>対照を必ず置く。</b>「予算を絞ったら橋が消えた」だけでは、元から橋が出ない地形を
- * 検証していることに気付けない（{@code RiskyJumpTest}で実際に踏んだ空振り）。
+ * <p><b>Always include a control.</b> "Bridges disappeared when the budget was tightened" alone can't reveal that you're
+ * testing terrain that never produced bridges in the first place (a false pass actually hit in {@code RiskyJumpTest}).
  */
 class BlockBudgetTest {
 
     private static final BooleanSupplier NEVER = () -> false;
     private static final SearchLimits LIMITS = new SearchLimits(200_000, 20_000, 1.5);
 
-    /** 裂け目の幅。跳んで越えられる上限(3)より広くして、渡る手段を設置だけに絞る。 */
+    /** Width of the chasm. Wider than the jumpable maximum (3), so placing blocks is the only way across. */
     private static final int GAP = 4;
 
     /**
-     * 東西に伸びる棚。x=20 から幅{@link #GAP}の底無しの裂け目が南の {@code gapReachZ} まで伸びていて、
-     * そこから先は繋がっている（回り込める）。
+     * A ledge running east-west. From x=20, a bottomless chasm {@link #GAP} wide runs south to {@code gapReachZ},
+     * and beyond that it's connected (you can walk around).
      *
-     * <p><b>回り込みの長さが対照の成否を決める。</b>奈落の橋は1マス約35.6tick（うち32が設置と
-     * 危険料）なので、幅4なら追加128tick。回り込みは往復ぶんの水平移動で、26マス南下して戻ると
-     * 約185tick——<b>橋の方が安い</b>状態にしておかないと、予算を絞る前から回り込んでしまう。
+     * <p><b>The length of the detour decides whether the control works.</b> A void bridge costs about 35.6 ticks per block
+     * (32 of which are placement and the danger surcharge), so a width of 4 adds 128 ticks. The detour is horizontal travel
+     * there and back; going 26 blocks south and returning is about 185 ticks. Unless <b>the bridge is cheaper</b>, the route
+     * detours even before the budget is tightened.
      */
     private static FakeCells ledgeWithGap(int gapReachZ) {
         SearchBounds bounds = new SearchBounds(-8, 0, -8, 48, 96, 44);
@@ -70,19 +71,19 @@ class BlockBudgetTest {
     }
 
     /**
-     * <b>対照。</b>予算が無ければ（従来の挙動）、回り込むより短い裂け目には橋を架ける。
-     * これが成り立たない地形では下のテストが空振りになる。
+     * <b>Control.</b> Without a budget (the previous behavior), a chasm shorter than the detour gets bridged.
+     * On terrain where this doesn't hold, the tests below pass vacuously.
      */
     @Test
     void bridgesTheGapWhenNoBudgetIsSet() {
         PathResult result = solve(ledgeWithGap(26));
 
-        assertTrue(result.complete(), "回り込めば必ず着ける: " + result.termination());
-        assertTrue(placements(result) > 0, "橋を架けずに渡っている＝対照が成立していない");
-        assertTrue(maxZ(result) < 10, "回り込まずまっすぐ渡るはず: maxZ=" + maxZ(result));
+        assertTrue(result.complete(), "Walking around always gets there: " + result.termination());
+        assertTrue(placements(result) > 0, "Crossed without bridging, i.e. the control doesn't hold");
+        assertTrue(maxZ(result) < 10, "Should cross straight without detouring: maxZ=" + maxZ(result));
     }
 
-    /** 予算が足りていれば、上の対照と同じ経路が出る（予算があるだけで狭めない）。 */
+    /** With enough budget, the same route as the control above comes out (having a budget alone doesn't narrow it). */
     @Test
     void keepsBridgingWhenTheBudgetCoversIt() {
         PathResult withoutBudget = solve(ledgeWithGap(26));
@@ -90,48 +91,48 @@ class BlockBudgetTest {
 
         assertTrue(withBudget.complete());
         assertEquals(placements(withoutBudget), placements(withBudget),
-                "予算が足りているのに設置の数が変わった");
+                "Placement count changed even though the budget is sufficient");
     }
 
     /**
-     * <b>本体。</b>予算が裂け目より少なければ、橋を架けずに回り込む。
+     * <b>The main case.</b> If the budget is smaller than the chasm, the route walks around without bridging.
      */
     @Test
     void walksAroundWhenTheBudgetIsTooSmall() {
         PathResult result = solve(ledgeWithGap(26).placedBlockBudget(2));
 
-        assertTrue(result.complete(), "回り込む道があるので着けるはず: " + result.termination());
-        assertTrue(placements(result) <= 2, "予算を超えて設置している: " + placements(result));
-        assertTrue(maxZ(result) > 26, "回り込んでいない: maxZ=" + maxZ(result));
+        assertTrue(result.complete(), "There's a way around, so it should arrive: " + result.termination());
+        assertTrue(placements(result) <= 2, "Placing beyond the budget: " + placements(result));
+        assertTrue(maxZ(result) > 26, "Didn't walk around: maxZ=" + maxZ(result));
     }
 
     /**
-     * 予算が足りず、しかも回り込む道が無いときは<b>緩和の梯子が開いて経路を出す</b>——
-     * 詰みよりは「足りないが道はある」を見せる方がよい（不足は案内側が伝える）。
+     * When the budget is short and there's no way around, <b>the relaxation ladder opens up and produces a route</b>;
+     * showing "not enough, but there is a way" beats a dead end (the guidance side reports the shortfall).
      */
     @Test
     void loosensTheBudgetWhenThereIsNoOtherWay() throws Exception {
-        // 裂け目が探索範囲の端まで貫いていて回り込めない地形
+        // Terrain where the chasm runs all the way to the edge of the search range, so it can't be walked around
         FakeCells cells = ledgeWithGap(Integer.MAX_VALUE).placedBlockBudget(2);
 
         AStarPathfinder strict = new AStarPathfinder(cells, LIMITS);
         PathResult blocked = strict.search(new BlockPos(0, 65, 0), new BlockPos(40, 65, 0), NEVER, 0);
-        assertTrue(strict.placedBudgetBlocked(), "予算で設置を捨てたのにフラグが立っていない");
-        assertTrue(!blocked.complete(), "予算内で渡れてしまう＝地形が対照になっていない");
+        assertTrue(strict.placedBudgetBlocked(), "Placements were dropped due to the budget but the flag isn't set");
+        assertTrue(!blocked.complete(), "Crossable within budget, i.e. the terrain isn't a valid control");
 
         PathResult loosened = new PathfindingExecutor()
                 .submit(cells, new BlockPos(0, 65, 0), new BlockPos(40, 65, 0), LIMITS, false).get();
-        assertTrue(loosened.complete(), "緩和の梯子が開かなかった: " + loosened.termination());
-        assertTrue(placements(loosened) > 2, "緩めたのに予算内のままの経路が出ている");
+        assertTrue(loosened.complete(), "The relaxation ladder didn't open: " + loosened.termination());
+        assertTrue(placements(loosened) > 2, "Relaxed, yet the route still stays within budget");
     }
 
     /**
-     * <b>区間をまたいでも予算は引き継ぐ。</b>長距離ルートは区間ごとに探索を投げるので、
-     * 引き継がないと<b>区間の数だけ予算が満額に戻る</b>——手持ち6個でも、3区間に割れば
-     * 合計18個置く経路が組み上がってしまう。
+     * <b>The budget carries over across segments.</b> Long-distance routes submit a search per segment, so
+     * without carrying it over <b>the budget refills to full for every segment</b>; even with 6 blocks on hand, splitting
+     * into 3 segments would assemble a route that places 18 in total.
      *
-     * <p>対照（引き継ぎ無し）を並べるのが要点。片方だけでは「予算6では元から渡れない地形」を
-     * 見ているのか区別が付かない。
+     * <p>The key is putting a control (no carryover) alongside. With only one, you can't tell whether you're looking at
+     * "terrain that can't be crossed with a budget of 6 anyway".
      */
     @Test
     void carriesThePlacedBlocksAcrossSegments() {
@@ -140,25 +141,25 @@ class BlockBudgetTest {
         BlockPos goal = new BlockPos(40, 65, 0);
 
         PathResult fresh = new AStarPathfinder(cells, LIMITS).search(start, goal, NEVER, Carryover.NONE, 0);
-        assertEquals(GAP, placements(fresh), "予算6なら幅4の裂け目は渡れるはず");
+        assertEquals(GAP, placements(fresh), "With a budget of 6, a chasm 4 wide should be crossable");
 
-        // 手前の区間が3個使うと決まっている＝残りは3個で、幅4の裂け目には足りない
+        // The preceding segment is committed to using 3, i.e. 3 remain, which isn't enough for a chasm 4 wide
         PathResult continued = new AStarPathfinder(cells, LIMITS)
                 .search(start, goal, NEVER, new Carryover(0, 3), 0);
-        assertTrue(continued.complete(), "回り込む道があるので着けるはず: " + continued.termination());
-        assertTrue(placements(continued) <= 3, "残りの予算を超えて設置している: " + placements(continued));
-        assertTrue(maxZ(continued) > 26, "回り込んでいない: maxZ=" + maxZ(continued));
+        assertTrue(continued.complete(), "There's a way around, so it should arrive: " + continued.termination());
+        assertTrue(placements(continued) <= 3, "Placing beyond the remaining budget: " + placements(continued));
+        assertTrue(maxZ(continued) > 26, "Didn't walk around: maxZ=" + maxZ(continued));
     }
 
     /**
-     * <b>置けるブロックを1つも持っていなくても、他に道が無ければ橋を案内する。</b>
+     * <b>Even without a single placeable block, bridges are guided when there's no other way.</b>
      *
-     * <p>実機報告「エンドの島渡りだけできない」の正体。持ち物が空だと{@code canPlaceBlocks}が
-     * falseになり、橋が<b>1本も生成されない</b>——経路は島の上をうろつくだけで目的地へ届かず、
-     * しかも設置が0本なので不足の警告すら出ない（案内には何も現れない）。
+     * <p>The cause behind the in-game report "only End island hopping doesn't work". With an empty inventory
+     * {@code canPlaceBlocks} is false and <b>not a single bridge is generated</b>; the route just wanders the island without
+     * reaching the destination, and with zero placements not even the shortage warning appears (the guidance shows nothing).
      *
-     * <p>出せば「ここに橋が要る」と分かり、集めに行くか引き返すか判断できる。
-     * 必要な枚数はHUDが伝える。
+     * <p>Showing it makes clear that "a bridge is needed here", so the player can decide whether to go gather blocks or turn back.
+     * The HUD reports how many are needed.
      */
     @Test
     void offersABridgeWithNoBlocksWhenThereIsNoOtherWay() throws Exception {
@@ -169,13 +170,13 @@ class BlockBudgetTest {
         PathResult result = new PathfindingExecutor()
                 .submit(cells, new BlockPos(0, 65, 0), new BlockPos(40, 65, 0), LIMITS, false).get();
 
-        assertTrue(result.complete(), "持っていなくても案内は出すはず: " + result.termination());
-        assertTrue(placements(result) > 0, "橋が1本も出ていない");
+        assertTrue(result.complete(), "Guidance should appear even without blocks: " + result.termination());
+        assertTrue(placements(result) > 0, "Not a single bridge was produced");
     }
 
     /**
-     * <b>対照。</b>設定で設置を切っている場合は開けない——「持っていない」と「断られている」は
-     * 区別する。ここが潰れると、設置を切ったプレイヤーにまで橋の案内が出る。
+     * <b>Control.</b> When placement is turned off in settings, it isn't opened up; "not carrying any" and "refused"
+     * are distinguished. If this breaks, players who turned off placement would get bridge guidance too.
      */
     @Test
     void refusesToBridgeWhenTheSettingForbidsIt() throws Exception {
@@ -186,6 +187,6 @@ class BlockBudgetTest {
         PathResult result = new PathfindingExecutor()
                 .submit(cells, new BlockPos(0, 65, 0), new BlockPos(40, 65, 0), LIMITS, false).get();
 
-        assertEquals(0, placements(result), "設定で断られているのに橋を出した");
+        assertEquals(0, placements(result), "Produced a bridge even though settings forbid it");
     }
 }

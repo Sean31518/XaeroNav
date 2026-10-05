@@ -14,8 +14,8 @@ import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 地図の点列は、XZが同じ連続ステップ（階段・掘り下げ）を1点に潰す。そのため通り過ぎた区間を
- * 飛ばすには、ステップの添字から点の添字への引き直しが要る。
+ * The map's dot sequence collapses consecutive steps with the same XZ (stairs, digging down) into one dot.
+ * So skipping the already-passed section requires mapping step indices back to dot indices.
  */
 class MapDotsTest {
 
@@ -29,7 +29,7 @@ class MapDotsTest {
 
     @Test
     void mapsStepIndicesOntoDotsThatCollapsedVerticalRuns() {
-        // ステップ1〜3はXZが同じ（真上へ登る階段）ので1点に潰れる
+        // Steps 1-3 share the same XZ (stairs climbing straight up), so they collapse into one dot
         MapDots dots = MapDots.forPath(path(List.of(
                 new BlockPos(0, 64, 0),
                 new BlockPos(1, 64, 0),
@@ -40,7 +40,7 @@ class MapDotsTest {
         assertEquals(3, dots.count);
         assertEquals(0, dots.firstDotFrom(0));
         assertEquals(1, dots.firstDotFrom(1));
-        // 潰された区間の途中を指されたら、その区間を作った点から描き始める
+        // When pointed into the middle of a collapsed section, start drawing from the dot that section produced
         assertEquals(2, dots.firstDotFrom(2));
         assertEquals(2, dots.firstDotFrom(4));
     }

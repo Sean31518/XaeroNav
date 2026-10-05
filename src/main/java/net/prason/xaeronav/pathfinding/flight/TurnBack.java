@@ -7,33 +7,33 @@ import java.util.function.BiPredicate;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * 継ぎ足しが<b>手前の経路へ戻ってきた</b>ときの切り落とし（歩行のV字の切り落としと同じ）。
+ * Trimming for when an extension <b>comes back to the earlier route</b> (same as trimming V-shapes when walking).
  *
- * <p>末端の先が行き止まりだと、継ぎ足しは末端から来た道を戻って別の方角へ向かう。それをそのまま繋ぐと、
- * プレイヤーは末端まで行ってから引き返す（「東へ行ってから自分の所へ戻ってくる」線）。戻ってきた所で
- * 繋ぎ直せば、行って戻る区間ごと消える。探索し直さないので、引き直しのように行き止まりの間を
- * 往復することもない。
+ * <p>If beyond the end is a dead end, the extension goes back the way it came from the end and heads in another direction.
+ * Joining that as-is makes the player go to the end and then turn back (a line that "goes east, then comes back to where
+ * you are"). Rejoining where it comes back removes the whole out-and-back stretch. There's no re-search, so unlike a
+ * recomputation it doesn't bounce back and forth between dead ends either.
  */
 public final class TurnBack {
 
-    /** 継ぎ足しの点が、プレイヤーより先の経路にこれだけ近づいたら戻ってきたとみなす（ブロック）。 */
+    /** An extension point is considered to have come back once it gets this close to the route ahead of the player (blocks). */
     private static final double RETURN_RADIUS_BLOCKS = 24.0;
 
-    /** 末端の手前この長さは「戻ってきた」の判定から外す。継ぎ足しの出だしは当然そこに近い（ブロック）。 */
+    /** This length before the end is excluded from the "came back" check. The start of the extension is naturally close to it (blocks). */
     private static final double TAIL_GRACE_BLOCKS = 48.0;
 
     private TurnBack() {
     }
 
-    /** {@link #cut}の結果。{@code aheadKept}はプレイヤーから戻ってきた点まで、{@code rest}はそこから先。 */
+    /** Result of {@link #cut}. {@code aheadKept} runs from the player to the point where it came back, {@code rest} is everything beyond. */
     public record Cut(List<Vec3> aheadKept, List<Vec3> rest) {
     }
 
     /**
-     * 継ぎ足しが手前の経路へ戻ってきていたら、戻ってきた所で繋ぎ直して<b>行って戻る区間を消す</b>。
+     * If the extension has come back to the earlier route, rejoins where it came back and <b>removes the out-and-back stretch</b>.
      *
-     * <p>繋ぎ目は、プレイヤーより先の経路のなるべく手前の点と、継ぎ足しのなるべく先の点の組で、
-     * 間が飛べる（{@code clearLine}）もの。無ければ{@code null}。
+     * <p>The join is the pair of the earliest possible point on the route ahead of the player and the latest possible point on
+     * the extension, with a flyable line between them ({@code clearLine}). {@code null} if there is none.
      */
     public static Cut cut(List<Vec3> ahead, List<Vec3> extension, BiPredicate<Vec3, Vec3> clearLine) {
         if (ahead.size() < 2 || extension.size() < 2) {

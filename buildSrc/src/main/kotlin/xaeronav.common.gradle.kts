@@ -6,13 +6,13 @@ plugins {
     id("dev.kikugie.fletching-table")
 }
 
-// ModDevGradleは各NeoForgeノードからルートプロジェクトへidea-extを適用する。先にbuildSrcの
-// クラスローダーの同一プラグインをルートへ適用して、ノードごとの二重登録を防ぐ。
+// ModDevGradle applies idea-ext to the root project from each NeoForge node. Apply the same plugin from buildSrc's
+// classloader to the root first, preventing double registration per node.
 if (!rootProject.pluginManager.hasPlugin("org.jetbrains.gradle.plugin.idea-ext")) {
     rootProject.pluginManager.apply("org.jetbrains.gradle.plugin.idea-ext")
 }
 
-// Stonecutterは各ノードへ自分のビルドプラグインを先に当てるので、ここで参照できる。
+// Stonecutter applies its own build plugin to each node first, so it can be referenced here.
 val node = extensions.getByType<StonecutterBuildExtension>()
 val loader = node.current.project.substringAfterLast('-')
 val minecraftVersion = node.current.version
@@ -20,14 +20,14 @@ val minecraftVersion = node.current.version
 group = modProperty("mod_group_id")
 version = stampedModVersion()
 
-// jar名は `<mod_id>-<mod_version>-<ローダー>-<MCバージョン>[-<gitハッシュ>].jar`。
-// ローダー/MCバージョンをファイル名に含めないと build/libs へ同名のjarが並び、
-// どれがどのノード向けか配布時に判別できなくなる（ノードごとに build/libs は別）。
+// The jar name is `<mod_id>-<mod_version>-<loader>-<MC version>[-<git hash>].jar`.
+// Without the loader/MC version in the file name, identically named jars line up in build/libs, and at
+// distribution it's impossible to tell which is for which node (build/libs is separate per node).
 base {
     archivesName = modProperty("mod_id")
 }
 
-// 1.16.5試作ノードは新しいJava構文を保持したままコンパイルし、配布前にJava 8へ変換する予定。
+// The 1.16.5 prototype node compiles keeping newer Java syntax, and is planned to be converted to Java 8 before distribution.
 val javaVersion = compileJavaVersionFor(minecraftVersion)
 
 java {
@@ -36,8 +36,8 @@ java {
     }
 }
 
-// 非推奨APIの発生元を通常ログへ必ず出す。まとめの「一部で使用」だけでは更新対象を特定できない。
-// 警告ゼロを確認済みなので、-Werrorで再発をビルド失敗として検知する。
+// Always print the origin of deprecated API usage to the normal log. The summary "used in some places" can't pinpoint what to update.
+// Zero warnings has been confirmed, so -Werror catches any recurrence as a build failure.
 tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.add("-Xlint:deprecation")
     options.compilerArgs.add("-Werror")
@@ -49,17 +49,17 @@ tasks.withType<JavaCompile>().configureEach {
 repositories {
     mavenCentral()
     maven("https://chocolateminecraft.com/maven") { name = "Xaero's Maven" }
-    // XaeroのMavenに無い古い版のXaero（xaeroModuleCoordinatesの`modrinth:`）だけをここから取る
+    // Fetch only old Xaero versions not on Xaero's Maven (xaeroModuleCoordinates' `modrinth:`) from here
     exclusiveContent {
         forRepository { maven("https://api.modrinth.com/maven") { name = "Modrinth" } }
         filter { includeGroup("maven.modrinth") }
     }
 }
 
-// Fletching Tableはmixin設定を初期化すると、全依存に対して有効なmavenLocalと
-// KikuGie Snapshotsを自動追加する。後者が遅延するとFabric APIまでそこで待たされ、
-// Gradleが全Stonecutterノードを構成する都合でForge/NeoForgeのジョブも巻き添えになる。
-// Fletching Table自身のgroupだけに限定し、他の依存は本来のrepositoryへ直行させる。
+// When Fletching Table initializes the mixin config, it auto-adds mavenLocal and KikuGie Snapshots, enabled for
+// all dependencies. If the latter is slow, even Fabric API waits on it, and since Gradle configures all
+// Stonecutter nodes, Forge/NeoForge jobs get dragged down too.
+// Restrict them to Fletching Table's own group, and send other dependencies straight to their proper repositories.
 repositories.withType<MavenArtifactRepository>().configureEach {
     if (name == "MavenLocal" || name == "KikuGie Snapshots") {
         content {
@@ -68,10 +68,10 @@ repositories.withType<MavenArtifactRepository>().configureEach {
     }
 }
 
-// Java APTで@Mixinクラスを収集し、既存のconfigをテンプレートとしてclient一覧へ登録する。
-// テンプレートの${'$'}{mixin_compatibility_level}は有効なJSON文字列なので、Fletching Tableが
-// 一覧を生成した後も各ローダーのprocessResourcesによる展開をそのまま適用できる。
-// Forge 1.20.1のrefmap生成とMANIFEST登録は別の責務なので、各ローダー側の設定を維持する。
+// Collect @Mixin classes with Java APT and register them in the client list using the existing config as a template.
+// The template's ${'$'}{mixin_compatibility_level} is a valid JSON string, so each loader's processResources
+// expansion can still be applied as-is after Fletching Table generates the list.
+// Forge 1.20.1's refmap generation and MANIFEST registration are separate responsibilities, so each loader keeps its own setup.
 fletchingTable {
     mixins.configure("main") {
         mixin("xaeronav-xaero.mixins.json") {
@@ -80,9 +80,9 @@ fletchingTable {
     }
 }
 
-// null契約を型で表す注釈のみ。注釈処理を使わないマーカーアノテーションなので、
-// annotationProcessorには足さない（mixinextrasのように公式マッピングランタイムで
-// ビルドを止める類の罠には該当しない）。
+// Only annotations expressing null contracts in types. They're marker annotations with no annotation processing,
+// so they aren't added to annotationProcessor (they don't fall into the trap, like mixinextras, of stopping the
+// build on the official mapping runtime).
 dependencies {
     compileOnly("org.jspecify:jspecify:1.0.0")
 }
@@ -92,8 +92,8 @@ testing {
         named<JvmTestSuite>("test") {
             useJUnitJupiter("6.1.3")
 
-            // 実機の保存データで60万ノードの探索を回すテストは1本あたり8秒前後かかる。
-            // 手元で回し続ける既定の`test`からは外し、`slowTest`（`check`が依存）に任せる
+            // Tests that run 600k-node searches on real save data take around 8 seconds each.
+            // Exclude them from the default `test` run continuously during development and leave them to `slowTest` (which `check` depends on)
             targets.all {
                 testTask.configure {
                     useJUnitPlatform { excludeTags("slow", "bench") }
@@ -104,86 +104,86 @@ testing {
 }
 
 /**
- * `@Tag("slow")`の付いたテストだけを回す。実機ジ・エンドの地形で「規模が大きいときにだけ
- * 現れる穴」を見張るもので、合成地形では構造的に再現できない。
+ * Runs only tests tagged `@Tag("slow")`. They guard against "holes that only appear at large scale" on real End
+ * terrain, which synthetic terrain structurally can't reproduce.
  */
 val slowTest = tasks.register<Test>("slowTest") {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
-    description = "実機のワールド保存データを使う重い経路探索テストを回す"
+    description = "Runs heavy pathfinding tests that use real world save data"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("slow") }
-    // ネザーのフィクスチャは体積のほとんどが固体で、512ブロック四方でも1690万セルになる
-    // （FakeCellsは空気を持たない疎な表なので、現世の同じ面積とは桁が違う）。既定のヒープでは
-    // 地形を読み込む途中でOutOfMemoryErrorになる
+    // The Nether fixture is almost entirely solid by volume; even 512 blocks square is 16.9M cells
+    // (FakeCells is a sparse table without air, so it's orders of magnitude more than the same area of the
+    // overworld). With the default heap it hits OutOfMemoryError while loading the terrain
     maxHeapSize = "3g"
-    // テストクラスごとにJVMを作り直す。1つのJVMで回すと、クラスごとに読む大きな地形が
-    // 積み上がってヒープを使い切る（実際にテスト結果を1件も残さずJVMごと落ちた）。
-    // 起動のぶんは遅くなるが、重いテストは元々1本あたり数十秒かかる
+    // Recreate the JVM per test class. Running in one JVM piles up the large terrain each class loads until
+    // the heap is exhausted (it actually crashed along with the JVM without leaving a single test result).
+    // Startup makes it slower, but the heavy tests take tens of seconds each anyway
     forkEvery = 1
-    // 直列だと重い3本（Nether{WideRoute,LiveWalk,DetourBreakdown}Test、合計約14分）が
-    // 積み上がって全体で30分超になる（CI実測）。クラスはJVM単位で独立しているので並列化して
-    // 素直に効く。1コアはGradle本体・他タスクに残す。3g(maxHeapSize)×並列数ぶんのメモリが
-    // 要るので上限4に留める（GitHub Actions既定ランナーの4vCPU/16GBで3並列なら収まる）
+    // Run serially, the three heavy ones (Nether{WideRoute,LiveWalk,DetourBreakdown}Test, about 14 minutes total)
+    // pile up to over 30 minutes overall (measured in CI). Classes are independent per JVM, so parallelizing
+    // works straightforwardly. One core is left for Gradle itself and other tasks. It needs 3g (maxHeapSize) ×
+    // parallelism of memory, so it is capped at 4 (3 in parallel fits on GitHub Actions' default 4 vCPU/16 GB runner)
     maxParallelForks = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(1, 4)
 }
 
 tasks.named("check") { dependsOn(slowTest) }
 
 /**
- * `@Tag("bench")`の付いた計測を回す。番人ではないので`check`からは外してある——
- * 判定を持たない計測をCIに載せても、赤にならないぶん誰も見ない。
+ * Runs the measurements tagged `@Tag("bench")`. They're not guards, so they're excluded from `check`:
+ * a measurement without assertions put in CI never turns red, so nobody looks at it.
  */
 val bench = tasks.register<Test>("bench") {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
-    description = "経路探索の速度・質を計測する（判定なし）"
+    description = "Measures pathfinding speed and quality (no assertions)"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("bench") }
-    // 理由はslowTestと同じ。閉包グラフを組む計測だけ足りないので、そのときだけ積めるようにしてある
+    // Same reason as slowTest. Only the closure-graph measurements need more, so it can be raised just for those
     maxHeapSize = providers.gradleProperty("xaeronav.heap").orNull ?: "3g"
     forkEvery = 1
     systemProperty("xaeronav.profileOut",
             layout.buildDirectory.dir("bench").get().asFile.absolutePath)
-    // 計測の切り替え（-Pxaeronav.navGraphOnly=true など）。テストのJVMへは明示しないと届かない
+    // Measurement switches (-Pxaeronav.navGraphOnly=true etc.). They don't reach the test JVM unless passed explicitly
     listOf("xaeronav.navGraphOnly", "xaeronav.navGraphLag", "xaeronav.navGraphFarScale", "xaeronav.navGraphFar", "xaeronav.navGraphRefuseCut",
             "xaeronav.traceBudgetSeconds", "xaeronav.navGraphVerbose", "xaeronav.routeLimit", "xaeronav.routeSkip", "xaeronav.skipClosure", "xaeronav.reviewTicks", "xaeronav.walkTrace", "xaeronav.closure", "xaeronav.walkMode", "xaeronav.closureRadius", "xaeronav.window", "xaeronav.closureBox", "xaeronav.searchMargin", "xaeronav.blockLava", "xaeronav.voxelMargin", "xaeronav.keepFraction", "xaeronav.routes", "xaeronav.unknownMap", "xaeronav.sweepMin", "xaeronav.sweepMax", "xaeronav.sweepSeed", "xaeronav.sweepSpread", "xaeronav.sweepTag", "xaeronav.sweepBoxes", "xaeronav.sweepDir", "xaeronav.caveLayers", "xaeronav.farScales", "xaeronav.rounds", "xaeronav.warmup", "xaeronav.voxelFollow", "xaeronav.alongPoints", "xaeronav.flightCell", "xaeronav.flightWeight", "xaeronav.noReplan", "xaeronav.noVCut", "xaeronav.replanKeep").forEach { name ->
         providers.gradleProperty(name).orNull?.let { systemProperty(name, it) }
     }
 }
 
-// テストは正典ノードでだけ実行する。経路探索コアはローダーにもMCバージョンにも依存せず
-// （`pathfinding/`に`//?`を書かない鉄則）、どのノードで回しても同じ結果になるので、
-// 全ノードで回すのはCIの時間を丸ごと倍にするだけになる。コンパイルは全ノードで走る。
+// Tests run only on the canonical node. The pathfinding core depends on neither the loader nor the MC version
+// (the iron rule of never writing `//?` in `pathfinding/`), so it gives the same result on any node, and
+// running it on all nodes would just multiply CI time. Compilation runs on all nodes.
 val canonicalNode = node.properties.get<String>("canonical_test_node")
 val isCanonicalNode = node.current.project == canonicalNode
-// テストの補助クラスは正典ノードのMinecraft APIで書いてあり、他の版ではコンパイルできない。
-// どうせ実行しないので、コンパイルも正典ノードだけにする
+// Test helper classes are written against the canonical node's Minecraft API and can't compile on other versions.
+// They won't run anyway, so compile only on the canonical node too
 tasks.named<JavaCompile>("compileTestJava") {
-    onlyIf("テストは正典ノード($canonicalNode)でだけコンパイル・実行する") { isCanonicalNode }
+    onlyIf("Tests are compiled and run only on the canonical node ($canonicalNode)") { isCanonicalNode }
 }
 tasks.withType<Test>().configureEach {
-    onlyIf("正典ノード($canonicalNode)でのみ実行する") { isCanonicalNode }
+    onlyIf("Runs only on the canonical node ($canonicalNode)") { isCanonicalNode }
 
-    // テストは使い捨てのディレクトリで走らせる。ここをリポジトリのルートにすると、
-    // クラスパスに載っているMinecraftのlog4j設定がルート直下の`logs/`へ書き出し、
-    // テストを回すたびにローテートされたログが溜まり続ける
+    // Run tests in a throwaway directory. If this were the repository root, Minecraft's log4j config on the
+    // classpath would write to `logs/` directly under the root, and rotated logs would keep piling up every
+    // time tests run
     workingDir = layout.buildDirectory.dir("test-run").get().asFile
     doFirst {
         workingDir.mkdirs()
     }
 
-    // ソースツリー（言語ファイル等）を読むテストのための基点。作業ディレクトリからの
-    // 相対パスで書くと、上のとおり作業ディレクトリを動かした時点で壊れる
+    // Base for tests that read the source tree (language files etc.). Written as a path relative to the
+    // working directory, it breaks as soon as the working directory is moved as above
     systemProperty("xaeronav.projectRoot", rootProject.projectDir.absolutePath)
 }
 
-// 配布jarのファイル名にはバージョン（+gitの短縮ハッシュ）が入るので、ビルドのたびに
-// 別名のjarが増える。Gradleが把握しているのはタスクの出力"ファイル"1つだけなので、
-// 隣に残った過去の世代は誰も消さず、build/libsに溜まり続ける。
+// The distribution jar's file name contains the version (+ the short git hash), so each build adds a jar
+// with a different name. Gradle only tracks the task's single output "file", so nobody deletes the past
+// generations left beside it, and they keep piling up in build/libs.
 //
-// 消すのは「同じ成果物の、違うバージョン」だけに限る。同じバージョンの別種
-// （loomが作る -dev や -sources）は残す。
+// Delete only "the same artifact, different version". Other kinds with the same version
+// (-dev or -sources produced by loom) are kept.
 tasks.withType<AbstractArchiveTask>().configureEach {
     archiveVersion = archiveVersionFor(loader, minecraftVersion)
 

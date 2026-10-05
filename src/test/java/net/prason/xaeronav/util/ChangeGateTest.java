@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-/** 「前回と同じ値なら黙る」重複ログ抑制の挙動。 */
+/** Behaviour of duplicate-log suppression that "stays quiet if the value is the same as last time". */
 class ChangeGateTest {
 
     @Test

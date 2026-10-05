@@ -16,98 +16,98 @@ import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * Traverse/Diagonal/Ascend/Descend/Bridgeを扱う。
- * ワーカースレッドから呼ぶ想定 — {@link CellSource}以外のMinecraft状態には一切触れない。
+ * Handles Traverse/Diagonal/Ascend/Descend/Bridge.
+ * Meant to be called from a worker thread; touches no Minecraft state other than {@link CellSource}.
  *
- * <p>探索の内側ではオブジェクトを作らない。座標は{@code int}のまま扱い、隣接ノードの評価結果は
- * その場でノードへ反映する。{@link BlockPos}や身体通過セルのリストを作るのは、最終経路を
- * 組み立てるときだけに限る（探索中に作ると、展開したノード数×十数個のゴミが毎回生まれ、
- * ワーカースレッド側のGCがメインスレッドごと止めてしまう）。
+ * <p>No objects are created inside the search. Coordinates stay as {@code int}, and the result of
+ * evaluating a neighbor is written straight into the node. {@link BlockPos} and lists of body-passage
+ * cells are only created when assembling the final path (creating them during the search would produce
+ * a dozen-odd pieces of garbage per expanded node every time, and worker-thread GC would stall the main thread too).
  */
 public final class AStarPathfinder {
 
     /**
-     * 打ち切りの主条件。時間ではなく展開ノード数を主条件にすることで、同じ地形・同じ始点終点なら
-     * 常に同じ経路が返る。時間で打ち切ると、その瞬間のマシン負荷で到達点が変わり、
-     * 再計算のたびに表示される経路が変わってしまう。
+     * The primary cutoff condition. Using the expanded node count rather than time as the primary condition
+     * means the same terrain with the same start and end always returns the same path. Cutting off by time
+     * would make the reached point depend on the machine load at that moment, so the displayed path would change on every recalculation.
      */
     public static final int DEFAULT_MAX_EXPANDED_NODES = 100_000;
 
-    /** 想定外に重い地形でワーカースレッドが張り付き続けないための安全弁。通常は展開数上限が先に効く。 */
+    /** Safety valve so a worker thread doesn't stay pinned on unexpectedly heavy terrain. Normally the expansion cap kicks in first. */
     public static final long DEFAULT_TIME_LIMIT_MILLIS = 2_000;
 
     /**
-     * ヒューリスティックに掛ける重み（weighted A*）。1.0なら最短経路を保証する通常のA*。
+     * Weight applied to the heuristic (weighted A*). 1.0 is ordinary A*, which guarantees the shortest path.
      *
-     * <p>1.0のままだと、実コストがヒューリスティックを大きく上回る地形——掘削(石1セルあたり数十tick)や
-     * 遊泳(5.56 tick/マスに対し下限は3.56)——でA*がほぼDijkstraに退化し、展開数の上限が数十マス先で
-     * 尽きる。重みを掛けると最短性の保証は失うが、同じ展開数で辿り着ける距離が大きく伸びる。
-     * 展開数で打ち切る設計なので、重みを掛けても「同じ地形なら同じ経路」は保たれる。
+     * <p>At 1.0, on terrain where the real cost far exceeds the heuristic (digging, at dozens of ticks per stone cell,
+     * or swimming, at 5.56 ticks/block against a lower bound of 3.56), A* nearly degenerates into Dijkstra and the expansion cap
+     * runs out a few dozen blocks ahead. Applying a weight loses the shortest-path guarantee, but greatly extends the distance reachable with the same expansion count.
+     * Since the design cuts off by expansion count, "same terrain, same path" still holds with a weight.
      *
-     * <p>重みを掛けるとヒューリスティックの一貫性が崩れ、展開済みノードのコストが後から改善しうる。
-     * 展開済みを再びオープンセットへ戻すことはしない（{@link PathNode#closed}）ので、各セルの展開は
-     * 高々1回に収まり、経路のコストは最適のこの倍数以内に収まる。
+     * <p>A weight breaks the heuristic's consistency, so the cost of an already-expanded node can improve later.
+     * Expanded nodes are never put back into the open set ({@link PathNode#closed}), so each cell is expanded
+     * at most once, and the path cost stays within this multiple of the optimum.
      */
     public static final double DEFAULT_HEURISTIC_WEIGHT = 1.5;
 
-    /** 落下ブロックが延々と積まれている異常な塔でも1エッジの評価が固まらないようにする安全弁。 */
+    /** Safety valve so evaluating one edge doesn't hang even on an abnormal tower of endlessly stacked falling blocks. */
     private static final int MAX_FALLING_CHAIN_SCAN = 16;
 
     /**
-     * ゴールに到達できなかった場合の到達点候補を、{@code h + g / 係数}という複数の指標で同時に追う。
-     * ヒューリスティック単独で最良の点を選ぶと、ゴールに近いだけで行き止まりの地点（崖の縁など）を
-     * 掴んでしまう。係数が小さいほど「実際に進んだ距離」を重く見る。
+     * Tracks fallback endpoint candidates for when the goal can't be reached, using several metrics {@code h + g / coefficient} at once.
+     * Picking the best point by the heuristic alone grabs dead ends (cliff edges and the like) that are merely
+     * close to the goal. The smaller the coefficient, the more weight "distance actually travelled" gets.
      */
     private static final double[] COEFFICIENTS = {1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0};
 
     /**
-     * 1区間で賭けてよい歩行コスト（tick）。
+     * Walking cost (ticks) one leg is allowed to gamble.
      *
-     * <p><b>これが無いと、ガイドが正確になるほど経路が悪くなる。</b>{@link #COEFFICIENTS}の採点
-     * {@code h + g/c}は、ガイドを定数倍すると答えが変わる——無駄{@code w = g - (h0 - h)}に対する
-     * 実効的な許容度は{@code k/(k - 1/c)}（kはガイドと真値の比）で、ネザーの実測では
-     * k=0.8でλ≒6、k=1.0（完璧なガイド）でλ=3まで緩む。緩むと1区間で遠くまで賭けて
-     * 悪い部分経路に乗る（繋ぎ目5本→2本、1.03倍→1.34倍）。
+     * <p><b>Without this, the more accurate the guide, the worse the path.</b> The {@link #COEFFICIENTS} score
+     * {@code h + g/c} changes its answer when the guide is scaled by a constant: the effective tolerance for waste {@code w = g - (h0 - h)}
+     * is {@code k/(k - 1/c)} (k being the ratio of guide to true value), which in Nether measurements
+     * loosens to λ≈6 at k=0.8 and λ=3 at k=1.0 (a perfect guide). Once loosened, one leg gambles far ahead and
+     * rides a bad partial path (seams 5 → 2, 1.03x → 1.34x).
      *
-     * <p><b>絶対値であることが要点。</b>「貪欲に選んだ場合のコストの何割」にすると、
-     * 貪欲解が遠いほど予算も増えて上限として働かない（実測: 繋ぎ目が2本へ戻り1.22〜1.31倍）。
+     * <p><b>Being an absolute value is the point.</b> Making it "some fraction of the greedily chosen cost"
+     * grows the budget the farther the greedy answer is, so it stops working as a cap (measured: back to 2 seams, 1.22-1.31x).
      */
     private static final double FALLBACK_BUDGET_TICKS = 400.0;
 
     /**
-     * 上限を効かせてよい、元の選択に対する前進距離の下限（割合）。
+     * Lower bound (as a fraction) on forward progress relative to the original choice, below which the cap may not be applied.
      *
-     * <p><b>上限は賭けすぎを止めるためのもので、前進そのものを捨ててよいわけではない。</b>
-     * これが無いと、薄い地図のネザーで梯子の「142ブロック先(6889tick)」が
-     * 「25ブロック先(313tick)」へ差し替わり、先読みを埋めるだけで区間を使い果たす
-     * （{@code NetherThinMapGuideTest}）。0.5まで上げると今度は上限が効くべき場面でも
-     * 効かなくなり、改善が丸ごと消える（実測: k≒1で1.127倍＝現行と同じ）。
+     * <p><b>The cap exists to stop over-gambling; it doesn't license throwing away progress itself.</b>
+     * Without this, on the thin Nether map the ladder's "142 blocks ahead (6889 ticks)" was
+     * replaced with "25 blocks ahead (313 ticks)", and the leg was used up just filling in the lookahead
+     * ({@code NetherThinMapGuideTest}). Raising it to 0.5 in turn stops the cap from working where it should,
+     * and the improvement vanishes entirely (measured: 1.127x at k≈1, same as current).
      */
     private static final double MIN_CAPPED_PROGRESS_SHARE = 0.25;
 
-    /** 上限を効かせるか。{@code NetherFallbackBenchTest}が変更前の挙動と比べるためだけに倒す。 */
+    /** Whether to apply the cap. Turned off only so {@code NetherFallbackBenchTest} can compare against the old behavior. */
     static boolean fallbackBudgetEnabled = true;
 
-    /** これ未満しか進めない暫定経路は提示する価値がない（ブロック）。 */
+    /** A provisional path that advances less than this is not worth presenting (blocks). */
     private static final double MIN_DIST_PATH = 5.0;
 
     /**
-     * 予算内の候補を「差し替える価値がある」と認める前進距離（ブロック）。
-     * {@code PathfindingState#MIN_EXTEND_PROGRESS_BLOCKS}（12）に余裕を持たせた値。
+     * Forward progress (blocks) at which a within-budget candidate is accepted as "worth swapping in".
+     * A value with some margin over {@code PathfindingState#MIN_EXTEND_PROGRESS_BLOCKS} (12).
      *
-     * <p><b>これが無いと掘削地形で這う。</b>予算はtickなので、1ブロックが高く付く地形
-     * （掘削は疾走の約7倍、橋は約11倍）では同じ予算が数ブロックしか買わない。
-     * そこまで出ていない候補は採らず、制限なしの梯子の選択をそのまま使う。
+     * <p><b>Without this, it crawls on digging terrain.</b> The budget is in ticks, so on terrain where a block
+     * is expensive (digging is about 7x sprinting, bridging about 11x) the same budget only buys a few blocks.
+     * Candidates that don't get that far are rejected, and the unrestricted ladder's choice is used as is.
      */
     private static final double MIN_USEFUL_PROGRESS = 16.0;
 
     /**
-     * 平坦地では直進と斜めの組み合わせで 10^-16 オーダーのコスト差が生まれることがある。
-     * この程度の改善のために再伝播・decrease-keyを走らせるのは、得られる経路の質に見合わない。
+     * On flat ground, combinations of straight and diagonal moves can produce cost differences on the order of 10^-16.
+     * Running re-propagation or decrease-key for improvements this small isn't worth it for the resulting path quality.
      */
     private static final double MIN_IMPROVEMENT = 0.01;
 
-    /** 時刻とキャンセルの確認間隔（ノード数）。単調時計の呼び出しも内側では間引く。 */
+    /** Interval (in nodes) for checking the time and cancellation. Calls to the monotonic clock are thinned out internally too. */
     private static final int CHECK_INTERVAL_MASK = (1 << 6) - 1;
 
     private static final int[] CARDINAL_DX = {0, 1, 0, -1};
@@ -120,19 +120,19 @@ public final class AStarPathfinder {
     private final long timeLimitMillis;
     private final double heuristicWeight;
     /**
-     * 層1のcost-to-goを併用するための差し替え口。{@code null}なら{@link #node}が
-     * {@link Heuristic}（既定の幾何学的下限）をそのまま使う。
+     * Hook for also using layer 1's cost-to-go. If {@code null}, {@link #node} uses
+     * {@link Heuristic} (the default geometric lower bound) as is.
      */
     private final CostToGo costToGo;
 
     private @Nullable EdgeSink edgeSink;
 
-    /** 生成した辺を全部{@code sink}へ報告させる（{@link EdgeSink}）。探索を始める前に呼ぶこと。 */
+    /** Has every generated edge reported to {@code sink} ({@link EdgeSink}). Call before starting the search. */
     void edgeSink(@Nullable EdgeSink sink) {
         this.edgeSink = sink;
     }
 
-    /** 展開してよいノードか。{@code null}なら全部。航法グラフが1セクションぶんの辺だけを拾うときに絞る。 */
+    /** Whether a node may be expanded. {@code null} means all. Narrowed when the nav graph collects edges for just one section. */
     @FunctionalInterface
     interface ExpandFilter {
         boolean expandable(int x, int y, int z);
@@ -145,14 +145,14 @@ public final class AStarPathfinder {
     }
 
     /**
-     * {@code seeds}（{@link BlockPos#asLong}）を全部始点にして、開いたノードが尽きるまで展開する。
-     * 辺は{@link #edgeSink}、展開の範囲は{@link #expandFilter}で受け取る・絞ること。
+     * Uses every one of {@code seeds} ({@link BlockPos#asLong}) as a start and expands until the open nodes run out.
+     * Receive edges via {@link #edgeSink} and narrow the expansion range via {@link #expandFilter}.
      *
-     * <p>目的地の列（{@code goalX}・{@code goalZ}）を取るのは、奈落の上の橋を目的地へ近づく向きにしか
-     * 張らない（{@link BuildMoves#addBridge}）ため。全方向に張ると、探索が実際には張らない橋を
-     * グラフだけが知っていて、残りコストを楽観的に見積もる。
+     * <p>The goal column ({@code goalX}, {@code goalZ}) is taken so that bridges over the void are only laid
+     * in the direction approaching the goal ({@link BuildMoves#addBridge}). Laying them in every direction would leave the graph
+     * knowing about bridges the search never actually lays, and the remaining cost would be estimated optimistically.
      *
-     * @return 展開したノードの数。打ち切られたら負
+     * @return the number of nodes expanded; negative if cut off
      */
     int exhaust(long[] seeds, int count, int goalX, int goalZ, BooleanSupplier cancelled) {
         surfaceGoal = false;
@@ -190,154 +190,154 @@ public final class AStarPathfinder {
         return expanded;
     }
 
-    /** 縦走査と、その結果の列ごとの覚え書き。探索1回ぶんで使い捨てる。 */
+    /** Vertical scan and its per-column notes. Thrown away after one search. */
     final ColumnScans scans;
 
-    /** 連続して架けてよい橋の長さ（ブロック）。0なら無制限。{@link CellSource#maxBridgeRunBlocks()}。 */
+    /** Maximum consecutive bridge length (blocks). 0 means unlimited. {@link CellSource#maxBridgeRunBlocks()}. */
     final int maxBridgeRun;
 
     /**
-     * 溶岩の上で効く橋の長さの上限（ブロック）。0なら無制限。{@link RunCaps#effectiveLavaBridgeRun()}が
-     * {@link #maxBridgeRun}との厳しい方を選んだ後の値なので、ここでは単独で比べてよい。
+     * Bridge length cap (blocks) that applies over lava. 0 means unlimited. This is the value after {@link RunCaps#effectiveLavaBridgeRun()}
+     * has picked the stricter of it and {@link #maxBridgeRun}, so it can be compared on its own here.
      */
     final int maxLavaBridgeRun;
 
     /**
-     * 底の無い空虚の上で効く橋の長さの上限（ブロック）。0なら無制限。
-     * {@link #maxLavaBridgeRun}と同じく{@link #maxBridgeRun}を織り込み済み。
+     * Bridge length cap (blocks) that applies over bottomless void. 0 means unlimited.
+     * Like {@link #maxLavaBridgeRun}, {@link #maxBridgeRun} is already folded in.
      */
     final int maxVoidBridgeRun;
 
     /**
-     * この探索が{@link #maxBridgeRun}・{@link #maxLavaBridgeRun}・{@link #maxVoidBridgeRun}を
-     * 理由に橋の移動を1つでも捨てたか。
+     * Whether this search discarded even one bridge move because of {@link #maxBridgeRun}, {@link #maxLavaBridgeRun}, or
+     * {@link #maxVoidBridgeRun}.
      */
     private boolean bridgeRunCapBlocked;
 
-    /** {@link BuildMoves}・自分自身が橋の連続長上限を理由に移動を捨てたときに呼ぶ。 */
+    /** Called when {@link BuildMoves} or this class itself discards a move because of the consecutive bridge length cap. */
     void markBridgeRunCapBlocked() {
         bridgeRunCapBlocked = true;
     }
 
     /**
-     * 経路全体で置いてよい足場の総数。0なら無制限。{@link Tolerances#placedBlockBudget()}。
+     * Total number of footing blocks that may be placed over the whole path. 0 means unlimited. {@link Tolerances#placedBlockBudget()}.
      *
-     * <p>{@link #maxBridgeRun}が連続長なのに対しこちらは累積——短い橋を何度も架ける経路は
-     * 連続長では止まらないが、持ち物は同じだけ減る。
+     * <p>Whereas {@link #maxBridgeRun} is a consecutive length, this is cumulative: a path that lays many short bridges
+     * isn't stopped by the consecutive length, but uses up just as much inventory.
      */
     final int placedBudget;
 
-    /** この探索が{@link #placedBudget}を理由に設置の移動を1つでも捨てたか。 */
+    /** Whether this search discarded even one placement move because of {@link #placedBudget}. */
     private boolean placedBudgetBlocked;
 
-    /** {@link BuildMoves}が設置の総数上限を理由に移動を捨てたときに呼ぶ。 */
+    /** Called when {@link BuildMoves} discards a move because of the total placement cap. */
     void markPlacedBudgetBlocked() {
         placedBudgetBlocked = true;
     }
 
     /**
-     * 足場を1つ置く動作そのものの値段（tick）。既定は
-     * {@link ActionCosts#PLACE_BLOCK_AIM_TICKS}そのもので、<b>持ち物が乏しいときだけ</b>
-     * 呼び出し側が割り増した値を渡す（{@code PathfindingExecutor}の節約の引き直し）。
+     * Price (ticks) of the act of placing one footing block itself. The default is exactly
+     * {@link ActionCosts#PLACE_BLOCK_AIM_TICKS}; <b>only when inventory is scarce</b> does
+     * the caller pass a marked-up value (the {@code PathfindingExecutor} frugal re-plan).
      *
-     * <p><b>割増が掛かるのは置く動作の側だけ</b>で、走行を中断するぶん
-     * （{@link ActionCosts#TERRAIN_EDIT_INTERRUPTION_TICKS}）には掛からない。節約の引き直しが
-     * 減らしたいのは<b>使う枚数</b>なので、枚数に比例する成分だけを割り増すのが筋
-     * ——そして{@code PathfindingExecutor}が割増を差し引いて2つの経路を比べられるのも、
-     * 全ての設置が同じ額だけ膨らんでいるからこそ。
+     * <p><b>The markup applies only to the placing action itself</b>, not to the cost of interrupting the run
+     * ({@link ActionCosts#TERRAIN_EDIT_INTERRUPTION_TICKS}). What the frugal re-plan wants to
+     * reduce is <b>the number of blocks used</b>, so it makes sense to mark up only the component proportional to that count.
+     * And {@code PathfindingExecutor} can subtract the markup and compare the two paths only
+     * because every placement is inflated by the same amount.
      *
-     * <p><b>探索の開始時に決まる一律の値であること。</b>残り枚数で値段を変えると、同じ辺の値段が
-     * 到達経路によって変わってA*の前提が崩れる（{@link PathNode#placedTotal}がノードの同一性に
-     * 入っていないので、なおさら意味を持たない）。
+     * <p><b>It must be a uniform value fixed at the start of the search.</b> Varying the price with the remaining count
+     * would make the same edge's price depend on how it was reached, breaking A*'s assumptions ({@link PathNode#placedTotal} isn't
+     * part of node identity, which makes it even more meaningless).
      *
-     * <p>割り増す向きは安全側——実コストが上がるだけなので、{@link Heuristic}も
-     * {@link CostToGo}のガイドも下限であり続ける。
+     * <p>Marking up is the safe direction: it only raises the real cost, so both {@link Heuristic} and
+     * the {@link CostToGo} guide remain lower bounds.
      */
     final double placementCostTicks;
 
-    /** 持ち物にブロックが無くても設置の移動を作ってよいか。{@link Tolerances#placeWithoutBlocks()}。 */
+    /** Whether placement moves may be generated even with no blocks in the inventory. {@link Tolerances#placeWithoutBlocks()}. */
     final boolean placeWithoutBlocks;
 
-    /** この探索が「置けるブロックを持っていない」を理由に設置の移動を1つでも捨てたか。 */
+    /** Whether this search discarded even one placement move because "no placeable blocks are held". */
     private boolean placementBlockedByEmptyInventory;
 
-    /** {@link BuildMoves}が持ち物切れを理由に設置の移動を捨てたときに呼ぶ。 */
+    /** Called when {@link BuildMoves} discards a placement move because the inventory ran out. */
     void markPlacementBlockedByEmptyInventory() {
         placementBlockedByEmptyInventory = true;
     }
 
-    /** {@link #trimUnfinishedPlacements}が末尾から落とした設置ステップの数。診断用。 */
+    /** Number of placement steps {@link #trimUnfinishedPlacements} dropped from the end. For diagnostics. */
     private int trimmedPlacements;
 
-    /** 落下ダメージを何点まで許容してよいか。{@link CellSource#maxFallDamagePoints()}を上書きできる。 */
+    /** How many points of fall damage to tolerate. Can override {@link CellSource#maxFallDamagePoints()}. */
     final int maxFallDamagePoints;
 
     /**
-     * この探索が、落下ダメージの許容量<b>だけ</b>を理由に着地を捨てたか。
+     * Whether this search discarded a landing <b>solely</b> because of the fall damage tolerance.
      *
-     * <p>立てる床が読めていて、そこへ落ちれば届くのにダメージが許容量を超えていた場合にだけ立てる。
-     * 奈落（{@link #NOTHING_BELOW}）や未ロード（{@link #UNREADABLE_BELOW}）で捨てた場合は立てない
-     * ——そちらは許容量をいくら緩めても着地点が現れないので、探し直しても同じ結果になる。
+     * <p>Set only when a standable floor was readable and falling onto it would reach it, but the damage exceeded the tolerance.
+     * Not set when discarded over the void ({@link #NOTHING_BELOW}) or unloaded terrain ({@link #UNREADABLE_BELOW}),
+     * since no landing appears there however much the tolerance is relaxed, so searching again gives the same result.
      */
     private boolean fallDamageCapBlocked;
 
-    /** {@link GroundMoves}が落下ダメージ許容量を理由に着地を捨てたときに呼ぶ。 */
+    /** Called when {@link GroundMoves} discards a landing because of the fall damage tolerance. */
     void markFallDamageCapBlocked(boolean blocked) {
         fallDamageCapBlocked |= blocked;
     }
 
-    /** 奈落・致死落差の上での跳躍を避けるか。{@link Tolerances#allowRiskyJumps()}の裏返し。 */
+    /** Whether to avoid jumps over the void or lethal drops. The inverse of {@link Tolerances#allowRiskyJumps()}. */
     final boolean avoidRiskyJumps;
 
     /**
-     * この探索が{@link #avoidRiskyJumps}を理由に跳躍を1つでも捨てたか。捨てていなければ、
-     * 許して探し直しても結果は変わらない（{@code bridgeRunCapBlocked}と同じ役割）。
+     * Whether this search discarded even one jump because of {@link #avoidRiskyJumps}. If not,
+     * allowing them and searching again won't change the result (same role as {@code bridgeRunCapBlocked}).
      */
     private boolean riskyJumpBlocked;
 
-    /** {@link GroundMoves}が危険な跳躍の回避設定を理由に移動を捨てたときに呼ぶ。 */
+    /** Called when {@link GroundMoves} discards a move because of the risky-jump avoidance setting. */
     void markRiskyJumpBlocked() {
         riskyJumpBlocked = true;
     }
 
-    /** 頭を水に浸けたまま続けてよい時間（tick）。0なら無制限。{@link CellSource#maxSubmergedTicks()}。 */
+    /** How long (ticks) the head may stay submerged. 0 means unlimited. {@link CellSource#maxSubmergedTicks()}. */
     private final int maxSubmergedTicks;
 
-    /** この探索が{@link #maxSubmergedTicks}を理由に移動を1つでも捨てたか。 */
+    /** Whether this search discarded even one move because of {@link #maxSubmergedTicks}. */
     private boolean submergedRunCapBlocked;
 
-    /** 手前の区間から引き継ぐ累積（橋の連続長・設置数）。 */
+    /** Cumulative values carried over from the previous leg (consecutive bridge length, placement count). */
     private Carryover carried = Carryover.NONE;
 
-    /** ゴールを領域として扱う半径（ブロック）。0なら座標の完全一致。 */
+    /** Radius (blocks) within which the goal is treated as a region. 0 means an exact coordinate match. */
     /**
-     * 領域ゴールの垂直方向の許容幅（ブロック）。水平の{@code goalRadius}とは別に、広めに固定する。
+     * Vertical tolerance (blocks) of a region goal. Fixed wider, separately from the horizontal {@code goalRadius}.
      *
-     * <p>領域ゴールはどれも粗い層が置いた点で、そのYは<b>チャンク代表高さ</b>か直線補間か、
-     * Xaeroの詳細データが読めなかったときの生の推定値でしかない。水平と同じ幅でYを縛ると、
-     * 推定が外れた中間目標は<b>原理的に到達不能</b>になり、それを発見するために毎回ノード上限を
-     * 使い切ることになる（実機ログ: 同じ中継地点(920,584)がY=66とY=81の2通りで出て、
-     * 66の側は3回とも20万ノードを焼いて未到達、81の側は2.8万ノードで到達していた）。
+     * <p>Region goals are all points placed by the coarse layers, and their Y is only a <b>chunk representative height</b>, a linear interpolation,
+     * or a raw estimate made when Xaero's detailed data couldn't be read. Constraining Y to the same width as horizontally makes
+     * an intermediate target with a wrong estimate <b>unreachable in principle</b>, and discovering that uses up the node cap
+     * every time (in-game log: the same relay point (920,584) came out in two variants, Y=66 and Y=81;
+     * the 66 one burned 200k nodes all three times without reaching it, while the 81 one reached it in 28k nodes).
      *
-     * <p>幅は層1が中間目標を置く垂直間隔（{@code CoarseRouter#WAYPOINT_VERTICAL_SPACING_BLOCKS}）に
-     * 揃える——それより細かいYの差は、そもそも層1が表現していない。
+     * <p>The width matches the vertical spacing at which layer 1 places intermediate targets ({@code CoarseRouter#WAYPOINT_VERTICAL_SPACING_BLOCKS});
+     * Y differences finer than that aren't represented by layer 1 in the first place.
      *
-     * <p><b>{@link #node}の{@code radiusAllowance}は水平半径ぶんしか割り引かないので、この垂直許容に
-     * 対してヒューリスティックは許容的ではない</b>——ゴール領域の中にいるノードでも{@code h}が残る
-     * （実測で区間終端の84%にYずれがあり、そこでの{@code h}は最大137tick＝真の残りは0）。
-     * <b>垂直へも割り引く直しは測って否定した。</b>経路の質は6地形どこでも±0.01倍しか動かず
-     * （良くなる地形と悪くなる地形が相殺する）、代わりに区間の終端が地表より下で終わる回数が
-     * 倍増し（広域の10本で3→8）、ネザーでは到達できない経路が1本増えた。中心のYを狙わせること
-     * 自体が、区間の終端を地表へ留めて次の区間に登り直しをさせない働きをしている。
+     * <p><b>{@link #node}'s {@code radiusAllowance} discounts only by the horizontal radius, so the heuristic is not admissible
+     * with respect to this vertical tolerance</b>: {@code h} remains even for nodes inside the goal region
+     * (measured: 84% of leg ends had a Y offset, with {@code h} up to 137 ticks there, while the true remainder was 0).
+     * <b>A fix that also discounts vertically was measured and rejected.</b> Path quality moved only ±0.01x on all 6 terrains
+     * (terrains that improved and ones that got worse cancelled out), while the number of legs ending below the surface
+     * doubled (3 → 8 out of 10 wide-area routes), and one more Nether route became unreachable. Aiming at the center Y
+     * is itself what keeps leg ends on the surface so the next leg doesn't have to climb back up.
      */
     private static final int GOAL_VERTICAL_TOLERANCE_BLOCKS = 24;
 
     private int goalRadius;
 
-    /** {@link CellSource#minDescentTicksPerBlock()}。探索中は不変なので1度だけ読む。 */
+    /** {@link CellSource#minDescentTicksPerBlock()}. Constant during the search, so it is read only once. */
     private final double minDescentPerBlock;
 
-    /** 移動候補生成。探索1回につき1つだけ作る——{@link GroundMoves}のクラスJavadoc参照。 */
+    /** Move candidate generation. Only one is created per search; see the {@link GroundMoves} class Javadoc. */
     private final GroundMoves groundMoves = new GroundMoves(this);
     private final WaterMoves waterMoves = new WaterMoves(this);
     private final BuildMoves buildMoves = new BuildMoves(this);
@@ -345,22 +345,22 @@ public final class AStarPathfinder {
     private final NodeTable nodes = new NodeTable();
 
     /**
-     * ボートに乗った状態のノード。{@link PathNode#boating}が同一性の一部なので、座標が同じでも
-     * 乗っている／いないは別のノードになる。{@link BlockPos#asLong}は64bitを使い切っていて
-     * キーに1bit足せないため、表そのものを分けている。ボートを持っていなければ空のまま。
+     * Nodes in the boating state. {@link PathNode#boating} is part of identity, so even at the same coordinates
+     * riding and not riding are different nodes. {@link BlockPos#asLong} uses all 64 bits,
+     * so no bit can be added to the key, and the table itself is split instead. Stays empty if no boat is held.
      */
     private final NodeTable boatNodes = new NodeTable();
 
-    /** 作ったノードの総数（展開したノードの周りも含む）。 */
+    /** Total number of nodes created (including those around expanded nodes). */
     private int createdNodes;
     private final BinaryHeapOpenSet open = new BinaryHeapOpenSet();
     /**
-     * 終点の候補。<b>同じ梯子を2組</b>——前半は{@link #FALLBACK_BUDGET_TICKS}以内に限った組、
-     * 後半は制限なしの組（＝この変更の前と同じもの）。
+     * Endpoint candidates. <b>Two sets of the same ladder</b>: the first half is the set limited to {@link #FALLBACK_BUDGET_TICKS},
+     * the second half is the unrestricted set (= the same as before this change).
      *
-     * <p>2組持つのが要点。予算内の組だけにすると、制限なしの梯子の後ろ（c=5・c=10）が持っていた
-     * <b>遠くて別方向の候補</b>が消える。あれは近い候補が全部架けかけの橋の上にいるときの
-     * 唯一の逃げ道で、落とすと「経路が1本も出ない」が3つの番人で再発した。
+     * <p>Keeping two sets is the point. With only the within-budget set, the <b>distant candidates in other directions</b>
+     * held by the back of the unrestricted ladder (c=5, c=10) disappear. Those are the only escape when all the near candidates
+     * are on half-built bridges, and dropping them brought back "not a single path comes out" in 3 of the guard tests.
      */
     private final PathNode[] bestSoFar = new PathNode[2 * COEFFICIENTS.length];
     private final double[] bestHeuristic = new double[bestSoFar.length];
@@ -368,38 +368,38 @@ public final class AStarPathfinder {
     int goalX;
     private int goalY;
     int goalZ;
-    // trueなら「y >= surfaceY のセルならどこでもゴール」として探索する（地上優先ナビ用）。
-    // 目的地の真下から一直線に掘るのではなく、周囲のどこからでも地上に出られる経路を許すために
-    // 固定の1点ではなく高さだけを条件にする。
+    // If true, searches treating "any cell with y >= surfaceY" as the goal (for surface-first navigation).
+    // Instead of digging straight up from directly below the goal, the condition is height alone rather than
+    // a fixed single point, to allow paths that reach the surface from anywhere around.
     private boolean surfaceGoal;
     private int surfaceY;
 
     /**
-     * 取り出し順序を「引き分けのときだけ」ずらすための刻み幅（tick）。
+     * Step width (ticks) used to shift the dequeue order "only on ties".
      *
-     * <p>平地でナビの線がL字・階段になるのは、平坦で開けた地形では octile の{@link Heuristic}が
-     * <b>厳密</b>なので経路上で{@code g + h}が一定になり、
-     * {@code f = g + weight*h = 一定 + (weight-1)*h} ＝ <b>hを最も速く減らす手が常に勝つ</b>ため。
-     * 斜め1手はhを{@code DIAGONAL}(5.040)減らし、直進は{@code STRAIGHT}(3.564)しか減らさないので、
-     * 探索は「斜めを全部消化してから直進」へ倒れる。差は{@code (1.5-1)*(5.040-3.564)=0.738 tick/手}。
+     * <p>The nav line on flat ground becomes L-shaped or staircased because on flat, open terrain the octile {@link Heuristic} is
+     * <b>exact</b>, so {@code g + h} is constant along the path, and
+     * {@code f = g + weight*h = constant + (weight-1)*h}, i.e. <b>the move that reduces h fastest always wins</b>.
+     * One diagonal move reduces h by {@code DIAGONAL} (5.040) while a straight move reduces it by only {@code STRAIGHT} (3.564), so
+     * the search tips toward "use up all the diagonals, then go straight". The difference is {@code (1.5-1)*(5.040-3.564)=0.738 ticks/move}.
      *
-     * <p><b>fに直線からのずれを加算してはいけない</b>（2026-08-30に実機で踏んだ）。加算すると
-     * 「線へ引き戻す力」が経路全体に効き続け、直線が地形で塞がれるたびに<b>出ては戻るを繰り返す
-     * 長方形の階段</b>になる。実機エンドの区間で曲がり回数が4→21に増えていた。
+     * <p><b>Never add the deviation from the straight line to f</b> (hit in-game on 2026-08-30). Adding it
+     * keeps a "pull back to the line" force acting across the whole path, so every time terrain blocks the line it becomes a
+     * <b>rectangular staircase that keeps going out and coming back</b>. In an in-game End leg the number of turns rose from 4 to 21.
      *
-     * <p>代わりにfを{@code LINE_TIE_BREAK_TICKS}刻みに<b>量子化</b>し、同じ刻みに入った
-     * ノード同士だけをずれの小さい順に取り出す。刻み(2.0)は上の0.738より大きいので平地の偏りは
-     * 消え、地形を迂回する本物のコスト差（1手＝3.564以上）は刻みを跨ぐので<b>まったく干渉しない</b>。
+     * <p>Instead, f is <b>quantized</b> into steps of {@code LINE_TIE_BREAK_TICKS}, and only nodes falling into
+     * the same step are dequeued in order of smallest deviation. The step (2.0) is larger than the 0.738 above, so the flat-ground bias
+     * disappears, while genuine cost differences from detouring around terrain (3.564 or more per move) cross steps and <b>don't interfere at all</b>.
      */
     private static final double LINE_TIE_BREAK_TICKS = 2.0;
 
-    /** 引き分け内での並べ替え幅。刻みを跨がないよう{@link #LINE_TIE_BREAK_TICKS}より必ず小さく保つ。 */
+    /** Reordering width within a tie. Always kept smaller than {@link #LINE_TIE_BREAK_TICKS} so it never crosses a step. */
     private static final double LINE_TIE_BREAK_FRACTION = 0.9;
 
-    /** ずれがこの値のとき、並べ替え幅のちょうど半分になる（飽和の効き始め、ブロック）。 */
+    /** Deviation at which the reordering is exactly half its width (where saturation starts to take effect, blocks). */
     private static final double LINE_TIE_BREAK_HALF_BLOCKS = 8.0;
 
-    /** 始点→ゴールの直線（XZ平面）。{@link #orderingCost}が使う。長さ0なら無効。 */
+    /** Straight line from start to goal (XZ plane). Used by {@link #orderingCost}. Disabled if its length is 0. */
     private int lineStartX;
     private int lineStartZ;
     private double lineDirX;
@@ -415,32 +415,32 @@ public final class AStarPathfinder {
     }
 
     /**
-     * {@code costToGo}を明示的に指定するコンストラクタ。{@code null}なら
-     * {@link Heuristic}（既定の幾何学的下限）を使う既存の挙動と完全に同じになる。
+     * Constructor that explicitly specifies {@code costToGo}. If {@code null}, it behaves exactly like
+     * the existing behavior using {@link Heuristic} (the default geometric lower bound).
      */
     public AStarPathfinder(CellSource view, SearchLimits limits, CostToGo costToGo) {
         this(view, limits, costToGo, Tolerances.of(view));
     }
 
     /**
-     * 危険の許容量を明示するコンストラクタ。上限のせいで範囲内に道が一本も無くなった場合の、
-     * 詰み回避の探し直しに使う（「マグマの橋も溺れる危険も痛い落下も最後の手段だが、詰みよりは
-     * マシ」という優先順）。
+     * Constructor with explicit risk tolerances. Used for the anti-deadlock re-search when the caps leave
+     * not a single path within range ("lava bridges, drowning risk and painful falls are last resorts, but better
+     * than being stuck" as the order of preference).
      */
     public AStarPathfinder(CellSource view, SearchLimits limits, CostToGo costToGo, Tolerances tolerances) {
         this(view, limits, costToGo, tolerances, 1.0);
     }
 
     /**
-     * 足場を置く手間の値段に掛ける係数を明示するコンストラクタ。{@code 1.0}が既定
-     * （{@link ActionCosts#PLACE_BLOCK_AIM_TICKS}そのもの）。
+     * Constructor that explicitly sets the factor applied to the price of placing footing. {@code 1.0} is the default
+     * (exactly {@link ActionCosts#PLACE_BLOCK_AIM_TICKS}).
      *
-     * <p>持ち物が乏しいときに「置く手数を減らした経路」を探し直すためのもの
-     * （{@code PathfindingExecutor}の節約の引き直し）。<b>上限（{@link #placedBudget}）とは
-     * 役割が違う</b>——上限は実行可能かどうかの線引きで、こちらは実行できる範囲での好みを表す。
+     * <p>For searching again for "a path with fewer placements" when inventory is scarce
+     * (the {@code PathfindingExecutor} frugal re-plan). <b>Its role differs from the cap ({@link #placedBudget})</b>:
+     * the cap draws the line on what's feasible, while this expresses a preference within what's feasible.
      *
-     * @param placementCostScale {@link #placementCostTicks}に掛ける係数。1.0未満は渡さないこと
-     *                           （安くすると{@link CostToGo}のガイドが下限でなくなる）
+     * @param placementCostScale factor applied to {@link #placementCostTicks}. Don't pass less than 1.0
+     *                           (making it cheaper would stop the {@link CostToGo} guide from being a lower bound)
      */
     public AStarPathfinder(CellSource view, SearchLimits limits, CostToGo costToGo, Tolerances tolerances,
                             double placementCostScale) {
@@ -454,12 +454,12 @@ public final class AStarPathfinder {
         this.placeWithoutBlocks = tolerances.placeWithoutBlocks();
         this.avoidRiskyJumps = !tolerances.allowRiskyJumps();
         this.maxFallDamagePoints = tolerances.maxFallDamagePoints();
-        // 生成器は同じセルを何度も読み直す（1ノードあたり197〜413回の読みに対し、触れる列は
-        // 探索全体で2万本ほど）。ここで包んでおくと、2回目以降がハッシュ表を引かずに済む
+        // The generator rereads the same cell many times (197-413 reads per node, while the columns touched
+        // over the whole search number about 20k). Wrapping here lets the second and later reads skip the hash table
         this.view = new MemoCells(view);
-        // 落下ダメージの許容量を緩めたら下降の下限も一緒に緩める。許せる落差が伸びるほど
-        // 1ブロックあたりの実コストは終端速度へ近づいて安くなるので、元の下限のままでは
-        // ヒューリスティックが実コストを上回りうる（＝非許容）
+        // If the fall damage tolerance is relaxed, relax the descent lower bound with it. The longer the allowed drop,
+        // the closer the per-block real cost gets to terminal velocity and the cheaper it becomes, so with the original lower bound
+        // the heuristic could exceed the real cost (= inadmissible)
         this.minDescentPerBlock = view.minDescentTicksPerBlock(this.maxFallDamagePoints);
         this.maxExpandedNodes = limits.maxExpandedNodes();
         this.timeLimitMillis = limits.timeLimitMillis();
@@ -469,94 +469,94 @@ public final class AStarPathfinder {
     }
 
     /**
-     * この探索が、連続する橋の長さの上限を理由に移動を捨てたか。捨てていない場合、
-     * 上限を外して探し直しても結果は変わらない。
+     * Whether this search discarded a move because of the consecutive bridge length cap. If not,
+     * removing the cap and searching again won't change the result.
      */
     public boolean bridgeRunCapBlocked() {
         return bridgeRunCapBlocked;
     }
 
     /**
-     * この探索が、持ち物のブロック数の予算を理由に設置の移動を捨てたか。捨てていない場合、
-     * 予算を外して探し直しても結果は変わらない。
+     * Whether this search discarded a placement move because of the inventory block budget. If not,
+     * removing the budget and searching again won't change the result.
      */
     public boolean placedBudgetBlocked() {
         return placedBudgetBlocked;
     }
 
     /**
-     * 手前の区間から引き継いだ設置数（{@link Carryover#placedBlocks()}）。
+     * Placement count carried over from the previous leg ({@link Carryover#placedBlocks()}).
      *
-     * <p>呼び出し側が「この経路は持ち物のどれだけを使うのか」を出すのに要る——この探索が返す
-     * 経路の設置数だけでは、区間に割って解いたときに<b>いつも手持ちに余裕があるように見える</b>。
+     * <p>The caller needs it to report "how much of the inventory this path uses": the placement count of
+     * the path this search returns alone would <b>always make it look like there's plenty in hand</b> when solved in legs.
      */
     public int carriedPlacedBlocks() {
         return carried.placedBlocks();
     }
 
     /**
-     * この探索が「置けるブロックを持っていない」を理由に設置の移動を捨てたか。捨てていない場合、
-     * 持たない前提を開いて探し直しても結果は変わらない。
+     * Whether this search discarded a placement move because "no placeable blocks are held". If not,
+     * opening up the no-blocks assumption and searching again won't change the result.
      */
     public boolean placementBlockedByEmptyInventory() {
         return placementBlockedByEmptyInventory;
     }
 
     /**
-     * この探索が、連続する潜水の長さの上限を理由に移動を捨てたか。捨てていない場合、
-     * 上限を外して探し直しても結果は変わらない。
+     * Whether this search discarded a move because of the consecutive submersion length cap. If not,
+     * removing the cap and searching again won't change the result.
      */
     public boolean submergedRunCapBlocked() {
         return submergedRunCapBlocked;
     }
 
     /**
-     * この探索が「外したら死ぬ跳躍」を避けたことで移動を捨てたか。捨てていない場合、
-     * 許して探し直しても結果は変わらない。
+     * Whether this search discarded a move by avoiding "jumps that kill on a miss". If not,
+     * allowing them and searching again won't change the result.
      */
     public boolean riskyJumpBlocked() {
         return riskyJumpBlocked;
     }
 
     /**
-     * {@link #trimUnfinishedPlacements}が経路の末尾から落とした設置ステップの数。
+     * Number of placement steps {@link #trimUnfinishedPlacements} dropped from the end of the path.
      *
-     * <p>診断のためだけにある。切り落とした後の経路を見ると「橋を一本も架けなかった」と
-     * 「橋を架けたが渡り切れなかった」が同じ<b>設置0</b>に見えてしまい、原因が正反対なのに
-     * 区別が付かない。
+     * <p>Exists only for diagnostics. Looking at the trimmed path, "laid no bridge at all" and
+     * "laid a bridge but couldn't get across" both look like the same <b>0 placements</b>, even though the causes are opposite,
+     * and they can't be told apart.
      */
     public int trimmedPlacements() {
         return trimmedPlacements;
     }
 
     /**
-     * 打ち切り条件（展開数上限・時間上限・cancelled）のいずれかに達したら、その時点で最も有望な
-     * 暫定経路を返す。
+     * Once any cutoff condition (expansion cap, time cap, cancelled) is reached, returns the most promising
+     * provisional path at that point.
      */
     public PathResult search(BlockPos start, BlockPos goal, BooleanSupplier cancelled) {
         return search(start, goal, cancelled, Carryover.NONE, 0);
     }
 
     /**
-     * ゴールを「点」ではなく<b>半径{@code goalRadius}の領域</b>として探索する。
+     * Searches treating the goal not as a "point" but as a <b>region of radius {@code goalRadius}</b>.
      *
-     * <p>長距離ルートの中間目標は、チャンク平均から作った代表点（層1）や、ルート上の直線補間点
-     * （{@code pointAlong}）でしかない。地形とは無関係な人工的な点なので、そこへ座標ぴったり寄せる
-     * ために本来不要な遠回りが生まれる——中継地点は<b>通る場所</b>ではなく<b>向かう方角</b>である、
-     * というのが層1の役割の定義そのもの。
+     * <p>The intermediate targets of a long-distance route are merely representative points built from chunk averages (layer 1) or
+     * linearly interpolated points along the route ({@code pointAlong}). They are artificial points unrelated to the terrain, so snapping to the exact coordinates
+     * creates detours that aren't really needed: a relay point is a <b>direction to head in</b>, not a <b>place to pass through</b>,
+     * which is the very definition of layer 1's role.
      *
-     * <p>{@link #searchToSurface}が「y &gt;= surfaceY ならどこでもゴール」として既にこの形を取っている。
-     * その一般化にあたる。本来の目的地に対しては0を渡すこと（ユーザーが指した点は動かせない）。
+     * <p>{@link #searchToSurface} already takes this form as "anywhere with y &gt;= surfaceY is the goal".
+     * This is its generalization. Pass 0 for the real destination (the point the user picked can't be moved).
      */
     public PathResult search(BlockPos start, BlockPos goal, BooleanSupplier cancelled, int goalRadius) {
         return search(start, goal, cancelled, Carryover.NONE, goalRadius);
     }
 
     /**
-     * 手前の区間から累積を引き継いで探索する（{@link Carryover}）。
+     * Searches carrying over the cumulative values from the previous leg ({@link Carryover}).
      *
-     * <p>経路は区間ごとに別の探索器で解かれるので、引き継がないと<b>区間の数だけ上限が復活する</b>
-     * ——橋の連続長は境目で0に戻り、持ち物の予算は区間ごとに満額になる。
+     * <p>Each leg of a path is solved by a separate pathfinder, so without carrying over <b>the caps reset once per leg</b>:
+     * the consecutive bridge length goes back to 0 at the boundary, and the inventory budget is full again for each leg.
      */
     public PathResult search(BlockPos start, BlockPos goal, BooleanSupplier cancelled, Carryover carried,
                               int goalRadius) {
@@ -570,14 +570,14 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 「y &gt;= surfaceY のセルならどこでもゴール」として探索する。地下から地上への移動を、
-     * 出発地の真上を一直線に掘る1点ゴールではなく、周囲のどこからでも地上に出られる経路として
-     * 探すためのもの（地上優先ナビ用、{@link net.prason.xaeronav.client.PathfindingState}参照）。
+     * Searches treating "any cell with y &gt;= surfaceY" as the goal. This is for finding the move from underground to the surface
+     * not as a single-point goal that digs straight up above the start, but as a path that can reach the surface from anywhere
+     * around (for surface-first navigation; see {@link net.prason.xaeronav.client.PathfindingState}).
      *
-     * <p>ヒューリスティックは各ノード自身の(x, z)を目的地の(x, z)として扱う（水平距離0扱い）ことで、
-     * 「あと何マス上がるか」だけの下限値になる。実際の残りコストには水平移動が乗ることがあるので
-     * 下限であり続け、A*の最適性は保たれる（水平方向には実質Dijkstraになり、探索が広がりやすくなる）。
-     * すでに{@code surfaceY}以上にあるノードはそれ自体がゴールなので0にする（{@link #node}）。
+     * <p>The heuristic treats each node's own (x, z) as the goal's (x, z) (horizontal distance 0),
+     * making it a lower bound on "how many more blocks to climb" only. The real remaining cost may include horizontal movement, so
+     * it stays a lower bound and A* optimality holds (horizontally it's effectively Dijkstra, so the search tends to spread out).
+     * Nodes already at or above {@code surfaceY} are goals themselves, so they get 0 ({@link #node}).
      */
     public PathResult searchToSurface(BlockPos start, int surfaceY, BooleanSupplier cancelled) {
         this.surfaceGoal = true;
@@ -586,11 +586,11 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 取り出し順序を決める値。{@code f}を{@link #LINE_TIE_BREAK_TICKS}刻みに量子化し、
-     * 同じ刻みの中だけ「始点→ゴールの直線に近い順」に並べる。
+     * Value that decides the dequeue order. Quantizes {@code f} into steps of {@link #LINE_TIE_BREAK_TICKS} and,
+     * only within the same step, orders by "closest to the start-to-goal line".
      *
-     * <p>加算ではなく量子化なのが要点。刻みを跨ぐコスト差（＝地形を迂回する本物の理由）には
-     * 一切触れず、刻みの中の引き分けだけを解く。
+     * <p>Quantizing rather than adding is the point. Cost differences that cross steps (= genuine reasons to detour around terrain)
+     * are left completely untouched; only ties within a step are broken.
      */
     private double orderingCost(double totalCost, int x, int z) {
         if (!lineTieBreak || LINE_TIE_BREAK_FRACTION <= 0.0) {
@@ -598,7 +598,7 @@ public final class AStarPathfinder {
         }
         double dx = x - lineStartX;
         double dz = z - lineStartZ;
-        // 方向ベクトルは単位長なので、外積の絶対値がそのまま垂線の長さ
+        // The direction vector has unit length, so the absolute value of the cross product is the perpendicular distance as is
         double deviation = Math.abs(dx * lineDirZ - dz * lineDirX);
         double tie = LINE_TIE_BREAK_FRACTION * LINE_TIE_BREAK_TICKS
                 * (deviation / (deviation + LINE_TIE_BREAK_HALF_BLOCKS));
@@ -606,8 +606,8 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 始点→ゴールの直線を用意する（{@link #LINE_TIE_BREAK_TICKS}用）。
-     * ゴールが面（{@link #searchToSurface}）のときと、始点とゴールが同じ列のときは無効にする。
+     * Prepares the start-to-goal line (for {@link #LINE_TIE_BREAK_TICKS}).
+     * Disabled when the goal is a surface ({@link #searchToSurface}) or the start and goal are in the same column.
      */
     private void prepareDeviationLine(BlockPos start) {
         lineStartX = start.getX();
@@ -624,15 +624,15 @@ public final class AStarPathfinder {
 
     private PathResult runSearch(BlockPos start, BooleanSupplier cancelled) {
         prepareDeviationLine(start);
-        // 既にボートに乗っているなら、乗っている状態から始める。乗り込む1手のコストをもう一度
-        // 計上すると、残りの水面が短い場面で「降りて泳いだ方が安い」という案内になる。
-        // 水面のセルであることも確かめるのは、乗ったまま陸に乗り上げている場合を除くため
+        // If already riding a boat, start in the riding state. Charging the one-move cost of boarding again
+        // would make the guidance say "getting off and swimming is cheaper" when little water surface remains.
+        // It also checks that this is a water-surface cell to exclude the case of a boat beached on land while riding
         boolean startBoating = view.ridingBoat()
                 && isBoatSurface(start.getX(), start.getY(), start.getZ());
         PathNode startNode = node(start.getX(), start.getY(), start.getZ(), startBoating);
         startNode.bridgeRun = carried.bridgeRun();
-        // 手前の区間で使うと決まっている枚数を先に計上する。これが無いと、区間ごとに予算が
-        // 満額になって合計では手持ちの何倍も置く経路が出る
+        // Charge up front the count the previous leg has committed to using. Without this, the budget is full
+        // for each leg and paths come out that place many times what's in hand in total
         startNode.placedTotal = carried.placedBlocks();
         startNode.cost = 0.0;
         startNode.combinedCost = orderingCost(heuristicWeight * startNode.estimatedCostToGoal,
@@ -644,8 +644,8 @@ public final class AStarPathfinder {
         long deadline = MonotonicTime.millis() + timeLimitMillis;
         int expanded = 0;
 
-        // openが尽きるまで回り切ったなら、探索範囲の中に到達手段が無かったということ。
-        // 予算切れと区別しないと、意味の無い再挑戦を延々と仕掛けることになる
+        // If the loop ran until open was exhausted, there was no way to reach the goal within the search range.
+        // Without distinguishing this from running out of budget, pointless retries would be set up endlessly
         PathResult.Termination termination = PathResult.Termination.EXHAUSTED;
         while (!open.isEmpty()) {
             if (expanded >= maxExpandedNodes) {
@@ -677,24 +677,24 @@ public final class AStarPathfinder {
         return buildResult(startNode, selectFallback(startNode), termination, expanded);
     }
 
-    /** ゴール判定と、スナップショットへの到達可能性の判定とで共有する垂直の許容幅。 */
+    /** Vertical tolerance shared by the goal check and the reachability check against the snapshot. */
     public static int goalVerticalRadius(int goalRadius) {
         return goalRadius <= 0 ? 0 : Math.max(goalRadius, GOAL_VERTICAL_TOLERANCE_BLOCKS);
     }
 
     private boolean reachedGoal(PathNode node) {
-        // 高さだけでは天井の下も地上に数えてしまう。深い洞窟の坑道は水平に長く、
-        // 既定の地上高より上を通ることが珍しくない。そこで中継を終えると、洞窟の中から
-        // 目的地へ直行する経路＝避けたかった一直線の掘り進みに戻る
+        // Height alone also counts areas under a ceiling as surface. Deep cave tunnels run long horizontally
+        // and often pass above the default surface height. Ending the relay there brings back the path
+        // that heads straight from inside the cave to the goal = the straight-line digging we wanted to avoid
         if (surfaceGoal) {
             return node.y >= surfaceY && node.y >= view.surfacedY(node.x, node.z);
         }
         if (goalRadius <= 0) {
             return node.x == goalX && node.y == goalY && node.z == goalZ;
         }
-        // 球ではなく「水平の円柱」で見る。中間目標のYはチャンク代表高さや直線補間でしか決まって
-        // おらず、水平座標より遥かに当てにならない——同じ半径でYを縛ると、地形なりに数マス
-        // 上下しただけの正しい経路を弾いてしまう
+        // Look at a "horizontal cylinder" rather than a sphere. The Y of an intermediate target is only fixed by the chunk
+        // representative height or linear interpolation and is far less reliable than the horizontal coordinates; constraining Y with the same radius
+        // would reject correct paths that merely go up or down a few blocks following the terrain
         int dx = node.x - goalX;
         int dz = node.z - goalZ;
         return dx * dx + dz * dz <= goalRadius * goalRadius
@@ -702,29 +702,29 @@ public final class AStarPathfinder {
     }
 
     /**
-     * ゴールに届かなかったときの到達点を選ぶ。まず{@link #selectByLadder}で係数の小さい
-     * （＝実際に進んだ距離を重く見る）ものから順に、始点から{@link #MIN_DIST_PATH}以上離れている
-     * 候補を採る。どれも届かない場合は始点自身を返し、空の経路＝「提示できる経路なし」として扱う。
+     * Picks the endpoint when the goal wasn't reached. First, via {@link #selectByLadder}, takes the first candidate,
+     * starting from the smallest coefficient (= weighting distance actually travelled), that is at least {@link #MIN_DIST_PATH}
+     * from the start. If none qualifies, returns the start itself, treated as an empty path = "no path to present".
      *
-     * <p>その選択が{@link #FALLBACK_BUDGET_TICKS}より多く賭けている場合だけ、予算内の候補へ
-     * 差し替える。<b>ガイドが正確になるほど採点{@code h + g/c}が賭けに寛容になる</b>のを
-     * ここで止める——差し替えの条件は{@link #FALLBACK_BUDGET_TICKS}の項に書いてある。
+     * <p>Only when that choice gambles more than {@link #FALLBACK_BUDGET_TICKS} is it swapped for
+     * a within-budget candidate. This is where <b>the score {@code h + g/c} becoming more tolerant of gambling as the guide gets more accurate</b>
+     * is stopped; the swap conditions are described under {@link #FALLBACK_BUDGET_TICKS}.
      *
-     * <p><b>距離は{@link #trimUnfinishedPlacements}で切り落とした後で測る。</b>候補そのものは
-     * 架けかけの橋の上にいることがあり、その橋は渡り切れると証明できていないので提示できない
-     * ——切る前の距離で選ぶと、<b>切った後には何も残らない候補</b>を掴んで空の経路を返してしまう。
-     * 実測（{@code nether_wide}、溶岩の海の岸）: 7つの候補が全部30手ぶんの橋の上に乗っていて、
-     * 10万ノードを使ったうえで<b>線が1本も出ない</b>——実機の「展開47万・ステップ数0」がこれ。
-     * 岸まで戻して測れば、次の候補（徒歩で進める向き）へ移れる。
+     * <p><b>Distance is measured after trimming with {@link #trimUnfinishedPlacements}.</b> A candidate itself
+     * may stand on a half-built bridge, and since that bridge isn't proven to be crossable it can't be presented;
+     * choosing by the untrimmed distance grabs <b>a candidate with nothing left after trimming</b> and returns an empty path.
+     * Measured ({@code nether_wide}, the shore of a lava sea): all 7 candidates were on 30 moves' worth of bridge, and
+     * after using 100k nodes <b>not a single line came out</b>; that's the in-game "470k expanded, 0 steps".
+     * Measuring after moving back to the shore lets it move on to the next candidate (a direction that can be walked).
      */
     private PathNode selectFallback(PathNode startNode) {
         PathNode ladder = selectByLadder(startNode);
-        // 現行の選ぶ点が予算内なら、そこは賭けすぎていない＝触る理由が無い
+        // If the current choice is within budget, it isn't over-gambling = no reason to touch it
         if (!fallbackBudgetEnabled || ladder.cost <= FALLBACK_BUDGET_TICKS) {
             return ladder;
         }
-        // 賭けすぎているときだけ上限を効かせる。予算内の梯子から、継ぎ足しが成立するだけ
-        // 前へ出ていて、かつ元の選択の前進を大きくは捨てない最初の候補へ差し替える
+        // Apply the cap only when over-gambling. Swap to the first candidate in the within-budget ladder that is
+        // far enough ahead for an extension to succeed and doesn't throw away much of the original choice's progress
         double ladderProgress = horizontalFrom(startNode, ladder);
         for (int i = 0; i < COEFFICIENTS.length; i++) {
             PathNode landed = backOffUnfinishedBridge(bestSoFar[i]);
@@ -737,7 +737,7 @@ public final class AStarPathfinder {
         return ladder;
     }
 
-    /** 現行の選び方。係数の小さい（＝実際に進んだ距離を重く見る）ものから順に。 */
+    /** The current way of choosing. In order starting from the smallest coefficient (= weighting distance actually travelled). */
     private PathNode selectByLadder(PathNode startNode) {
         for (int i = COEFFICIENTS.length; i < bestSoFar.length; i++) {
             PathNode landed = backOffUnfinishedBridge(bestSoFar[i]);
@@ -749,9 +749,9 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 戻した後の点が、ガイドの上で始点より目的地に近いか。候補は{@code h + g/c < h(始点)}で選ぶので戻す前は必ず満たすが、
-     * 架けかけの橋から岸へ戻すと満たさないことがある。満たさない点を採ると、2つの岸が互いを終点に選び合って
-     * 継ぎ足しが往復する（{@code NetherWideRouteTest}、ネザーの溶岩の岸の5手ずつの往復）。
+     * Whether the point after moving back is closer to the goal than the start, as measured by the guide. Candidates are chosen with {@code h + g/c < h(start)}, so this always holds before moving back,
+     * but moving back from a half-built bridge to the shore may break it. Taking a point that fails it makes two shores pick each other as endpoints
+     * and the extension oscillates ({@code NetherWideRouteTest}, back and forth 5 moves at a time on a Nether lava shore).
      */
     private static boolean closerOnGuide(PathNode startNode, PathNode landed) {
         return landed.estimatedCostToGoal < startNode.estimatedCostToGoal;
@@ -764,9 +764,9 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 継ぎ足しが成立するだけ前へ出たか。<b>水平で測る</b>——
-     * {@code PathfindingState#MIN_EXTEND_PROGRESS_BLOCKS}が水平距離で見ているので、
-     * ここで縦を混ぜると、縦に動いただけの区間を「前へ出た」と数えて繋いでもらえない尻尾を作る。
+     * Whether it got far enough ahead for an extension to succeed. <b>Measured horizontally</b>:
+     * {@code PathfindingState#MIN_EXTEND_PROGRESS_BLOCKS} looks at horizontal distance, so
+     * mixing in vertical here would count a leg that only moved vertically as "got ahead" and create a tail that won't be joined.
      */
     private static boolean movedForward(PathNode startNode, PathNode landed) {
         double dx = landed.x - startNode.x;
@@ -781,7 +781,7 @@ public final class AStarPathfinder {
         return dx * dx + dy * dy + dz * dz > blocks * blocks;
     }
 
-    /** 末尾で自分が置いた足場に乗っている間、手前へ戻る（{@link #trimUnfinishedPlacements}と同じ範囲）。 */
+    /** Moves back while standing on footing it placed itself at the end (same range as {@link #trimUnfinishedPlacements}). */
     private static PathNode backOffUnfinishedBridge(PathNode node) {
         PathNode cursor = node;
         while (cursor.previous != null
@@ -805,8 +805,8 @@ public final class AStarPathfinder {
         }
         Collections.reverse(steps);
         if (trimCapViolations(steps)) {
-            // 同一座標へ異なる資源状態で着く候補が統合されても、安全上限を超えた完成経路は
-            // 外へ出さない。上位runnerはblockedフラグを見て緩和段を選べる。
+            // Even if candidates reaching the same coordinates with different resource states are merged, a completed path
+            // exceeding the safety cap is never released. The higher-level runner can pick a relaxation stage from the blocked flags.
             termination = PathResult.Termination.EXHAUSTED;
         }
         if (termination != PathResult.Termination.REACHED_GOAL) {
@@ -815,7 +815,7 @@ public final class AStarPathfinder {
         return new PathResult(steps, termination, expanded, createdNodes);
     }
 
-    /** 探索中の近似状態が取りこぼしても、公開する経路の設置上限を最後に必ず守る。 */
+    /** Always enforces the placement cap of the published path at the end, even if the approximate state during the search missed it. */
     private boolean trimCapViolations(List<PathStep> steps) {
         int bridgeRun = carried.bridgeRun();
         int placed = carried.placedBlocks();
@@ -847,16 +847,16 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 打ち切られた経路の末尾から、自分で置いた足場に乗っているステップを落とす。
+     * Drops the steps at the end of a cut-off path that stand on footing it placed itself.
      *
-     * <p>ゴールへ届かなかった経路は「そこまでは進める」という意味しか持たないが、末尾が橋の途中だと
-     * 意味が変わる——<b>ブロックを消費して、渡り切れるかも分からない行き止まりに立たされる</b>。
-     * 岸で終わらせておけば、続きは新しいチャンクが読まれた後の継ぎ足しが引き受ける。
-     * 「渡り切れると証明できた橋しか案内しない」がこれで成り立つ。
+     * <p>A path that didn't reach the goal only means "you can get this far", but if it ends mid-bridge
+     * the meaning changes: <b>you spend blocks and end up stranded at a dead end you may not be able to cross</b>.
+     * If it ends on the shore, the extension after new chunks are read takes over from there.
+     * This is what makes "only guide across bridges proven to be crossable" hold.
      *
-     * <p>提示側ではなく探索の出口で切るのが要点。ここで切れば、線の描画・末端への到達判定・
-     * 継ぎ足しの起点・区間をまたぐ連続長の引き継ぎが<b>全部同じ経路を見る</b>。
-     * 描画だけ切ると、案内の矢印が線の無い方向を指す。
+     * <p>Cutting at the search's exit rather than on the presentation side is the point. Cutting here means line drawing, the end-reached check,
+     * the extension's starting point and the carry-over of consecutive length across legs <b>all see the same path</b>.
+     * Cutting only the drawing makes the guidance arrow point where there's no line.
      */
     private void trimUnfinishedPlacements(List<PathStep> steps) {
         int end = steps.size();
@@ -868,9 +868,9 @@ public final class AStarPathfinder {
     }
 
     /**
-     * この移動で実際に壊すセル。コスト計算とまったく同じ関数へ収集用のリストを渡して求める。
-     * 別途「掘る必要があるセル」を判定し直すと、コストは払ったのに表示されないセル（頭上の
-     * 落下ブロック連鎖など）や、その逆が生まれる。
+     * Cells this move actually breaks. Found by passing a collecting list into exactly the same function as the cost calculation.
+     * Separately re-deciding "cells that need digging" would produce cells whose cost was paid but that aren't shown (such as
+     * a chain of falling blocks overhead), or the reverse.
      */
     private List<BlockPos> digCells(PathNode from, PathNode to) {
         List<BlockPos> cells = new ArrayList<>();
@@ -880,13 +880,13 @@ public final class AStarPathfinder {
                 columnCost(from.x, from.y + 2, from.y + 2, from.z, cells);
                 standingBodyCost(to.x, to.y, to.z, cells);
             }
-            // 斜め昇降は掘削を許可しない（addDiagonalAscend/addDiagonalDescendがclearWithoutDiggingで
-            // 事前に確認済み）。デフォルト分岐に流すと、頭上の落下ブロック連鎖を拾って「払っていない
-            // 掘削コスト」を表示してしまいうる
+            // Diagonal ascend/descend doesn't allow digging (addDiagonalAscend/addDiagonalDescend already checked
+            // with clearWithoutDigging). Falling into the default branch could pick up a falling-block chain overhead and show
+            // "digging cost that wasn't paid"
             case DIAGONAL_ASCEND, DIAGONAL_DESCEND -> {
             }
-            // 登るために掘るのは新しい頭になるセルだけ。到着地点の身体2セルを数えると、
-            // 元の頭（既に通れることが確認済み）まで掘削セルとして表示されてしまう
+            // Climbing only digs the cell that becomes the new head. Counting the two body cells at the arrival point
+            // would also show the old head (already confirmed passable) as a dug cell
             case PILLAR -> columnCost(from.x, from.y + 2, from.y + 2, from.z, cells);
             default -> standingBodyCost(to.x, to.y, to.z, cells);
         }
@@ -904,35 +904,35 @@ public final class AStarPathfinder {
         if (existing != null) {
             return existing;
         }
-        // 地上ゴールでは、すでにsurfaceY以上のセルはそれ自体がゴール（残コスト0）。
-        // 素通しでsurfaceYを渡すと、そこから下りる分を残コストとして数えてしまい過大評価になる。
-        // costToGoは特定のゴール座標に紐付いたテーブルなので、ゴールが1点に定まらない
-        // surfaceGoalモードでは使わない
+        // With a surface goal, a cell already at or above surfaceY is itself a goal (remaining cost 0).
+        // Passing surfaceY straight through would count descending from there as remaining cost, overestimating.
+        // costToGo is a table tied to a specific goal coordinate, so it isn't used in surfaceGoal mode,
+        // where the goal isn't fixed to a single point
         double heuristic;
         boolean guideHole = false;
         if (surfaceGoal) {
             heuristic = Heuristic.estimate(x, y, z, x, Math.max(y, surfaceY), z);
         } else {
-            // ボートに乗っているノードは水平の下限が漕ぎ速度まで下がる。疾走のまま見積もると
-            // ボートの枝に対して非許容になり、乗り込む1手の一時コストと相まって一度も展開されない
+            // For a node riding a boat, the horizontal lower bound drops to paddling speed. Estimating at sprint speed
+            // would be inadmissible for the boat branch, and together with the one-time boarding cost it would never be expanded
             heuristic = Heuristic.estimate(x, y, z, goalX, goalY, goalZ, minDescentPerBlock,
                     boating ? ActionCosts.PADDLE_ONE_BLOCK : ActionCosts.SPRINT_ONE_BLOCK);
-            // 領域ゴールでは、中心までの見積もりは半径ぶん過大＝非許容になる。
-            // 最安の水平移動で半径ぶん詰められるとみなして差し引く（searchToSurfaceが
-            // 「あと何マス上がるか」だけの下限へ書き換えているのと同じ考え方）
+            // With a region goal, the estimate to the center overestimates by the radius = inadmissible.
+            // Subtract it, assuming the radius can be closed with the cheapest horizontal movement (same idea as
+            // searchToSurface rewriting it into a lower bound on "how many more blocks to climb" only)
             double radiusAllowance = goalRadius * ActionCosts.SPRINT_ONE_BLOCK;
             heuristic = Math.max(0.0, heuristic - radiusAllowance);
             if (costToGo != null) {
-                // 両者の大きい方を使う。Heuristicは幾何学的な下限、costToGoは層1が壁や溶岩の海を
-                // 回避したぶんだけ現実に近い見積もり。
+                // Use the larger of the two. Heuristic is a geometric lower bound; costToGo is an estimate closer to reality
+                // by the amount layer 1 detoured around walls and lava seas.
                 //
-                // <b>ガイド側にも半径ぶんを差し引く。</b>領域ゴールで差し引いた下限を、そのまま
-                // 中心までを測るガイドで上書きしては元に戻してしまう。
+                // <b>Subtract the radius on the guide side too.</b> Overwriting the lower bound reduced for the region goal
+                // with a guide measuring to the center would undo it.
                 //
-                // ガイドは崖ペナルティ等の「発明された」重みを含むので厳密な下限ではなく、
-                // 上回った瞬間に経路の形が変わる。層1の解像度に由来する上振れは
-                // {@code CoarseRouter#centerOffsetCost}が落としてある——あれが無いと
-                // hに16ブロック周期の鋸歯が乗り、経路がチャンク境界へ吸い寄せられて直角になる
+                // The guide includes "invented" weights such as cliff penalties, so it isn't a strict lower bound,
+                // and the path's shape changes the moment it exceeds the real cost. Overshoot caused by layer 1's resolution
+                // is removed by {@code CoarseRouter#centerOffsetCost}; without that,
+                // h gets a 16-block-period sawtooth, and paths get pulled toward chunk boundaries and turn at right angles
                 double guide = costToGo.searchEstimate(x, y, z);
                 guideHole = Double.isNaN(guide);
                 heuristic = Math.max(heuristic,
@@ -965,7 +965,7 @@ public final class AStarPathfinder {
             groundMoves.addDiagonalAscend(current, DIAGONAL_DX[i], DIAGONAL_DZ[i]);
             groundMoves.addDiagonalDescend(current, DIAGONAL_DX[i], DIAGONAL_DZ[i]);
         }
-        // 上下の泳ぎ・昇降は、いま水中／梯子の中にいるときしか始まらない。それ以外では判定ごと省く
+        // Vertical swimming and climbing only start when currently in water or on a ladder. Otherwise the checks are skipped entirely
         long standingCell = view.cell(current.x, current.y, current.z);
         if (CellData.water(standingCell)) {
             waterMoves.addSwimUp(current);
@@ -982,8 +982,8 @@ public final class AStarPathfinder {
             groundMoves.addClimbDown(current);
         }
         buildMoves.addPillar(current);
-        // 踏み出した先の下に何があるかは落下と設置で共通なので、方向ごとに1度だけ辿る。
-        // ブロックの設置を最後に評価するのは、同コストなら地形をそのまま使う移動を採用させるため
+        // What lies below the cell stepped into is shared by falling and placing, so it's traced only once per direction.
+        // Block placement is evaluated last so that, at equal cost, moves that use the terrain as is are preferred
         for (int i = 0; i < CARDINAL_DX.length; i++) {
             int dx = CARDINAL_DX[i];
             int dz = CARDINAL_DZ[i];
@@ -994,21 +994,21 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 進入先を1マス通り抜けるのにかかる時間。水と蜘蛛の巣はどちらも当たり判定を持たないので
-     * 「通れる」だけを見ると走って抜けられるように見えるが、実際には桁が違うほど遅い。
-     * 蜘蛛の巣は足元と頭のどちらか一方でも掛かっていれば減速する。
+     * Time it takes to pass through one block of the entered cell. Water and cobwebs both have no collision, so
+     * judging only by "passable" makes them look like they can be run through, but in reality they're slower by orders of magnitude.
+     * Cobwebs slow you down if they catch either the feet or the head.
      */
     double stepCost(int x, int y, int z) {
         long feet = view.cell(x, y, z);
         if (CellData.water(feet)) {
-            // 足が着いていても水の中の速度で進む（{@link ActionCosts#SWIM_ONE_BLOCK}参照）
+            // Even with feet on the ground, moves at water speed (see {@link ActionCosts#SWIM_ONE_BLOCK})
             return ActionCosts.SWIM_ONE_BLOCK;
         }
         if (CellData.cobweb(feet) || CellData.cobweb(view.cell(x, y + 1, z))) {
             return ActionCosts.SPRINT_ONE_IN_COBWEB;
         }
-        // ソウルサンド・蜂蜜は遅く、氷は速い。バニラと同じく、足元のセルに倍率が無ければ
-        // 実際に踏んでいる1つ下のブロックを見る（{@code Entity#getBlockSpeedFactor}）
+        // Soul sand and honey are slow, ice is fast. As in vanilla, if the feet cell has no multiplier,
+        // look at the block one below that is actually being stood on ({@code Entity#getBlockSpeedFactor})
         double speedFactor = CellData.speedFactor(feet);
         if (speedFactor == 1.0) {
             speedFactor = CellData.speedFactor(view.cell(x, y - 1, z));
@@ -1017,8 +1017,8 @@ public final class AStarPathfinder {
     }
 
     /**
-     * ボートが浮けるセルか。水面＝「そのセルが水で、真上は水ではなく体を置ける」。
-     * 水中の途中の高さにボートは浮かないので、この判定が船の高さそのものになる。
+     * Whether a boat can float in the cell. Water surface = "the cell is water, and the one directly above isn't water and can hold a body".
+     * Boats don't float at heights partway down in the water, so this check is the boat's height itself.
      */
     boolean isBoatSurface(int x, int y, int z) {
         long here = view.cell(x, y, z);
@@ -1027,19 +1027,19 @@ public final class AStarPathfinder {
                 && CellData.occupiableWithoutDigging(above);
     }
 
-    /** 立った姿勢が占める2セルを、掘らずにそのまま通り抜けられるか。 */
+    /** Whether the two cells occupied by a standing pose can be passed through as is, without digging. */
     boolean clearWithoutDigging(int x, int y, int z) {
         return CellData.occupiableWithoutDigging(view.cell(x, y, z))
                 && CellData.occupiableWithoutDigging(view.cell(x, y + 1, z));
     }
 
     /**
-     * この地点から踏み切るときの水平速度倍率。探し方はバニラの{@code Entity#getBlockSpeedFactor}と
-     * 同じで、足元のセルに倍率が無ければ実際に踏んでいる1つ下のブロックを見る。
+     * Horizontal speed multiplier when taking off from this spot. Found the same way as vanilla's {@code Entity#getBlockSpeedFactor}:
+     * if the feet cell has no multiplier, look at the block one below that is actually being stood on.
      *
-     * <p><b>1.0を超える側（氷）は返さない。</b>{@link Heuristic}は昇りの下限に
-     * {@code ASCEND_ONE_BLOCK}、水平の下限に{@code SPRINT_ONE_BLOCK}を置いているので、
-     * そこを割ると非許容になる。速くなる側の得は{@link #stepCost}が水平移動でだけ表す。
+     * <p><b>Values above 1.0 (ice) are not returned.</b> {@link Heuristic} uses
+     * {@code ASCEND_ONE_BLOCK} as the lower bound for climbing and {@code SPRINT_ONE_BLOCK} as the horizontal lower bound,
+     * so going below those would be inadmissible. The benefit of the faster side is expressed only by {@link #stepCost}, for horizontal moves.
      */
     double takeoffSpeedFactor(int x, int y, int z) {
         double speedFactor = CellData.speedFactor(view.cell(x, y, z));
@@ -1047,9 +1047,9 @@ public final class AStarPathfinder {
             speedFactor = CellData.speedFactor(view.cell(x, y - 1, z));
         }
         speedFactor = Math.min(1.0, speedFactor);
-        // ツタ・梯子を掴んだ地点から離れる一歩は、ジャンプ系の移動が呼び出し元で禁止済み（onGround()が
-        // falseで踏み切れない）なので、ここへ来るのはaddDescend・addDiagonalDescend・addFallだけ。
-        // それらは疾走前提の値段のままだと実際より速く見積もる——ActionCosts#CLIMBABLE_TAKEOFF_SPEED_FACTOR参照
+        // For a step away from a spot gripping vines or a ladder, jump-type moves are already forbidden by the caller (onGround() is
+        // false, so it can't take off), so only addDescend, addDiagonalDescend and addFall get here.
+        // At their sprint-based price they'd be estimated faster than reality; see ActionCosts#CLIMBABLE_TAKEOFF_SPEED_FACTOR
         if (CellData.climbable(view.cell(x, y, z))) {
             speedFactor = Math.min(speedFactor, ActionCosts.CLIMBABLE_TAKEOFF_SPEED_FACTOR);
         }
@@ -1057,22 +1057,22 @@ public final class AStarPathfinder {
     }
 
     /**
-     * この探索が、落下ダメージの許容量を理由に着地を捨てたか。捨てていない場合、許容量を緩めて
-     * 探し直しても結果は変わらない。
+     * Whether this search discarded a landing because of the fall damage tolerance. If not, relaxing the tolerance
+     * and searching again won't change the result.
      */
     public boolean fallDamageCapBlocked() {
         return fallDamageCapBlocked;
     }
 
     /**
-     * その移動を終えた時点で頭が水に浸かっているか（＝息が減るか）。
+     * Whether the head is submerged once the move is finished (= whether air goes down).
      *
-     * <p>頭のセルが水ならそのまま。<b>掘って通る固体セル</b>だけは例外で、いま固体でも
-     * 水中で掘れば水が流れ込むので、水に接しているなら浸かっている扱いにする——ここを見ないと、
-     * 水中を掘り進む経路が「頭のセルは石だから水中ではない」として息の上限をすり抜ける。
+     * <p>If the head cell is water, that's it. The exception is <b>solid cells passed by digging</b>: even if solid now,
+     * digging underwater lets water flow in, so if it touches water it's treated as submerged. Without this,
+     * a path digging through underwater would slip past the air cap as "the head cell is stone, so it's not underwater".
      *
-     * <p>掘らずに通れるセル（空気）は対象外。そうしないと、海から浜へ上がる1手が
-     * 「隣が海だからまだ潜っている」と数えられ、岸に上がれなくなる。
+     * <p>Cells passable without digging (air) are excluded. Otherwise the one move climbing from the sea onto the beach
+     * would be counted as "still diving because the sea is next to it", and it could never get ashore.
      */
     private boolean headSubmerged(PathNode from, int x, int headY, int z) {
         long head = view.cell(x, headY, z);
@@ -1084,19 +1084,19 @@ public final class AStarPathfinder {
     }
 
     /**
-     * ブロックを置くセルの周り（真上を除く5面）に水があるか。{@link #headSubmerged}と
-     * {@link BuildMoves#addBridge}の両方が使う（後者は水に接する場所へ置かない判定）。
+     * Whether there is water around the cell where a block is placed (the 5 faces other than straight up). Used by both {@link #headSubmerged} and
+     * {@link BuildMoves#addBridge} (the latter to avoid placing where it touches water).
      *
-     * <p><b>毎回読み直してよい。</b>読みは{@code MemoCells}のページ配列に当たるので、ここに
-     * セルごとの覚え書きを足しても速くならない——覚え書きの引き当ての方が高くつく。
+     * <p><b>Re-reading every time is fine.</b> The reads hit {@code MemoCells}' page array, so adding
+     * per-cell notes here wouldn't make it faster; looking up the notes would cost more.
      */
     boolean hasAdjacentWater(int x, int y, int z) {
         return hasAdjacentCell(x, y, z, CellData::water);
     }
 
     /**
-     * 真上を除く5面（下・東西南北）のいずれかが{@code test}を満たすか。水・溶岩・掴まれるものの
-     * 隣接判定が形だけ違う実装を3つ持たないための共通形——{@link BuildMoves}も使う。
+     * Whether any of the 5 faces other than straight up (down, east, west, south, north) satisfies {@code test}. A common form so that
+     * adjacency checks for water, lava and climbables don't need three implementations differing only in shape; {@link BuildMoves} uses it too.
      */
     boolean hasAdjacentCell(int x, int y, int z, LongPredicate test) {
         return test.test(view.cell(x, y - 1, z))
@@ -1105,14 +1105,14 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 歩いて着いたマスの横（4方向）に、踏み外したら死ぬ場所があるときの割増。
+     * Surcharge when, beside (in 4 directions) the block reached on foot, there's a place where a misstep is fatal.
      *
-     * <p>4方向だけ見れば斜めの角抜けも拾える——斜め移動が横切る角の2マスは、着地点の4方向の隣でもある。
+     * <p>Looking in just 4 directions also catches diagonal corner-cutting: the two corner blocks a diagonal move crosses are also 4-direction neighbors of the landing spot.
      *
-     * <p>{@link #relax}の「改善しない候補を捨てる」判定より後で呼ぶ。割増は0以上なので、
-     * 割増前に負けている候補のために周りを読む必要は無い。{@link EdgeSink}へ渡す値には入らないので、
-     * 航法グラフは{@link SectionMoves}が自分で足す——足さないとガイドが割増ぶん安くなり、縁に沿う区間が長いと
-     * {@code RouteReview}がその差を遠回りと取り違える。
+     * <p>Called after {@link #relax}'s "discard candidates that don't improve" check. The surcharge is non-negative, so
+     * there's no need to read the surroundings for candidates already losing before the surcharge. It isn't included in the value passed to {@link EdgeSink},
+     * so the nav graph adds it itself in {@link SectionMoves}; without that, the guide would be cheaper by the surcharge, and on long legs along an edge
+     * {@code RouteReview} would mistake the difference for a detour.
      */
     double edgeHazardPenalty(MoveKind kind, int x, int y, int z) {
         switch (kind) {
@@ -1134,7 +1134,7 @@ public final class AStarPathfinder {
         return arrival.edgeHazard == 2 ? ActionCosts.EDGE_HAZARD_PENALTY_TICKS : 0.0;
     }
 
-    /** 足の高さで{@code (x, y, z)}へずれたら死ぬか（溶岩に入る・奈落か致死落差を落ちる）。 */
+    /** Whether slipping to {@code (x, y, z)} at foot height is fatal (entering lava, or falling into the void or a lethal drop). */
     private boolean deadlyBeside(int x, int y, int z) {
         long feet = view.cell(x, y, z);
         if (CellData.lava(feet) || CellData.lava(view.cell(x, y + 1, z))) {
@@ -1147,7 +1147,7 @@ public final class AStarPathfinder {
         if (obstacleY == ColumnScans.NOTHING_BELOW) {
             return true;
         }
-        // 未ロードは危険と言い切れない。ここで割増を掛けると読み込みの縁に沿って経路が揺れる
+        // Unloaded terrain can't be declared dangerous. Applying the surcharge here would make paths wobble along the loading edge
         if (obstacleY == ColumnScans.UNREADABLE_BELOW) {
             return false;
         }
@@ -1155,7 +1155,7 @@ public final class AStarPathfinder {
         if (CellData.lava(obstacle)) {
             return true;
         }
-        // 着水は落下距離がリセットされる
+        // Landing in water resets the fall distance
         if (CellData.water(obstacle)) {
             return false;
         }
@@ -1166,14 +1166,14 @@ public final class AStarPathfinder {
         relax(from, x, y, z, edgeCost, kind, 0);
     }
 
-    /** ボートに乗った状態のノードへ緩和する。{@link #addBoatEnter}/{@link #addBoatPaddle}専用。 */
+    /** Relaxes to the node in the boating state. Only for {@link #addBoatEnter}/{@link #addBoatPaddle}. */
     void relaxBoating(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind) {
         relax(from, x, y, z, edgeCost, kind, 0, true);
     }
 
     /**
-     * {@code bridgeRun}を明示的に渡す版。非0を渡すのは自分で置いた足場の上に着く移動
-     * （{@link #addBridge}・{@link #addPillar}）だけで、それ以外は実在する床に着くので0になる。
+     * Variant that passes {@code bridgeRun} explicitly. Nonzero is passed only for moves landing on footing it placed itself
+     * ({@link #addBridge}, {@link #addPillar}); all others land on a real floor, so it's 0.
      */
     void relax(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind, int bridgeRun) {
         relax(from, x, y, z, edgeCost, kind, bridgeRun, false);
@@ -1187,28 +1187,28 @@ public final class AStarPathfinder {
         if (edgeSink != null) {
             edgeSink.edge(from.x, from.y, from.z, from.boating, x, y, z, boating, edgeCost, kind);
         }
-        // 息の勘定より先に「そもそも安くならない候補」を捨てる。割増（SUBMERGED_TRAVEL_PENALTY）は
-        // 1倍を下回らないので、割増前のコストで改善できないなら割増後も改善できない。
-        // ここを後回しにすると、捨てると分かっている候補のために頭上と周り5面を読むことになる。
+        // Before the air accounting, discard "candidates that won't get cheaper anyway". The surcharge (SUBMERGED_TRAVEL_PENALTY)
+        // never goes below 1x, so if it can't improve at the pre-surcharge cost, it can't improve after the surcharge either.
+        // Postponing this would mean reading overhead and the 5 surrounding faces for candidates known to be discarded.
         //
-        // この先で立てる{@code submergedRunCapBlocked}をここで取りこぼすが、それでよい——
-        // 改善しない辺が上限で消えても答えは変わらないので、それを理由に上限を外して
-        // 探し直しても同じ経路が出る
+        // This misses setting {@code submergedRunCapBlocked} further down, and that's fine:
+        // an edge that doesn't improve vanishing because of the cap doesn't change the answer, so removing the cap for that reason
+        // and searching again gives the same path
         PathNode neighbor = node(x, y, z, boating);
         if (neighbor.closed || neighbor.cost - (from.cost + edgeCost) <= MIN_IMPROVEMENT) {
             return;
         }
-        // ガイドの穴（航法グラフの殻の外の奈落など）は幾何下限しか持たず、隣の島の上の値より数千tick安い。
-        // そのままだと探索は島の突端から全方向の奈落へ潜って予算を焼く（実機エンド: 島の突端で作った節点の50〜97%、
-        // 経路は架けかけの橋を切り落として0手）。親の値から1手ぶんしか下がらないようにする（pathmax）
+        // Holes in the guide (such as the void outside the nav graph's shell) only have the geometric lower bound, thousands of ticks cheaper than the value over the neighboring island.
+        // Left as is, the search dives from the island's tip into the void in every direction and burns the budget (in-game End: 50-97% of nodes created at the island's tip,
+        // and the path became 0 moves after trimming half-built bridges). Only allow it to drop by one move from the parent's value (pathmax)
         if (neighbor.guideHole) {
             neighbor.estimatedCostToGoal = Math.max(neighbor.estimatedCostToGoal,
                     from.estimatedCostToGoal - edgeCost);
         }
 
-        // 移動の種類に関わらず、着地点で頭が水に浸かるならその移動にかかった時間だけ息が減る。
-        // ここで一括して見るのは、泳ぎ以外（水中を歩く・沈む・掘る・水へ落ちる）でも同じだから——
-        // とりわけ採掘は1手に数十tickかかるので、マス数で数えると息の上限をすり抜ける
+        // Regardless of the move type, if the head is submerged at the landing spot, air goes down by the time the move took.
+        // It's checked all at once here because the same holds for moves other than swimming (walking underwater, sinking, digging, falling into water);
+        // mining in particular takes dozens of ticks per move, so counting by blocks would slip past the air cap
         double submergedTicks = 0.0;
         boolean submerged = headSubmerged(from, x, y + 1, z);
         if (submerged) {
@@ -1219,18 +1219,18 @@ public final class AStarPathfinder {
             }
         }
 
-        // 潜ったまま横断せず、先に水面へ出てから渡らせる。対象外にするのは浮上だけで、
-        // 水平移動にも潜降にも掛ける——水平だけに掛けると、斜め浮上と斜め降下を繰り返して
-        // 上下に跳ねながら進むことで割増を回避できてしまう。
+        // Don't cross while submerged; surface first and then cross. Only surfacing is exempt;
+        // it applies to both horizontal moves and diving. Applying it only to horizontal moves would let the path dodge the surcharge
+        // by bobbing up and down, alternating diagonal surfacing and diagonal descent.
         //
-        // <b>免除は水平1マス以内の浮上に限る。</b>斜めに進みながら上がる手まで免除すると、
-        // 斜めに進むべき区間で「斜めに上がって斜めに降りる」の往復（√3 + √2·P）が
-        // 斜め水平2手（2·√2·P）より安くなり、同じ跳ねが斜めの形で戻ってくる
-        // （{@code doesNotBobDiagonallyToDodgeTheSubmergedPenalty}で実測）。
-        // カーディナルに進める区間では元から水平2手の方が安いので、この穴は斜めでしか出ない。
+        // <b>The exemption is limited to surfacing within 1 horizontal block.</b> Exempting moves that rise while advancing diagonally too would,
+        // on legs that should go diagonally, make the "rise diagonally, sink diagonally" round trip (√3 + √2·P)
+        // cheaper than two diagonal horizontal moves (2·√2·P), and the same bobbing returns in diagonal form
+        // (measured with {@code doesNotBobDiagonallyToDodgeTheSubmergedPenalty}).
+        // On legs that can go cardinally, two horizontal moves are already cheaper, so this hole only appears diagonally.
         //
-        // 割増は経路の選択のためのもので、息の勘定（submergedTicks）には混ぜない——あちらは
-        // 実際にかかる時間でなければ意味がない
+        // The surcharge is for choosing paths and isn't mixed into the air accounting (submergedTicks); that one
+        // is meaningless unless it's the time actually taken
         boolean surfacing = y > from.y && Math.abs(x - from.x) + Math.abs(z - from.z) <= 1;
         double tentativeCost = from.cost
                 + (submerged && !surfacing ? edgeCost * ActionCosts.SUBMERGED_TRAVEL_PENALTY : edgeCost)
@@ -1245,7 +1245,7 @@ public final class AStarPathfinder {
                 tentativeCost + heuristicWeight * neighbor.estimatedCostToGoal, neighbor.x, neighbor.z);
         neighbor.kind = kind;
         neighbor.bridgeRun = bridgeRun;
-        // 置いた枚数は種類から導ける（引数を増やすと呼び出し全てに0を書き足すことになる）
+        // The number of blocks placed can be derived from the type (adding a parameter would mean adding 0 to every call)
         neighbor.placedTotal = from.placedTotal + (kind == MoveKind.BRIDGE || kind == MoveKind.PILLAR ? 1 : 0);
         neighbor.submergedTicks = submergedTicks;
         if (neighbor.isOpen()) {
@@ -1270,53 +1270,53 @@ public final class AStarPathfinder {
     }
 
     /**
-     * 水中の採掘は水中採掘のエンチャントが無ければ5倍遅い。掘るセルごとではなく「掘っている間プレイヤーの頭が
-     * 水にあるか」で決まるので、セル単体のコストではなく移動ごとの掘削コスト合計に掛ける。
+     * Mining underwater is 5x slower without the Aqua Affinity enchantment. It depends not on each dug cell but on "whether the player's head
+     * is in water while digging", so it's applied to the total digging cost per move rather than to the cost of individual cells.
      *
-     * <p>水中か・足が着いているかは<b>掘っている間に立っている{@code from}</b>で測る。到着先の頭は
-     * これから掘る固体なので、そこで測ると泳いだまま土を掘る手が陸と同じ値段になり、到着先の床を
-     * 見ると泳いで掘る25倍が5倍になる。{@code from}の頭のセルが地形上は固体でも、水中で掘って来た
-     * なら水が流れ込んでいるので、到着時の判定（{@code submergedTicks}）も見る。
+     * <p>Whether underwater and whether the feet are on the ground are measured at <b>{@code from}, where it stands while digging</b>. The head at the destination
+     * is a solid still to be dug, so measuring there would price digging dirt while swimming the same as on land, and looking at the destination floor
+     * would turn swim-digging's 25x into 5x. Even if {@code from}'s head cell is solid in the terrain, if it came there by digging underwater
+     * water has flowed in, so the on-arrival check ({@code submergedTicks}) is consulted too.
      */
     double submerged(PathNode from, double digCost) {
         boolean eyeInWater = CellData.water(view.cell(from.x, from.y + 1, from.z)) || from.submergedTicks > 0.0;
         if (digCost <= 0.0 || !eyeInWater) {
             return digCost;
         }
-        // Player#getDigSpeedの !onGround() の分岐
+        // The !onGround() branch of Player#getDigSpeed
         boolean onGround = CellData.standable(view.cell(from.x, from.y - 1, from.z));
         return digCost * (onGround ? ActionCosts.SUBMERGED_DIG_PENALTY : ActionCosts.SWIMMING_DIG_PENALTY);
     }
 
     /**
-     * 立った姿勢で占有する2セル（足元・頭）の破壊コスト。
+     * Break cost of the 2 cells occupied in a standing pose (feet and head).
      */
     double standingBodyCost(int x, int y, int z, @Nullable List<BlockPos> cells) {
         return columnCost(x, y, y + 1, z, cells);
     }
 
     /**
-     * 一段降りる移動で身体が通過する3セル分。{@code y}は降りる手前の高さ（足元が{@code y}、頭が{@code y+1}、
-     * 降りた先が{@code y-1}）。
+     * The 3 cells the body passes through in a one-step descent. {@code y} is the height before descending (feet at {@code y}, head at {@code y+1},
+     * the destination at {@code y-1}).
      */
     double descendingBodyCost(int x, int y, int z, @Nullable List<BlockPos> cells) {
         return columnCost(x, y - 1, y + 1, z, cells);
     }
 
     /**
-     * 縦1列（{@code bottomY}〜{@code topY}）の破壊コスト。さらに真上から落下ブロック（砂・砂利等）が
-     * 連なっている分を一度だけ加える。必須セル自体は個別に数えるだけなので、
-     * 隣接する必須セル同士で連鎖コストが重複しない。
+     * Break cost of one vertical column ({@code bottomY} to {@code topY}). Additionally adds, once only, any falling blocks (sand, gravel, etc.)
+     * stacked directly above. The required cells themselves are just counted individually, so
+     * chain costs aren't double-counted between adjacent required cells.
      *
-     * <p>{@code cells}が非nullなら、実際に壊すセルをそこへ集める。コストを払う判断と壊すセルの列挙を
-     * 同じ経路で行うためのもので、これを分けて書くと表示と探索が食い違う。
+     * <p>If {@code cells} is non-null, the cells actually broken are collected into it. This keeps the decision to pay the cost and the enumeration of broken cells
+     * on the same code path; writing them separately makes the display and the search disagree.
      */
     double columnCost(int x, int bottomY, int topY, int z, @Nullable List<BlockPos> cells) {
         double total = 0.0;
         boolean doorCharged = false;
         for (int y = bottomY; y <= topY; y++) {
-            // ドアは上下2セルに分かれているが、開ける動作は1回。両方に開閉コストを払うと
-            // 1枚のドアが2枚分の重さになり、ドアのある正しい通り道を避けるようになる
+            // A door is split into an upper and lower cell, but opening it is a single action. Paying the open/close cost for both
+            // would make one door weigh as much as two, and correct passages with doors would be avoided
             long cell = view.cell(x, y, z);
             boolean openable = CellData.openable(cell);
             if (openable && doorCharged) {
@@ -1357,13 +1357,13 @@ public final class AStarPathfinder {
             return 0.0;
         }
         if (CellData.openable(cell)) {
-            // ドアは壊すものではなく開けるもの。掘削セルとしても数えない
+            // Doors are opened, not broken. They aren't counted as dug cells either
             return ActionCosts.OPEN_DOOR_OVERHEAD_TICKS;
         }
         double ticks = CellData.digTicks(cell);
-        // 掘れないセル（掘削禁止・硬度負）は落下ブロック連鎖の打ち切りにも使われるので、集めない
+        // Undiggable cells (digging forbidden, negative hardness) are also used to cut off falling-block chains, so they aren't collected
         if (cells != null && !Double.isInfinite(ticks)) {
-            // Ascendの天井掘削は、頭上が砂・砂利のとき落下ブロック連鎖と同じセルを指すことがある
+            // Ascend's ceiling digging may point at the same cell as the falling-block chain when the overhead is sand or gravel
             BlockPos pos = new BlockPos(x, y, z);
             if (!cells.contains(pos)) {
                 cells.add(pos);

@@ -3,16 +3,16 @@ package net.prason.xaeronav.pathfinding.astar;
 import java.util.List;
 
 /**
- * @param steps         始点を含まない、ゴールまで（または打ち切り時点でゴールに最も近づけた地点まで）の経路
- * @param termination   探索が終わった理由。{@link #complete()}だけでは「資源を使い切った」と
- *                      「範囲内に道が無い」を区別できず、前者にしか意味の無い再挑戦（範囲拡大・
- *                      粗い経由地チェーン）を後者にも仕掛けてしまう
- * @param distinctNodes 探索が触れた異なるセルの数。{@code expandedNodes}がこれを大きく上回るときは、
- *                      同じセルを何度も展開し直している（重み付きヒューリスティックで確定済みノードが
- *                      openへ戻る）。両者を並べないと、この空回りと純粋な探索範囲の広さを区別できない
- * @param limitsHeld    設定の上限（橋の長さ・潜水・落下ダメージ・危険な跳躍・持ち物の数）が手を捨て、
- *                      {@code strictLimits}のため緩めずに終えたか。届かなかった理由を「道が無い」と
- *                      「上限の内側に道が無い」とで言い分けるのに使う
+ * @param steps         path to the goal excluding the start (or, if cut off, to the point that got closest to the goal)
+ * @param termination   why the search ended. {@link #complete()} alone can't distinguish "ran out of resources" from
+ *                      "no path within range", so retries that only make sense for the former (range expansion,
+ *                      coarse waypoint chains) would be launched for the latter too
+ * @param distinctNodes number of distinct cells the search touched. When {@code expandedNodes} greatly exceeds this,
+ *                      the same cells are being re-expanded many times (with a weighted heuristic, closed nodes
+ *                      return to open). Without both side by side, this spinning can't be told apart from a genuinely wide search
+ * @param limitsHeld    whether a configured cap (bridge length, diving, fall damage, risky jumps, item count) discarded moves
+ *                      and the search ended without relaxing it because of {@code strictLimits}. Used to phrase the failure as "no path"
+ *                      vs. "no path within the caps"
  */
 public record PathResult(List<PathStep> steps, Termination termination, int expandedNodes, int distinctNodes,
                          boolean limitsHeld) {
@@ -29,19 +29,19 @@ public record PathResult(List<PathStep> steps, Termination termination, int expa
         return new PathResult(steps, termination, expandedNodes, distinctNodes, true);
     }
 
-    /** 探索の打ち切り理由。 */
+    /** Why the search was cut off. */
     public enum Termination {
-        /** ゴールに到達した。 */
+        /** Reached the goal. */
         REACHED_GOAL,
-        /** 展開ノード数の上限に当たった。 */
+        /** Hit the expanded-node limit. */
         NODE_BUDGET,
-        /** 時間上限に当たった。 */
+        /** Hit the time limit. */
         TIME_LIMIT,
-        /** 新しい探索に追い出された。 */
+        /** Evicted by a newer search. */
         CANCELLED,
         /**
-         * オープンセットが尽きた＝探索範囲の中に到達手段が無い。予算を増やしても範囲を広げても
-         * 同じ結果になるので、これは本物の「詰み」であって再挑戦の対象ではない。
+         * The open set ran out = there's no way to reach the goal within the search range. Increasing the budget or widening the range
+         * gives the same result, so this is genuinely "stuck" and not a candidate for retrying.
          */
         EXHAUSTED
     }
@@ -51,8 +51,8 @@ public record PathResult(List<PathStep> steps, Termination termination, int expa
     }
 
     /**
-     * 探索資源（ノード数・時間）を使い切って打ち切ったか。範囲を広げる・区間に割るといった再挑戦が
-     * 意味を持つのはこのときだけ。
+     * Whether it was cut off after using up search resources (node count, time). Retries such as widening the range or
+     * splitting into segments only make sense in this case.
      */
     public boolean budgetExhausted() {
         return termination == Termination.NODE_BUDGET || termination == Termination.TIME_LIMIT;

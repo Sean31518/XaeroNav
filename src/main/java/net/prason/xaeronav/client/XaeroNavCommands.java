@@ -52,51 +52,51 @@ import net.prason.xaeronav.xaero.XaeroPresence;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * {@code /xaeronav} のクライアントコマンド。
+ * The {@code /xaeronav} client command.
  *
- * <p>案内そのものに使うのは{@code goto} / {@code clear} / {@code version}の3つだけ。残りは経路を
- * 引かずに数値をチャットへ出す計測用なので{@code debug}の下へ入れてある——同じ高さに並べると、
- * 目的地を設定したいだけの人のタブ補完が計測用の名前で埋まる。
+ * <p>Only three are used for guidance itself: {@code goto} / {@code clear} / {@code version}. The rest are measurement tools
+ * that print numbers to chat without drawing a path, so they live under {@code debug}: putting them at the same level would
+ * fill tab completion with measurement names for people who just want to set a goal.
  */
 public final class XaeroNavCommands {
 
-    /** 既定の確認範囲（チャンク）。既定の描画距離より十分広く、読み取りが一瞬で終わる程度。 */
+    /** Default check range (chunks). Comfortably wider than the default render distance, and small enough that reading finishes instantly. */
     private static final int DEFAULT_MAPDATA_RADIUS_CHUNKS = 64;
 
     /**
-     * {@code mapdata}の半径引数の上限。{@link XaeroMapReader}の読み取りはメインスレッド専用
-     * （クラスJavadoc参照）なのでワーカーへ逃がせず、一辺{@code radiusChunks*2+1}チャンクぶんを
-     * 丸ごと同期でXaeroの地図から読む。既定値64（一辺129、約16,641セル）が「一瞬で終わる」規模と
-     * 分かっている前提で、その2倍を安全側の上限にする——旧上限512（一辺1025、約1,050,625セル）は
-     * この規模の16倍あり、要求するとクライアントを長時間止め得た。
+     * Upper bound for {@code mapdata}'s radius argument. {@link XaeroMapReader} reads are main-thread only
+     * (see the class Javadoc), so they can't be offloaded to a worker, and a square of {@code radiusChunks*2+1} chunks per side
+     * is read synchronously from Xaero's map in one go. Given that the default of 64 (129 per side, about 16,641 cells) is known
+     * to finish "instantly", twice that is the safe upper bound. The old bound of 512 (1025 per side, about 1,050,625 cells)
+     * was 16x that scale, and requesting it could stall the client for a long time.
      */
     private static final int MAPDATA_MAX_RADIUS_CHUNKS = 128;
 
     /**
-     * {@code probe}の上限なし計測で使う展開ノード数。時間上限（ライブナビと同じ）の方が先に効くよう、
-     * 到達し得ない大きさにしてある。実質の打ち切りは時間側なので、この計測は
-     * 「ライブナビと同じ時間予算で何ノードまで展開でき、届くのか」を測ることになる。
+     * Expanded-node count used for {@code probe}'s uncapped measurement. Made large enough to be unreachable so the time limit
+     * (same as live navigation) takes effect first. The effective cutoff is time, so this measurement
+     * finds out "how many nodes can be expanded, and whether it reaches, within the same time budget as live navigation".
      */
     private static final int PROBE_UNBOUNDED_MAX_EXPANDED_NODES = 100_000_000;
 
     /**
-     * {@code corridor}/{@code probe}/{@code flight}が使う専用の非同期実行基盤。ライブナビの
-     * {@code PathfindingExecutor}とは別インスタンス・別スレッド——共有すると診断コマンドを
-     * 打っただけで進行中の本番探索がキャンセルされてしまう。Xaeroの地図を読む層1部分
-     * （{@link CoarseRouter}・{@link XaeroMapReader}）はメインスレッド専用のため対象外
-     * （{@link CorridorLegSolver}・{@code FlightNavState}のクラスJavadoc参照）で、この基盤へ
-     * 委ねるのは実際に重いA*探索/空中経路計算だけ。
+     * Dedicated async execution infrastructure used by {@code corridor}/{@code probe}/{@code flight}. A separate instance and thread from
+     * live navigation's {@code PathfindingExecutor}: sharing it would cancel the in-progress real search just by
+     * running a diagnostic command. The layer 1 parts that read Xaero's map
+     * ({@link CoarseRouter}, {@link XaeroMapReader}) are main-thread only and excluded
+     * (see the class Javadoc of {@link CorridorLegSolver} and {@code FlightNavState}); only the actually heavy
+     * A* searches and aerial path computations are handed to this infrastructure.
      */
     private static final DiagnosticJobRunner DIAGNOSTIC =
             new DiagnosticJobRunner(runnable -> Minecraft.getInstance().execute(runnable));
 
     /**
-     * ローダーが持つdispatcherへ載せるコマンドツリー。
+     * The command tree registered on the loader's dispatcher.
      *
-     * <p>ツリーの中身はローダーに依存しないが、brigadierのsource型は依存する
-     * （NeoForgeは{@code CommandSourceStack}、Fabricは{@code FabricClientCommandSource}）。
-     * source型を型引数にし、実際にsourceへ触る2つの操作——応答の宛先と座標引数の解決——だけを
-     * 呼び出し側から受け取る。
+     * <p>The tree's contents don't depend on the loader, but brigadier's source type does
+     * ({@code CommandSourceStack} on NeoForge, {@code FabricClientCommandSource} on Fabric).
+     * The source type is a type parameter, and only the two operations that actually touch the source (the reply target and
+     * resolving coordinate arguments) are taken from the caller.
      */
     public static <S> LiteralArgumentBuilder<S> tree(Function<CommandContext<S>, NavCommandSink> sink,
             BlockPosReader<S> blockPos) {
@@ -105,8 +105,8 @@ public final class XaeroNavCommands {
                         .then(XaeroNavCommands.<S, Coordinates>argument("pos", BlockPosArgument.blockPos())
                                 .executes(ctx -> {
                                     BlockPos resolved = PathfindingState.INSTANCE.setGoal(blockPos.read(ctx, "pos"));
-                                    // 指定座標ではなく解決後の目的地を出す。Yはその列で実際に立てる高さへ
-                                    // 寄せられるので、指定したままを表示すると案内先と食い違って見える
+                                    // Show the resolved goal, not the given coordinates. Y is snapped to the height actually standable
+                                    // in that column, so showing it as given would look inconsistent with where guidance leads
                                     if (resolved != null) {
                                         sink.apply(ctx).success(TextCompat.translatable("commands.xaeronav.goal_walk",
                                                 resolved.toShortString()));
@@ -155,9 +155,9 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * Xaero連携が今どうなっているかを1行ずつ出す。「地図に線が出ない」の切り分けは、
-     * 連携先のMODが入っていない / mixinが当たっていない / 当たっているが描かれていない、の
-     * どれなのかが分からないと進まない。
+     * Prints the state of the Xaero integration line by line. Triaging "no line on the map" can't proceed
+     * without knowing whether the integrated mod isn't installed / the mixins didn't apply / they applied but nothing
+     * is drawn.
      */
     private static int reportHooks(NavCommandSink out) {
         for (XaeroHooks.Hook hook : XaeroHooks.Hook.values()) {
@@ -177,9 +177,9 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 直近の再計算判断の要約を出す。合流拒否・繋ぎ目解き直し見送り・立てない目標は
-     * いずれも「同じ理由が続く間は黙る」ログなので、実機で今の状態を知るには
-     * ログを遡るしかなかった。ここで1コマンドにまとめて出す。
+     * Prints a summary of the latest recalculation decisions. Merge rejections, skipped seam re-solves and unstandable targets
+     * are all logs that "stay silent while the same reason continues", so the only way to know the current state in-game
+     * was to dig back through the log. This puts it all in one command.
      */
     private static int reportSummary(NavCommandSink out) {
         PathfindingState.DiagnosticSummary summary = PathfindingState.INSTANCE.diagnosticSummary();
@@ -197,10 +197,10 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * {@code pos}引数からブロック座標を取り出す。
+     * Extracts block coordinates from the {@code pos} argument.
      *
-     * <p>引数型（{@link BlockPosArgument}）自体はsource型を問わないが、`~`相対座標の解決には
-     * {@code CommandSourceStack}が要るので、そこだけローダー側に任せる。
+     * <p>The argument type ({@link BlockPosArgument}) itself doesn't care about the source type, but resolving `~` relative coordinates
+     * needs a {@code CommandSourceStack}, so only that part is left to the loader side.
      */
     @FunctionalInterface
     public interface BlockPosReader<S> {
@@ -215,20 +215,20 @@ public final class XaeroNavCommands {
         return RequiredArgumentBuilder.argument(name, type);
     }
 
-    /** 実機デバッグ用: 今読み込まれているビルドがどのgitコミットかを確認する（ビルド時にmod_versionへ埋め込み済み）。 */
+    /** For in-game debugging: checks which git commit the loaded build is (embedded into mod_version at build time). */
     private static String modVersion() {
         return ModPresence.version(XaeroNav.MOD_ID);
     }
 
-    /** {@link #reportRoute}が読む範囲を、始点と終点の周りにどれだけ広げるか（チャンク）。 */
+    /** How far (chunks) to widen the range {@link #reportRoute} reads around the start and end. */
     private static final int ROUTE_PADDING_CHUNKS = 32;
 
-    /** 一辺がこれを超える範囲は読まない。粗い地図とはいえ、無制限だと配列確保だけで固まる。 */
+    /** Ranges wider than this per side aren't read. Even for a coarse map, unbounded would freeze on array allocation alone. */
     private static final int ROUTE_MAX_SPAN_CHUNKS = 1024;
 
     /**
-     * 段階Aの目視確認用。実際の案内は開始せず、{@link CoarseRouter}が引いた中間目標をその場で
-     * チャットに列挙するだけ。実データの海や山で意図通り曲がるかは、これで見るしかない。
+     * For visual checks of stage A. Doesn't actually start guidance; just lists in chat the intermediate targets
+     * {@link CoarseRouter} drew. This is the only way to see whether it bends as intended around real seas and mountains.
      */
     private static int reportRoute(NavCommandSink out, BlockPos goal) {
         return withCoarseRoute(out, goal, (start, waypoints) -> {
@@ -241,21 +241,21 @@ public final class XaeroNavCommands {
         });
     }
 
-    /** {@link #withCoarseRoute}が層1の要約を出した後に呼ぶ、コマンドごとの続き。 */
+    /** Per-command continuation called after {@link #withCoarseRoute} prints the layer 1 summary. */
     @FunctionalInterface
     private interface RouteDetail {
         void report(BlockPos start, List<BlockPos> waypoints);
     }
 
     /**
-     * 2つの診断コマンドが共有する前半——プレイヤーと地図データの確認、層1の実行、経路が
-     * 引けなかった場合の報告、waypoint数と所要時間の要約まで。要約まで出せたときだけ
-     * {@code detail}を呼ぶ。
+     * The first half shared by two diagnostic commands: checking the player and map data, running layer 1, reporting when no path
+     * could be drawn, and summarizing the waypoint count and elapsed time. {@code detail} is called only when it got as far as
+     * the summary.
      *
-     * <p>地図の読み取り（{@link #readCoarseMapOrFail}）はXaero API契約によりメインスレッドで
-     * 同期実行するが、その後の{@link CoarseRouter#findRoute}はMinecraft/Xaero状態を読まない
-     * 純粋な計算なので{@link #DIAGNOSTIC}のワーカーへ逃がす。{@code detail}は
-     * ワーカー完了後のメインスレッドcallback内から呼ばれる。
+     * <p>Reading the map ({@link #readCoarseMapOrFail}) runs synchronously on the main thread per the Xaero API contract,
+     * but the following {@link CoarseRouter#findRoute} is pure computation that reads no Minecraft/Xaero state,
+     * so it's offloaded to a {@link #DIAGNOSTIC} worker. {@code detail} is called
+     * from the main-thread callback after the worker completes.
      */
     private static int withCoarseRoute(NavCommandSink out, BlockPos goal, RouteDetail detail) {
         Player player = Minecraft.getInstance().player;
@@ -278,11 +278,11 @@ public final class XaeroNavCommands {
         long generation = DIAGNOSTIC.begin();
         long startNanos = System.nanoTime();
         DIAGNOSTIC.submit(generation,
-                // 診断コマンドは既定の重み付けをそのまま見せる（溶岩の梯子はPathfindingState側の話）
+                // Diagnostic commands show the default weighting as-is (the lava ladder is a PathfindingState concern)
                 cancelled -> CoarseRouter.findRoute(map, start, goal, boatAvailable, CoarseRouter.BridgePolicy.ALLOW),
                 (route, error) -> {
                     if (error != null) {
-                        XaeroNav.LOGGER.error("XaeroNav: 診断コマンドの層1探索に失敗しました", error);
+                        XaeroNav.LOGGER.error("XaeroNav: Layer 1 search for diagnostic command failed", error);
                         return;
                     }
                     long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
@@ -302,14 +302,14 @@ public final class XaeroNavCommands {
                             waypoints.size(), elapsedMillis));
                     detail.report(start, waypoints);
                 });
-        // 層1探索はワーカーへ委譲したため、ここで返せるのは「ジョブを投入できたか」であって
-        // 探索結果そのものではない。結果はout.success/out.failureでプレイヤーへ非同期に届く
+        // The layer 1 search was delegated to a worker, so what can be returned here is "whether the job was submitted",
+        // not the search result itself. The result reaches the player asynchronously via out.success/out.failure
         return 1;
     }
 
     /**
-     * {@link #reportRoute}と{@link #reportCorridor}が共有する層1の地図読み取り。範囲が
-     * {@link #ROUTE_MAX_SPAN_CHUNKS}を超える場合は失敗を送って{@code null}を返す。
+     * The layer 1 map read shared by {@link #reportRoute} and {@link #reportCorridor}. If the range
+     * exceeds {@link #ROUTE_MAX_SPAN_CHUNKS}, sends a failure and returns {@code null}.
      */
     private static CoarseMap readCoarseMapOrFail(NavCommandSink out, BlockPos start, BlockPos goal) {
         int minChunkX = (Math.min(start.getX(), goal.getX()) >> 4) - ROUTE_PADDING_CHUNKS;
@@ -326,10 +326,10 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 長距離ルート層2（ブロック解像度の地表グラフ）の目視確認用。層1のwaypoint列を隣接ペアで結び、
-     * 線分ごとに{@link CorridorLegSolver}で廊下を切り出して既存の{@link AStarPathfinder}を走らせる。
-     * {@code goto}（ライブナビ）も同じ{@link CorridorLegSolver}を使ってwaypointを精緻化するが、
-     * こちらは区間ごとの結果をその場でチャットへ出す目視確認用コマンドとして独立に残す。
+     * For visual checks of long-range route layer 2 (the block-resolution surface graph). Links layer 1's waypoint list in adjacent pairs,
+     * cuts out a corridor per segment with {@link CorridorLegSolver}, and runs the existing {@link AStarPathfinder}.
+     * {@code goto} (live navigation) also refines waypoints with the same {@link CorridorLegSolver}, but
+     * this one is kept separately as a visual-check command that prints each leg's result to chat on the spot.
      */
     private static int reportCorridor(NavCommandSink out, BlockPos goal) {
         return withCoarseRoute(out, goal, (start, waypoints) -> {
@@ -337,9 +337,9 @@ public final class XaeroNavCommands {
             legs.add(start);
             legs.addAll(waypoints);
             int legCount = legs.size() - 1;
-            // prepareはXaeroの地図データを読むためメインスレッド専用（CorridorLegSolverのクラス
-            // Javadoc参照）。全区間ぶん先に済ませてしまい、後段の探索チェーンには不変な結果だけを渡す
-            // ——PathfindingState#refineRouteAsyncと同じ順序（ライブナビ側が先に確立した分離）
+            // prepare reads Xaero's map data, so it's main-thread only (see CorridorLegSolver's class
+            // Javadoc). Do it for all legs up front and pass only immutable results to the search chain after that,
+            // the same order as PathfindingState#refineRouteAsync (the separation live navigation established first)
             List<TimedLeg> prepared = new ArrayList<>(legCount);
             for (int i = 0; i < legCount; i++) {
                 long prepareStartNanos = System.nanoTime();
@@ -351,13 +351,13 @@ public final class XaeroNavCommands {
         });
     }
 
-    /** {@link CorridorLegSolver#prepare}1回ぶんと、その所要時間（地図データが無い場合の報告に使う）。 */
+    /** One {@link CorridorLegSolver#prepare} result and how long it took (used for reporting when there's no map data). */
     private record TimedLeg(CorridorLegSolver.PreparedLeg leg, long prepareElapsedMillis) {
     }
 
     /**
-     * 区間を1本ずつ順番に探索する再帰チェーン。前の区間の完了を待ってから次を投げる
-     * ——{@code PathfindingState#refineRouteAsync}のleg-by-legチェーンと同じ考え方。
+     * A recursive chain that searches the legs one at a time in order. Waits for the previous leg to complete before submitting the next,
+     * the same idea as {@code PathfindingState#refineRouteAsync}'s leg-by-leg chain.
      */
     private static void reportCorridorLeg(NavCommandSink out, long generation, List<TimedLeg> prepared,
                                            int index, int total) {
@@ -377,7 +377,7 @@ public final class XaeroNavCommands {
                         .search(timed.leg().from(), timed.leg().to(), cancelled),
                 (result, error) -> {
                     if (error != null) {
-                        XaeroNav.LOGGER.error("XaeroNav: corridor診断の区間探索に失敗しました", error);
+                        XaeroNav.LOGGER.error("XaeroNav: Leg search for corridor diagnostic failed", error);
                         return;
                     }
                     long elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000;
@@ -390,8 +390,8 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * Xaeroの地図からどれだけ地形が読めているかをその場で確かめるためのもの。長距離ルートは
-     * このデータの上に組み立てるので、まず「どこまで読めているか」が見えないと何も判断できない。
+     * For checking on the spot how much terrain can be read from Xaero's map. Long-range routes are
+     * built on top of this data, so nothing can be judged without first seeing "how far it can be read".
      */
     private static int reportMapData(NavCommandSink out, int radiusChunks) {
         Player player = Minecraft.getInstance().player;
@@ -433,9 +433,9 @@ public final class XaeroNavCommands {
         reportKindHistogram(out, map, centerChunkX - radiusChunks, centerChunkZ - radiusChunks, side);
         reportMapLayers(out, centerChunkX - radiusChunks, centerChunkZ - radiusChunks, side);
 
-        // 実際に立っているYに最も近い床を報告する。粗い地図の高さは洞窟レイヤーのcaveStartから
-        // 下向きに走査した結果なので、足元と食い違っていないかはこの2つを比べないと分からない。
-        // このセルが複数の床を持つ（＝上下に独立した通路が重なっている）ことがある旨も添える
+        // Report the floor nearest the Y actually stood on. Coarse map heights come from scanning downward from the cave layer's caveStart,
+        // so whether they disagree with what's underfoot can only be told by comparing the two.
+        // Also note when this cell has multiple floors (i.e. independent passages stacked vertically)
         int hereFloorCount = map.floorCount(centerChunkX, centerChunkZ);
         int hereFloor = map.nearestFloor(centerChunkX, centerChunkZ, referenceY);
         byte hereKind = hereFloor < 0 ? CoarseMap.NO_DATA : map.kindAtFloor(centerChunkX, centerChunkZ, hereFloor);
@@ -446,11 +446,11 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 粗い地図の地形種別の内訳。{@link CoarseRouter}で溶岩だけが通行不能（他は未知でも通れる）なので、
-     * 長距離ルートが途中で打ち切られたとき、溶岩がどれだけ通行可能領域を削っているかがここで分かる。
+     * Breakdown of the coarse map's terrain kinds. In {@link CoarseRouter} only lava is impassable (everything else, even unknown, is passable),
+     * so when a long-range route is cut short, this shows how much lava is eating into the passable area.
      *
-     * <p>セルではなく<b>床</b>単位で数える——1セルが複数の床を持ちうる（天井のある次元で
-     * 上下に独立した通路が重なる）ので、セル単位だと実際に読めているデータ量を過小に見せる。
+     * <p>Counted per <b>floor</b>, not per cell: one cell can have multiple floors (in dimensions with a ceiling,
+     * independent passages stacked vertically), so per-cell counts would understate the data actually read.
      */
     private static void reportKindHistogram(NavCommandSink out, CoarseMap map,
                                              int minChunkX, int minChunkZ, int side) {
@@ -479,8 +479,8 @@ public final class XaeroNavCommands {
                 }
             }
         }
-        // 割合は既知セルに対して出す。全体に対してだと未探索で薄まって、
-        // 通行可能領域がどれだけ削られているかが見えない
+        // Ratios are relative to known cells. Relative to the whole, unexplored area dilutes them and
+        // hides how much of the passable area is being eaten away
         int known = land + water + lava + lavaMixed + voidCells;
         int lavaPercent = known == 0 ? 0 : lava * 100 / known;
         final int landCount = land;
@@ -494,9 +494,9 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * Xaeroがこの範囲のデータをどのレイヤーに持っているかを並べる。ネザーのように空の無い次元では
-     * 地表レイヤーが空になり、データが{@code caveStart >> 4}のY帯ごとに分かれる——長距離ルートが
-     * 効かないときに、地形が読めていないのか読む場所を間違えているのかを切り分けるためのもの。
+     * Lists which layers Xaero holds data in for this range. In skyless dimensions like the Nether
+     * the surface layer is empty, and data is split into Y bands of {@code caveStart >> 4}. When long-range routing
+     * doesn't work, this tells apart whether the terrain can't be read or the wrong place is being read.
      */
     private static void reportMapLayers(NavCommandSink out, int minChunkX, int minChunkZ, int side) {
         out.success(TextCompat.translatable("commands.xaeronav.mapdata_cave_mode",
@@ -528,19 +528,19 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 徒歩の詳細A*を{@code goto}と同じ設定・範囲で同期実行し、到達可否・展開ノード数・移動種類の
-     * 内訳（斜め昇降が実際に選ばれているか）をその場で確認する診断コマンド。「多分できてる」で
-     * 終わらせず数値で裏取りするためのもの。
+     * A diagnostic command that runs the walking detailed A* synchronously with the same settings and range as {@code goto}, and shows on the spot
+     * whether it reaches, the expanded-node count and the breakdown of move types (whether diagonal ascents/descents are actually chosen).
+     * For backing things up with numbers instead of stopping at "probably works".
      *
-     * <p>1回目は通常のマージンで探索する。続けて同じ箱のまま掘削だけを切って探索し、展開ノード数を
-     * 並べて報告する（掘削が分岐数に効いている量を測るため）。展開ノード数の上限に達して届かなかった
-     * 場合は、上限を外して時間だけで打ち切る計測も行う（必要な展開ノード数そのものを知るため）。
-     * 範囲内なのに届かなかった場合は、{@link PathfindingState}の「探索範囲を読み込み済みチャンクいっぱい
-     * まで広げる再挑戦」と同じ条件・同じ広さでもう一度探索し、その結果も併せて報告する。
+     * <p>The first run searches with the regular margin. Then it searches the same box with only digging turned off and reports the
+     * expanded-node counts side by side (to measure how much digging affects the branching factor). If it didn't reach because it hit the
+     * expanded-node cap, it also measures with the cap removed and only time as the cutoff (to learn the required node count itself).
+     * If it didn't reach even though the goal is in range, it searches once more under the same conditions and size as {@link PathfindingState}'s
+     * "retry widening the search range to the full loaded chunks", and reports that result too.
      */
     /**
-     * 空中経路を1回だけ解いて中身を出す。飛んでいる必要は無い——地上から投げて格子の粒度や
-     * 展開数を確かめられる方が、飛びながら画面を読むより遥かに測りやすい。
+     * Solves the aerial path once and prints its contents. No need to be flying: firing it from the ground to check grid granularity and
+     * expansion counts is far easier to measure than reading the screen while flying.
      */
     private static int reportFlight(NavCommandSink out, BlockPos goal) {
         Minecraft mc = Minecraft.getInstance();
@@ -567,7 +567,7 @@ public final class XaeroNavCommands {
                         FlightNavState.loadedHorizon(start, renderRadius), FlightGuide.NONE, cancelled),
                 (route, error) -> {
                     if (error != null) {
-                        XaeroNav.LOGGER.error("XaeroNav: flight診断の経路計算に失敗しました", error);
+                        XaeroNav.LOGGER.error("XaeroNav: Path computation for flight diagnostic failed", error);
                         return;
                     }
                     long elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000L;
@@ -581,14 +581,14 @@ public final class XaeroNavCommands {
                                 Mth.floor(Math.sqrt(tail.distanceToSqr(target)))));
                     }
                     if (level.dimensionType().hasCeiling()) {
-                        // 描画距離の外は粗い層（Xaeroの地図由来）が担当する。中間目標が0本なら、
-                        // その方向のデータが地図に無い＝未訪問ということ。Xaeroを読むためメインスレッド
-                        // 専用（FlightNavStateのクラスJavadoc参照）——ここは既にメインスレッドへ戻った後
+                        // Beyond render distance the coarse layer (from Xaero's map) takes over. Zero intermediate targets means
+                        // the map has no data in that direction, i.e. unvisited. It reads Xaero, so it's main-thread
+                        // only (see FlightNavState's class Javadoc); we're already back on the main thread here
                         CoarseRouter.Route coarse = FlightNavState.solveCoarseRoute(level, playerPos, goal, rockets);
                         out.success(TextCompat.translatable("commands.xaeronav.flight_coarse",
                                 coarse.waypoints().size(), coarse.reachedGoal() ? 1 : 0));
                     }
-                    // これは測るだけのコマンドで、目的地は設定しない。線を出すには goto が要る
+                    // This command only measures; it doesn't set a goal. Showing a line needs goto
                     out.success(TextCompat.translatable("commands.xaeronav.flight_diagnostic_only"));
                 });
         return 1;
@@ -618,7 +618,7 @@ public final class XaeroNavCommands {
                 cancelled -> runProbe(normal.view(), normal.bounds(), start, goal, cancelled),
                 (normalRun, error) -> {
                     if (error != null) {
-                        XaeroNav.LOGGER.error("XaeroNav: probe診断の通常予算実行に失敗しました", error);
+                        XaeroNav.LOGGER.error("XaeroNav: Regular-budget run for probe diagnostic failed", error);
                         return;
                     }
                     reportProbeRun(out, "commands.xaeronav.probe_normal", normalRun);
@@ -629,11 +629,11 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 掘削が有効だと、固体セルがすべて「有限コストで進入可能」になる（ChunkView#computeState）。
-     * 探索空間が地表という面から山という体積に変わるので、同じ箱・同じ上限のまま掘削だけを切って
-     * 走らせた展開ノード数との差が、掘削が分岐数に効いている量そのものになる。
-     * 箱の広さを変えずに比べるため、チャンク参照を共有する派生ビューを使う
-     * （{@link #DIAGNOSTIC}は単一スレッドなので、通常予算の完了後に逐次実行される）。
+     * With digging enabled, every solid cell becomes "enterable at finite cost" (ChunkView#computeState).
+     * The search space changes from the surface (a plane) to the mountain (a volume), so the difference from the expanded-node count
+     * of running the same box and cap with only digging off is exactly how much digging affects the branching factor.
+     * To compare without changing the box size, it uses a derived view sharing the chunk references
+     * ({@link #DIAGNOSTIC} is single-threaded, so this runs sequentially after the regular-budget run completes).
      */
     private static void continueProbeAfterNormal(NavCommandSink out, long generation, Level level, Player player,
                                                   BlockPos start, BlockPos goal, int renderRadius, int normalMargin,
@@ -648,7 +648,7 @@ public final class XaeroNavCommands {
                 cancelled -> runProbe(normal.view().withoutDigging(), normal.bounds(), start, goal, cancelled),
                 (noDiggingRun, error) -> {
                     if (error != null) {
-                        XaeroNav.LOGGER.error("XaeroNav: probe診断の掘削OFF実行に失敗しました", error);
+                        XaeroNav.LOGGER.error("XaeroNav: Digging-off run for probe diagnostic failed", error);
                         return;
                     }
                     reportProbeRun(out, "commands.xaeronav.probe_no_digging", noDiggingRun);
@@ -658,11 +658,11 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 予算切れ（ノード数上限・時間上限）での未到達は、箱を広げても同じ上限に同じように当たるだけで
-     * 結果は変わらない（実機で確認済み: 通常マージンと拡大後で展開ノード数が完全一致していた）。
-     * ここで弾かないと、無駄なA*をもう1回投げたうえ「箱が原因」と誤読させる出力になる。
-     * 時間上限で切れた回もここに含める——展開数だけを見ると「範囲が狭い」と誤読して
-     * widenTriggeredに倒れてしまう。
+     * Not reaching because the budget ran out (node cap, time limit) just hits the same cap the same way even with a wider box,
+     * and the result doesn't change (confirmed in-game: the expanded-node counts matched exactly between the regular margin and widened box).
+     * Without rejecting it here, it would submit another pointless A* and produce output that misleads into "the box is the cause".
+     * Runs cut off by the time limit are included too: looking only at the expansion count, they'd be misread as "range too narrow"
+     * and tip into widenTriggered.
      */
     private static void continueProbeAfterDigging(NavCommandSink out, long generation, Level level, Player player,
                                                    BlockPos start, BlockPos goal, int renderRadius, int normalMargin,
@@ -674,16 +674,16 @@ public final class XaeroNavCommands {
         if (!normalRun.result().complete() && budgetExhausted) {
             out.success(TextCompat.translatable(
                     "commands.xaeronav.probe_widen_skipped_budget", maxExpandedNodes));
-            // 上限に張り付いた回どうしを比べても展開ノード数は必ず一致するので、そこからは何も分からない。
-            // 打ち切りを時間だけに任せて「この地形で目的地まで実際に何ノード要るのか」を測り、
-            // 設定値が足りないだけなのか、時間予算でも届かない＝探索側の問題なのかを切り分ける
+            // Comparing runs pinned at the cap always gives the same expanded-node count, so nothing can be learned from it.
+            // Leave the cutoff to time alone to measure "how many nodes this terrain actually needs to reach the goal",
+            // and tell apart whether the setting is just too low or it can't reach even within the time budget, i.e. a search-side problem
             SearchLimits unboundedLimits = new SearchLimits(PROBE_UNBOUNDED_MAX_EXPANDED_NODES,
                     AStarPathfinder.DEFAULT_TIME_LIMIT_MILLIS, XaeroNavConfig.INSTANCE.heuristicWeight());
             DIAGNOSTIC.submit(generation,
                     cancelled -> runProbe(normal.view(), normal.bounds(), start, goal, unboundedLimits, cancelled),
                     (unboundedRun, error) -> {
                         if (error != null) {
-                            XaeroNav.LOGGER.error("XaeroNav: probe診断の上限なし実行に失敗しました", error);
+                            XaeroNav.LOGGER.error("XaeroNav: Uncapped run for probe diagnostic failed", error);
                             return;
                         }
                         reportProbeRun(out, "commands.xaeronav.probe_unbounded", unboundedRun);
@@ -699,7 +699,7 @@ public final class XaeroNavCommands {
                     cancelled -> runProbe(widened.view(), widened.bounds(), start, goal, cancelled),
                     (widenedRun, error) -> {
                         if (error != null) {
-                            XaeroNav.LOGGER.error("XaeroNav: probe診断の拡大再試行に失敗しました", error);
+                            XaeroNav.LOGGER.error("XaeroNav: Widened retry for probe diagnostic failed", error);
                             return;
                         }
                         reportProbeRun(out, "commands.xaeronav.probe_widened", widenedRun);
@@ -708,13 +708,13 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * ゴールのセルそのものが探索の終了条件を満たしうるかを報告する。到達判定は座標の完全一致
-     * （{@code AStarPathfinder#reachedGoal}）なので、ゴールが箱の外にある・足元に立てる地面が無い・
-     * 体の2セルに入れないのいずれでも、予算をいくら積んでも到達しない。展開ノード数だけを見ていると
-     * この「そもそも終われない探索」を予算不足と読み違える。
+     * Reports whether the goal cell itself can satisfy the search's termination condition. The arrival check is an exact coordinate match
+     * ({@code AStarPathfinder#reachedGoal}), so if the goal is outside the box, has no standable ground underfoot, or the body's two cells
+     * can't be entered, it never arrives no matter how much budget is added. Looking only at the expanded-node count,
+     * this "search that can't finish at all" gets misread as a lack of budget.
      *
-     * <p>体の2セルは掘って入れるなら通れるので、掘れないセル（溶岩・危険セル・掘削禁止設定）だけを
-     * 到達不能として扱う。素の空きかどうかで判定すると、掘れば普通に到達する目的地まで不能と報告する。
+     * <p>The body's two cells are passable if they can be dug into, so only undiggable cells (lava, hazard cells, dig-forbidden config) are
+     * treated as unreachable. Judging by plain emptiness would report goals as unreachable even when digging reaches them normally.
      */
     private static void reportGoalCell(NavCommandSink out, Level level, ChunkView view, SearchBounds bounds,
                                         BlockPos start, BlockPos goal, int renderRadius) {
@@ -722,8 +722,8 @@ public final class XaeroNavCommands {
         int y = goal.getY();
         int z = goal.getZ();
         if (!bounds.contains(x, y, z)) {
-            // 箱はゴール方向へrenderRadiusで切られる。長距離ナビの目的地をそのまま渡すと必ずここへ
-            // 落ちるので、どこまでなら測れるのかを併せて出さないと同じ指定を繰り返すことになる
+            // The box is clipped by renderRadius toward the goal. Passing a long-range navigation goal as-is always lands
+            // here, so unless it also shows how far can be measured, the same request gets repeated
             out.success(TextCompat.translatable("commands.xaeronav.probe_goal_outside_bounds",
                     Math.round(horizontalDistance(start, goal)), renderRadius));
             return;
@@ -733,9 +733,9 @@ public final class XaeroNavCommands {
         long feetCell = view.cell(x, y, z);
         long headCell = view.cell(x, y + 1, z);
         long belowCell = view.cell(x, y - 1, z);
-        // 足場が無くても、そこへ置いて立てるなら到達しうる（addBridgeが床を作って着く）。
-        // 置ける状態かを見ずに「原理的に到達しない」と言い切ると、橋で届く目的地まで
-        // 探索の側の問題として誤読させる
+        // Even without footing, it can be reached if a block can be placed there to stand on (addBridge makes a floor and lands).
+        // Declaring it "fundamentally unreachable" without checking whether placing is possible would misread goals reachable by bridging
+        // as a search-side problem
         boolean floorReachable = CellData.standable(belowCell)
                 || view.canPlaceBlocks()
                 && (CellData.lava(belowCell) || CellData.replaceable(belowCell));
@@ -750,7 +750,7 @@ public final class XaeroNavCommands {
         }
     }
 
-    /** 掘って入れるセルも通れる。掘れないセル（溶岩・危険セル・掘削禁止設定）だけが進入不可。 */
+    /** Cells that can be dug into are also passable. Only undiggable cells (lava, hazard cells, dig-forbidden config) can't be entered. */
     private static boolean enterable(long cell) {
         return CellData.occupiableWithoutDigging(cell) || !Double.isInfinite(CellData.digTicks(cell));
     }
@@ -760,8 +760,8 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * {@code UNRESOLVED_SHAPE}（{@code hasDynamicShape()}なブロック、CellData参照）はmodブロックの
-     * ことが多く、対象を名指ししないと「なぜここだけ通れないのか」が地形からは分からない。
+     * {@code UNRESOLVED_SHAPE} (blocks with {@code hasDynamicShape()}, see CellData) is often a mod block,
+     * and unless the block is named, "why only this spot is impassable" can't be told from the terrain.
      */
     private static Component describeGoalCell(Level level, BlockPos pos, long cell) {
         if (CellData.unresolvedShape(cell)) {
@@ -777,8 +777,8 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * {@link ChunkView#capture}はメインスレッド専用。ここで作った{@link CapturedView}をバックグラウンドの
-     * {@link #DIAGNOSTIC}へ渡し、実際のA*探索はワーカースレッドで行う。
+     * {@link ChunkView#capture} is main-thread only. The {@link CapturedView} made here is passed to the background
+     * {@link #DIAGNOSTIC}, and the actual A* search runs on the worker thread.
      */
     private static CapturedView captureProbeView(Level level, Player player, BlockPos start, BlockPos goal,
                                                   int horizontalMargin, int verticalMargin, int renderRadius) {
@@ -817,8 +817,8 @@ public final class XaeroNavCommands {
                 label, result.steps().size(), result.expandedNodes(), run.elapsedMillis(), spanX, spanZ,
                 result.distinctNodes()));
         if (run.loadedChunks() < run.totalChunks()) {
-            // 未読み込みチャンクは進入不可セルとして扱われる（ChunkView#capture）。
-            // 探索範囲の縁がまだ届いていないだけで、少し待てば同じ座標でも結果が変わりうる
+            // Unloaded chunks are treated as impassable cells (ChunkView#capture).
+            // The edge of the search range just hasn't loaded yet, so after a short wait the result may change even for the same coordinates
             out.success(TextCompat.translatable("commands.xaeronav.probe_chunks_missing",
                     run.loadedChunks(), run.totalChunks()));
         }
@@ -828,8 +828,8 @@ public final class XaeroNavCommands {
             reportWorkload(out, result.steps(), run.start());
         }
         if (run.trimmedPlacements() > 0) {
-            // 切り落とした後の経路を見るだけでは「橋を架けなかった」と「架けたが渡り切れなかった」が
-            // 同じ設置0に見える。原因が正反対なので、切った事実の方を出す
+            // Looking only at the path after trimming, "didn't build a bridge" and "built one but couldn't cross" both
+            // look like 0 placements. The causes are opposite, so show the fact that it was trimmed
             out.success(TextCompat.translatable("commands.xaeronav.probe_trimmed",
                     run.trimmedPlacements()));
         }
@@ -842,16 +842,16 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 足場を置く移動を提示できる状態か。設定と持ち物の両方が要る（{@code ChunkView#capture}）。
+     * Whether moves that place footing can be suggested. Both config and inventory are needed ({@code ChunkView#capture}).
      *
-     * <p>これを出さないと、ホットバーにブロックが1つも無いだけの回と、地形の側で橋が架からない回が
-     * 同じ「設置0」に見える。橋の挙動を調べているときに最初に潰すべき前提なので、探索の前に出す。
+     * <p>Without this, a run where the hotbar simply has no blocks and a run where the terrain prevents bridging
+     * both look like "0 placements". It's the first premise to rule out when investigating bridge behavior, so it's shown before the search.
      */
     private static void reportPlacementAvailability(NavCommandSink out, ChunkView view) {
         if (view.canPlaceBlocks()) {
-            // 予算（経路全体で置ける総数）も併記する。上限3つは「1本が何マス続いてよいか」しか
-            // 言っておらず、橋が短く切り上げられている理由が持ち物の枚数だった回を、
-            // これが無いと地形の側の話と取り違える
+            // Also show the budget (total placeable along the whole path). The three caps only say "how many blocks in a row
+            // one bridge may run", so without this, a run where bridges were cut short because of the inventory count
+            // would be mistaken for a terrain issue
             out.success(TextCompat.translatable("commands.xaeronav.probe_placing_on",
                     XaeroNavConfig.INSTANCE.maxBridgeRunBlocks(),
                     XaeroNavConfig.INSTANCE.maxLavaBridgeRunBlocks(),
@@ -866,14 +866,14 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * 経路が要求する作業量。{@code MovementType}の内訳だけでは見えないものを出す。
+     * The amount of work the path requires. Shows what the {@code MovementType} breakdown alone doesn't.
      *
-     * <p>橋と柱は{@code MoveKind}の区別で、公開APIの{@link MovementType}には出てこない
-     * （どちらもTRAVERSE/ASCENDとして数えられる）ので、設置先の有無から数え直す。
+     * <p>Bridges and pillars are distinguished by {@code MoveKind} and don't appear in the public {@link MovementType} API
+     * (both are counted as TRAVERSE/ASCEND), so they're recounted from whether there's a placement target.
      *
-     * <p>累積昇降量を並べるのは、上下動が「地形上どうしようもない量」なのか「経路の選び方が
-     * 生んだ量」なのかを、直線距離と比べて判断するため。数字が無いままでは、上下動の多さは
-     * 印象でしか語れない。
+     * <p>Cumulative ascent/descent is listed to judge, by comparing with straight-line distance, whether vertical movement is
+     * "unavoidable given the terrain" or "created by how the path was chosen". Without numbers, how much up-and-down there is
+     * can only be described by impression.
      */
     private static void reportWorkload(NavCommandSink out, List<PathStep> steps, BlockPos start) {
         int placements = 0;
@@ -901,10 +901,10 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * ステップ数を{@link MovementType}ごとに集計する。ASCEND/DESCENDは、直前の地点からXZ両方に
-     * ずれているものを「斜め」として別集計する（{@code MoveKind.DIAGONAL_ASCEND/DESCEND}は
-     * astarパッケージ内部の型で公開APIには出てこないが、カーディナルのAscend/Descendは定義上
-     * どちらか一方の軸にしか動かないので、両軸が動いていれば斜めだと判定できる）。
+     * Tallies steps per {@link MovementType}. ASCEND/DESCEND steps offset in both X and Z from the previous point
+     * are tallied separately as "diagonal" ({@code MoveKind.DIAGONAL_ASCEND/DESCEND} are internal types of the
+     * astar package and don't appear in the public API, but cardinal Ascend/Descend by definition move along
+     * only one axis, so movement on both axes means diagonal).
      */
     private static String describeMovements(List<PathStep> steps, BlockPos start) {
         Map<MovementType, Integer> counts = new EnumMap<>(MovementType.class);
@@ -934,10 +934,10 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * {@link #runProbe}1回分の結果。{@link #reportProbeRun}が探索範囲のサイズを求めるのに始点も要る。
+     * The result of one {@link #runProbe}. {@link #reportProbeRun} also needs the start to compute the search range size.
      *
-     * @param trimmedPlacements 提示できないとして末尾から落とした設置ステップ数。0でない＝橋は架かったが
-     *                          渡り切れなかった、という「設置0」とは正反対の結論になる
+     * @param trimmedPlacements number of placement steps dropped from the end as not suggestible. Non-zero means a bridge was built but
+     *                          couldn't be crossed, the exact opposite conclusion from "0 placements"
      */
     private record ProbeRun(BlockPos start, PathResult result, SearchBounds bounds, long elapsedMillis,
                              int loadedChunks, int totalChunks, int trimmedPlacements,
@@ -945,8 +945,8 @@ public final class XaeroNavCommands {
     }
 
     /**
-     * {@link PathfindingState}が範囲を広げた再挑戦を発動する条件と同じ水平距離の測り方（{@code y}は見ない）。
-     * ここでも同じ判定を再現する必要があるため、同じ式を独立に持つ。
+     * Measures horizontal distance the same way as the condition under which {@link PathfindingState} triggers the widened retry ({@code y} is ignored).
+     * The same check has to be reproduced here, so it keeps its own copy of the same formula.
      */
     private static double horizontalDistance(BlockPos a, BlockPos b) {
         double dx = a.getX() - b.getX();

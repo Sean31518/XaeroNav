@@ -5,15 +5,15 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.core.BlockPos;
 
 /**
- * 座標からノードを引くための表。{@link MemoCells}と同じページ配列で、こちらはセルではなく
- * {@link PathNode}を持つ。
+ * Table for looking up nodes by coordinate. Same paged array as {@link MemoCells}, but this one holds
+ * {@link PathNode}s instead of cells.
  *
- * <p>ノードは1回の展開につき50回前後引かれる（移動候補の数だけ）。展開したノードの周りは
- * 連続して埋まるので、座標から直に配列の添字を作れば、ハッシュ表を引かずに済む。
+ * <p>A node is looked up about 50 times per expansion (once per move candidate). The area around expanded nodes
+ * fills in contiguously, so building array indices directly from coordinates avoids hash table lookups.
  */
 final class NodeTable {
 
-    /** ページ1辺の大きさ（2の冪の指数）。{@link MemoCells}と同じ理由で4×4×4。 */
+    /** Page edge size (as a power-of-two exponent). 4x4x4 for the same reason as {@link MemoCells}. */
     private static final int PAGE_BITS = 2;
     private static final int PAGE_MASK = (1 << PAGE_BITS) - 1;
     private static final int PAGE_CELLS = 1 << (PAGE_BITS * 3);
@@ -26,7 +26,7 @@ final class NodeTable {
     private final long[] recentKeys = new long[RECENT];
     private final PathNode[][] recentPages = new PathNode[RECENT][];
 
-    /** その座標を含むページ。無ければ作る。 */
+    /** The page containing the coordinate. Created if absent. */
     PathNode[] page(int x, int y, int z) {
         long key = BlockPos.asLong(x >> PAGE_BITS, y >> PAGE_BITS, z >> PAGE_BITS);
         int slot = (int) ((key * MIX) >>> (64 - RECENT_BITS));

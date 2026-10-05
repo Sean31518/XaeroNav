@@ -3,11 +3,11 @@ package net.prason.xaeronav.pathfinding.coarse;
 import java.util.Arrays;
 
 /**
- * {@link CoarseMap}を1セル（＝1チャンク）ずつ埋めていく。
+ * Fills a {@link CoarseMap} one cell (= one chunk) at a time.
  *
- * <p>地図データの読み出し元（Xaero・ライブ読み取り）を知らずに済ませるために分けてある。
- * 読み出し側は1チャンク分を集計して{@link #putFloor}を呼ぶだけでよく、
- * こちらは配列の添字計算と床の並び替え・上限だけを持つ。
+ * <p>Separated so it doesn't need to know where map data is read from (Xaero, live reading).
+ * The reader only aggregates one chunk and calls {@link #putFloor};
+ * this side only holds the array index math and the floor ordering and limit.
  */
 public final class CoarseMapBuilder {
 
@@ -55,20 +55,20 @@ public final class CoarseMapBuilder {
         return chunksZ;
     }
 
-    /** 代表の高さだけを知っていて内部の起伏が分からない場合。平坦（min=max=height）として扱う。 */
+    /** When only a representative height is known and the internal relief isn't. Treated as flat (min=max=height). */
     public void putFloor(int chunkX, int chunkZ, byte cellKind, int cellHeight) {
         putFloor(chunkX, chunkZ, cellKind, cellHeight, cellHeight, cellHeight);
     }
 
     /**
-     * このセルに床を1つ追加する。範囲外の座標は黙って捨てる（読み出し側はリージョン単位で走るので、
-     * 範囲の縁で必ずはみ出す）。
+     * Adds one floor to this cell. Out-of-range coordinates are silently dropped (the reader runs per region, so it
+     * always overflows at the edges of the range).
      *
-     * <p>床は高さ昇順を保って挿入する。同じ高さ帯（{@link net.prason.xaeronav.xaero.XaeroMapReader}の
-     * 洞窟レイヤー1枚ぶん）を2回書いた場合は上書きにする——同じ参照Yの読み直しで同じレイヤーが
-     * 再度渡されても床が増殖しないようにするため。{@link CoarseMap#MAX_FLOORS}を超える分は、
-     * 最後に追加された最遠の床を捨てる（呼び出し側は参照Yに近い順に渡す想定なので、捨てるのは
-     * 常に最も遠かった床になる）。
+     * <p>Floors are inserted keeping ascending height order. Writing the same height band (one cave layer of
+     * {@link net.prason.xaeronav.xaero.XaeroMapReader}) twice overwrites; this keeps floors from multiplying when the
+     * same layer is passed again on a re-read with the same reference Y. Beyond {@link CoarseMap#MAX_FLOORS}, the
+     * farthest floor added last is dropped (callers are expected to pass in order of closeness to the reference Y, so
+     * what's dropped is always the farthest floor).
      */
     public void putFloor(int chunkX, int chunkZ, byte cellKind, int cellHeight, int cellMinHeight,
                           int cellMaxHeight) {
@@ -85,7 +85,7 @@ public final class CoarseMapBuilder {
         while (insertAt < count && height[base + insertAt] < cellHeight) {
             insertAt++;
         }
-        // 同じ高さの床が既にあれば上書き（新規追加ではなく差し替え）
+        // If a floor of the same height already exists, overwrite it (replace rather than add)
         if (insertAt < count && height[base + insertAt] == cellHeight) {
             kind[base + insertAt] = cellKind;
             minHeight[base + insertAt] = (short) cellMinHeight;
@@ -97,9 +97,9 @@ public final class CoarseMapBuilder {
             knownCells++;
         }
         int newCount = Math.min(count + 1, CoarseMap.MAX_FLOORS);
-        // 上限を超える場合は「最も高い床」を捨てる（挿入位置が末尾なら新しい床自体がそれに当たる）。
-        // ここには高さの基準が無いので、これ以上のことは決められない——どの高さ帯を残すかに
-        // 意味があるなら、呼び出し側が渡す前にMAX_FLOORS個へ絞ること（LiveCoarseSamplerはそうしている）
+        // Over the limit, drop "the highest floor" (if the insertion point is the end, the new floor itself is it).
+        // There's no height reference here, so nothing more can be decided; if which height bands to keep matters,
+        // the caller should narrow to MAX_FLOORS before passing (LiveCoarseSampler does)
         if (count == CoarseMap.MAX_FLOORS && insertAt == count) {
             return;
         }
@@ -117,16 +117,16 @@ public final class CoarseMapBuilder {
     }
 
     /**
-     * ここまでに床が1つ以上積まれたセルの数。読み出し側が<b>レイヤーごとの取り分</b>を
-     * 測るために要る（{@code XaeroMapReader#readSurface}）。
+     * Number of cells with at least one floor stacked so far. Needed by the reader to measure <b>each layer's
+     * share</b> ({@code XaeroMapReader#readSurface}).
      */
     public int knownCells() {
         return knownCells;
     }
 
     /**
-     * このセルに積まれている床の数。読み出し側が「どのレイヤーからも床が得られなかったセル」を
-     * 全レイヤーを読み終えてから判定するために要る。
+     * Number of floors stacked in this cell. Needed by the reader to determine "cells that got no floor from any
+     * layer" after reading all layers.
      */
     public int floorCount(int chunkX, int chunkZ) {
         int localX = chunkX - minChunkX;
@@ -137,16 +137,16 @@ public final class CoarseMapBuilder {
         return floorCount[localZ * chunksX + localX];
     }
 
-    /** 代表の高さだけを知っていて内部の起伏が分からない場合。平坦（min=max=height）として扱う。 */
+    /** When only a representative height is known and the internal relief isn't. Treated as flat (min=max=height). */
     public void replaceCell(int chunkX, int chunkZ, byte cellKind, int cellHeight) {
         replaceCell(chunkX, chunkZ, cellKind, cellHeight, cellHeight, cellHeight);
     }
 
     /**
-     * このセルの床をすべて消し、単一の床で置き換える。{@link #putFloor}は「この高さ帯にはこの
-     * データがある」を積み増していく操作なので、既存の床と高さが違う新しいデータは（同じ物理的
-     * セルの更新のつもりでも）別の階層として追加されてしまう。呼び出し側が「このセルの真実は
-     * これで全部」と確信しているとき（診断・テストでの地形の作り直しなど）はこちらを使うこと。
+     * Clears all floors of this cell and replaces them with a single floor. {@link #putFloor} is an operation that
+     * accumulates "this height band has this data", so new data at a different height from existing floors gets
+     * added as a separate level (even if meant as an update of the same physical cell). Use this when the caller is
+     * sure "this is the whole truth for this cell" (diagnostics, rebuilding terrain in tests, etc.).
      */
     public void replaceCell(int chunkX, int chunkZ, byte cellKind, int cellHeight, int cellMinHeight,
                              int cellMaxHeight) {
@@ -211,8 +211,8 @@ public final class CoarseMapBuilder {
     }
 
     /**
-     * このセルを陸塊の一部とみなすか。代表は<b>最初の床</b>——{@code CoarseMap#kindBreakdown}と
-     * 同じ規則で、天井のある次元で階層ごとに島を数え直さないための割り切り。
+     * Whether this cell is considered part of a landmass. The representative is <b>the first floor</b>, the same rule
+     * as {@code CoarseMap#kindBreakdown}; a simplification to avoid recounting islands per level in dimensions with a ceiling.
      */
     private boolean isLand(int cellIndex) {
         return floorCount[cellIndex] > 0 && kind[cellIndex * CoarseMap.MAX_FLOORS] == CoarseMap.LAND;

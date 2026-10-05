@@ -31,24 +31,24 @@ import net.prason.xaeronav.util.MonotonicTime;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * 航法グラフのガイドの作りかけ・出来上がりを持つ。
+ * Holds the in-progress and finished navigation graph guide.
  *
- * <p>読み込み済みの窓の中を、探索と同じ移動生成でセクションごとに組み（{@link NavGraph}）、目的地までの残りコストを
- * 逆Dijkstraで作る（{@link WindowField}）。窓の中は正確なので、探索は目的地をそのまま重み1.0で狙える
- * （歩き通しの実測: 広域長距離1.016/1.030倍・エンド1.013/1.029倍・ネザー1.013/1.023倍。層1の中間目標へ寄る探索は
- * 1.067/1.165・1.122/未到達、3D粗層だけのネザーは1.048/1.104）。
+ * <p>Builds the loaded window section by section with the same move generation as the search ({@link NavGraph}), and computes the remaining cost to the goal
+ * with a reverse Dijkstra ({@link WindowField}). Inside the window it is exact, so the search can aim straight at the goal with weight 1.0
+ * (measured full walks: wide-area long distance 1.016/1.030x, End 1.013/1.029x, Nether 1.013/1.023x. Searching via layer 1's intermediate targets gives
+ * 1.067/1.165 and 1.122/not reached; the Nether with only the 3D coarse layer gives 1.048/1.104).
  *
- * <p>スレッドの境目は{@link NetherVoxelGuide}と同じ形——メインスレッドでチャンクの参照だけを集め、組むのはワーカー。
- * 組み上がるまでは{@code null}を返し、呼び出し側は従来の探索で進む。
+ * <p>The thread boundary has the same shape as {@link NetherVoxelGuide}: the main thread only collects chunk references, and a worker builds.
+ * Until it is built it returns {@code null}, and the caller proceeds with the regular search.
  */
 final class NavGraphGuide {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
     /**
-     * 値の出どころ（{@link #origin}）を含む診断ログを組み立てて出すスレッド。{@link #origin}はガイドの辺を下るので、
-     * メインスレッドで組むと継ぎ足しの受け取りが数十ms止まる。ガイドは組み上がった後は変わらず、探索スレッドからも
-     * 読まれているので、別スレッドから読んでよい。
+     * Thread that assembles and emits diagnostic logs including where values come from ({@link #origin}). {@link #origin} walks down the guide's edges,
+     * so doing it on the main thread stalls extension handling for tens of ms. The guide doesn't change once built and is also read from
+     * search threads, so it may be read from another thread.
      */
     private static final ExecutorService DIAGNOSTIC_LOG = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "xaeronav-diagnostic-log");
@@ -56,37 +56,37 @@ final class NavGraphGuide {
         return thread;
     });
 
-    /** {@link #origin}を使うログを{@link #DIAGNOSTIC_LOG}で出す。 */
+    /** Emits logs that use {@link #origin} via {@link #DIAGNOSTIC_LOG}. */
     static void logOffThread(Runnable log) {
         DIAGNOSTIC_LOG.execute(log);
     }
 
     /**
-     * ヒープに余裕があるときの窓の半径（ブロック）。描画距離がこれより広くてもここで切る。
+     * Window radius (blocks) when the heap has room. Cut off here even if the render distance is wider.
      *
-     * <p>経路の見直し（{@link net.prason.xaeronav.pathfinding.navgraph.RouteReview}）は目的地が窓に入ってから走るので、
-     * 窓が狭いと遠回りに気づくのが遅れる（実機のネザーで目的地まで約130ブロックで初めて気づき、余計に653tick）。
-     * 歩き通しの模型で160・192・224・240を測った。
+     * <p>Route review ({@link net.prason.xaeronav.pathfinding.navgraph.RouteReview}) runs only after the goal enters the window,
+     * so a narrow window notices detours late (in the real Nether it first noticed about 130 blocks from the goal, costing an extra 653 ticks).
+     * Measured 160, 192, 224 and 240 on the full-walk model.
      * <ul>
-     * <li>224は、ネザーが平均1.044→1.001・最悪1.147→1.003倍、現世が1.018→1.009倍。実機の保存地形の罠では6207→4177tick（真値3941）</li>
-     * <li>192は、ネザーの最悪が1.229倍で、160より悪い。広げるほど単調に良くなるわけではない</li>
-     * <li>240は、エンド外側の島の1本で経路が出なくなる</li>
+     * <li>224: Nether average 1.044 -> 1.001 and worst 1.147 -> 1.003x, Overworld 1.018 -> 1.009x. On the trap in real saved terrain, 6207 -> 4177 ticks (true value 3941)</li>
+     * <li>192: Nether worst is 1.229x, worse than 160. Widening doesn't improve things monotonically</li>
+     * <li>240: one route on the End's outer islands stops producing a path</li>
      * </ul>
-     * 辺の数は面積に比例して増える。224で辺は最大7,000万本、グラフとガイドは合わせて最大約270MB（160では約150MB。ネザーの罠の地形で実測）。
-     * ガイド1回の最大は1.3→2.1秒になる。
+     * The edge count grows with area. At 224 there are up to 70 million edges, and the graph and guide together take up to about 270MB (about 150MB at 160; measured on the Nether trap terrain).
+     * The worst single guide build goes from 1.3 to 2.1 seconds.
      *
-     * <p>ヒープが{@link #WIDE_WINDOW_MIN_HEAP_BYTES}未満なら{@link #NARROW_WINDOW_BLOCKS}に落とす。
+     * <p>If the heap is below {@link #WIDE_WINDOW_MIN_HEAP_BYTES}, drops to {@link #NARROW_WINDOW_BLOCKS}.
      */
     private static final int WIDE_WINDOW_BLOCKS = 224;
 
-    /** ヒープが小さいときの窓。間の192はネザーの最悪が160より悪いので選ばない。 */
+    /** The window when the heap is small. 192, in between, isn't chosen because its Nether worst case is worse than 160. */
     private static final int NARROW_WINDOW_BLOCKS = 160;
 
     /**
-     * 窓224を使うのに要るヒープ。公式ランチャーの既定の2GBでは、本体の分と窓224の最大約270MBが重なると余裕が無い。
+     * Heap needed to use the 224 window. With the official launcher's default 2GB, the game's own usage plus the 224 window's up to about 270MB leave no headroom.
      *
-     * <p>{@code -Xmx3G}を指定した人は224にしたいが、SerialGC・ParallelGCの{@link Runtime#maxMemory}は生存領域1つ分を
-     * 引いて返す（実測: {@code -Xmx3G}で2,969MB・2,731MB、{@code -Xmx2G}で1,979MB・1,820MB）ので、間の2.5GBで切る。
+     * <p>People who set {@code -Xmx3G} should get 224, but {@link Runtime#maxMemory} under SerialGC/ParallelGC returns the value minus one survivor space
+     * (measured: 2,969MB and 2,731MB with {@code -Xmx3G}, 1,979MB and 1,820MB with {@code -Xmx2G}), so the cut is at 2.5GB, in between.
      */
     private static final long WIDE_WINDOW_MIN_HEAP_BYTES = 2560L << 20;
 
@@ -94,82 +94,82 @@ final class NavGraphGuide {
             ? WIDE_WINDOW_BLOCKS : NARROW_WINDOW_BLOCKS;
 
     /**
-     * 窓の半径（ブロック）。探索の箱もこれで切ること——窓の外ではガイドが層1か幾何の推定に落ちるので、
-     * 箱と窓がずれると測っていない探索になる。
+     * Window radius (blocks). Clip the search box to this too: outside the window the guide falls back to layer 1 or a geometric estimate,
+     * so if the box and window disagree the search runs on unmeasured ground.
      */
     static int window(int renderRadius) {
         return Math.min(WINDOW_BLOCKS, renderRadius);
     }
 
     /**
-     * 組み立てに失敗したら、これだけ組み直さない。失敗する条件（メモリ不足など）はすぐには変わらないので、待たずにやり直すと
-     * 案内を待っている間は毎tick、チャンク集め（メインスレッド）と窓全体の組み立てを繰り返す。
+     * After a failed build, don't rebuild for this long. The conditions that cause failure (out of memory, etc.) don't change right away; retrying without waiting
+     * would repeat chunk collection (main thread) and a full-window build every tick while guidance is pending.
      */
     private static final long FAILURE_BACKOFF_MILLIS = 30_000L;
 
     /**
-     * 組んだ中心からこれだけ歩いたら組み直す。組み直しは帯の組み足し（0.02〜0.3秒）とガイド作り（0.5〜1.3秒）で、
-     * 組んでいる間は次を始めないので、実際の遅れはこれに組み直しの間に歩く分が足される。
+     * Rebuild after walking this far from the center it was built around. A rebuild is adding bands (0.02-0.3s) plus building the guide (0.5-1.3s),
+     * and the next one doesn't start while building, so the actual lag is this plus the distance walked during the rebuild.
      *
-     * <p>歩き通しの模型（広域長距離4本）では8ブロックで遅れ無しと同じ経路になった。16ブロックでは1本が1.030→1.101倍に落ち、
-     * 32ブロックでは戻る——窓の縁が区間の始点と噛み合う位相で外れるので、間隔を詰めて噛み合う幅を小さくしておく。
+     * <p>On the full-walk model (4 wide-area long-distance routes), 8 blocks gave the same paths as no lag. At 16 blocks one route degraded from 1.030 to 1.101x,
+     * and at 32 blocks it recovered: the window edge misses in phase with the leg starts, so keep the interval tight to keep the meshing width small.
      */
     private static final int REBUILD_MOVE_BLOCKS = 8;
 
-    /** 詰まったときに捨てるチャンクの半径。掘る・置くはたいてい自分の足元で起きる。 */
+    /** Radius of chunks discarded when stuck. Digging and placing usually happen right underfoot. */
     private static final int STALL_INVALIDATE_CHUNKS = 1;
 
     /**
-     * 詰まったことによる組み直しの下限間隔。詰まりは同じ場所で何度も続くので、間引かないと
-     * 足元の数百セクションを探索のたびに組み直すことになる。
+     * Minimum interval between rebuilds caused by being stuck. Being stuck repeats many times in the same place, so without throttling
+     * the hundreds of sections underfoot would be rebuilt on every search.
      */
     private static final long STALL_REBUILD_INTERVAL_MILLIS = 15_000L;
 
-    /** 初回の並列度。メインスレッド（描画）に1コア残す。組み上がるまでは案内が出ないので、待たせる時間を優先する。 */
+    /** Parallelism for the first build. Leaves one core for the main thread (rendering). No guidance appears until it's built, so wait time takes priority. */
     private static final int WORKERS = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
 
     /**
-     * 歩きながらの組み直しの並列度。{@link Thread#MIN_PRIORITY}はmacOS・Linuxでは効かないので、全コアで組むと描画と
-     * 内蔵サーバーのスレッドを押しのける（実機: 10コア（高性能4）で8ブロックごとに9本が張り付き、歩いていて重かった）。
-     * 組み直しの間も古いガイドで探せるので、半分で遅れても案内は途切れない。
+     * Parallelism for rebuilds while walking. {@link Thread#MIN_PRIORITY} has no effect on macOS and Linux, so building on all cores pushes aside rendering and
+     * the integrated server's threads (in-game: on 10 cores (4 performance), 9 threads pinned every 8 blocks, and walking felt heavy).
+     * The old guide can still be searched during a rebuild, so even if half speed causes lag, guidance isn't interrupted.
      */
     private static final int REBUILD_WORKERS = Math.max(1, Runtime.getRuntime().availableProcessors() / 2 - 1);
 
     /**
-     * JITを温めるために組む窓の半径。初回の組み立ては、JITが冷えたままだと温まった後の2.5倍かかる（実機の保存地形で
-     * 2.3〜2.7秒 → 0.9秒）。半径64を1回組んでおくと初回が約28%縮み、128に広げても縮み方は変わらなかった。
+     * Window radius built to warm up the JIT. With a cold JIT the first build takes 2.5x as long as when warm (on real saved terrain,
+     * 2.3-2.7s -> 0.9s). Building radius 64 once shrinks the first build by about 28%, and widening to 128 didn't shrink it further.
      */
     private static final int WARM_UP_WINDOW = 64;
 
-    /** 温めの並列度。ワールドに入った直後はチャンクの読み込みと描画で忙しいので、全力では組まない。 */
+    /** Parallelism for warm-up. Right after joining a world, chunk loading and rendering are busy, so it doesn't build at full speed. */
     private static final int WARM_UP_WORKERS = 2;
 
-    /** 温めたか。温まったコードはワールドを移っても残るので、1回のゲームにつき1回で足りる。 */
+    /** Whether warmed up. Warm code persists across worlds, so once per game session is enough. */
     private static final AtomicBoolean WARMED_UP = new AtomicBoolean();
 
-    /** 実機のログを出す間隔。組み直しは歩くたびに走るので、毎回出すと洪水になる。 */
+    /** Interval for in-game logs. Rebuilds run with every step, so logging each one would flood. */
     private static final long LOG_INTERVAL_MILLIS = 10_000L;
 
-    /** 負荷の集計（{@link Load}）を出す間隔。 */
+    /** Interval for emitting the load summary ({@link Load}). */
     private static final long LOAD_LOG_INTERVAL_MILLIS = 300_000L;
 
-    /** 組み立ての段取りを回す1本。探索用のワーカーを塞がないよう分ける。 */
+    /** A single thread that runs the build coordination. Kept separate so it doesn't block the search workers. */
     private final ExecutorService coordinator = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "XaeroNav 航法グラフ");
+        Thread thread = new Thread(runnable, "XaeroNav navigation graph");
         thread.setDaemon(true);
         return thread;
     });
 
-    /** セクションを並べて組む手。段取りの1本も手を動かすので、これは1本少ない。 */
+    /** Hands that build sections side by side. The coordinator thread also does work, so this is one fewer. */
     private final @Nullable ExecutorService pool = WORKERS <= 1 ? null
             : Executors.newFixedThreadPool(WORKERS - 1, new ThreadFactory() {
                 private final AtomicInteger count = new AtomicInteger();
 
                 @Override
                 public Thread newThread(Runnable runnable) {
-                    Thread thread = new Thread(runnable, "XaeroNav 航法グラフ-" + count.incrementAndGet());
+                    Thread thread = new Thread(runnable, "XaeroNav navigation graph-" + count.incrementAndGet());
                     thread.setDaemon(true);
-                    // 描画より後に回す。組み上がりが遅れても探索は従来どおり進むが、フレームが落ちると遊べない
+                    // Yield to rendering. If the build is late the search still proceeds as before, but dropped frames make it unplayable
                     thread.setPriority(Thread.MIN_PRIORITY);
                     return thread;
                 }
@@ -179,14 +179,14 @@ final class NavGraphGuide {
     private final ChangeGate<Boolean> logGate = new ChangeGate<>();
 
     /**
-     * どの条件に対するグラフか。ここが変われば捨てて組み直す——辺は掘れるか・置けるかで変わり
-     * （{@link ChunkView}が移動生成に渡す）、奈落の上の橋は目的地へ向かう向きにしか張られない。
+     * Which conditions the graph is for. If this changes, discard and rebuild: edges change with whether digging and placing are allowed
+     * (passed by {@link ChunkView} to move generation), and bridges over the void are only laid in the direction toward the goal.
      */
-    /** @param floored 航法グラフの下端をプレイヤーと目的地の高さで切るか（{@link NavGraph#floorBelow}） */
+    /** @param floored whether to cut the navigation graph's bottom at the player's and goal's heights ({@link NavGraph#floorBelow}) */
     private record Key(ResourceKey<Level> dimension, BlockPos goal, MovementOptions options, boolean canPlaceBlocks,
                        int window, int minY, int maxY, boolean floored) {
 
-        /** 辺が同じになるか。目的地の高さは辺に効かない（{@link NavGraph#retarget}）。 */
+        /** Whether the edges would be the same. The goal height doesn't affect edges ({@link NavGraph#retarget}). */
         boolean sameEdges(@Nullable Key other) {
             return other != null && dimension.equals(other.dimension) && goal.getX() == other.goal.getX()
                     && goal.getZ() == other.goal.getZ() && options.equals(other.options)
@@ -199,49 +199,49 @@ final class NavGraphGuide {
     }
 
     /**
-     * 窓の外の推定の出どころ。{@code source}が同じ間は作り直さない（層1の逆Dijkstraは地図全体を回すので、組み直しのたびには払わない）。
+     * Source of the estimate outside the window. Not rebuilt while {@code source} is the same (layer 1's reverse Dijkstra runs over the whole map, so it isn't paid on every rebuild).
      *
-     * @param name ログに出す名前
-     * @param make 段取りの1本で呼ぶ
-     * @param forwardOnly 組み直すたびに、窓の中心より推定の上で目的地から遠い縁を種から外す（{@link FarField#forwardOf}）
+     * @param name name shown in logs
+     * @param make called on the coordinator thread
+     * @param forwardOnly on every rebuild, removes from the seeds edges farther from the goal than the window center by the estimate ({@link FarField#forwardOf})
      */
     record Far(String name, Object source, Supplier<FarField> make, boolean forwardOnly) {
     }
 
     /**
-     * 3D粗層を窓の外の推定に使うときに掛ける倍率。3D粗層は真の残りの0.77倍前後に縮んでいて、窓の中の正確な値と尺度が食い違う。
+     * Factor applied when using the 3D coarse layer as the estimate outside the window. The 3D coarse layer shrinks to about 0.77x of the true remainder, mismatching the scale of the exact values inside the window.
      *
-     * <p>実測（ネザー4本、平均/最悪）: 1.0倍で1.016/1.035、1.3倍で1.013/1.023（3D粗層だけの現行は1.048/1.104）。
+     * <p>Measured (4 Nether routes, average/worst): 1.016/1.035 at 1.0x, 1.013/1.023 at 1.3x (currently 1.048/1.104 with only the 3D coarse layer).
      */
     static final double VOXEL_FAR_SCALE = 1.3;
 
     private volatile @Nullable Built built;
     private volatile boolean building;
-    // 高さの寄せ直しの後。経路は出たままなので、ガイドが無くても全力で組む理由が無い
+    // After a height realignment. The path is still showing, so there's no reason to build at full speed even without a guide
     private volatile boolean retargeted;
-    // 直近の探索が前進できなかった。ワーカースレッド（whenComplete）が立て、forGoalが落とす
+    // The last search failed to make progress. Set by the worker thread (whenComplete), cleared by forGoal
     private volatile boolean stalled;
     private long nextStallRebuildMillis;
-    // 組み立ての失敗から立ち直るまでの時刻と、続けて失敗した回数。完了を受けるスレッドが書き、forGoalが読む
+    // Time until recovering from a build failure, and the number of consecutive failures. Written by the thread receiving completion, read by forGoal
     private volatile long retryAfterMillis;
     private volatile int failures;
 
-    /** 段取りの1本だけが触る。 */
+    /** Touched only by the coordinator thread. */
     private final Load load = new Load();
-    /** 学ぶのは段取りの1本だけ。倍率はどこから読んでもよい。 */
+    /** Only the coordinator thread learns. The factor may be read from anywhere. */
     private final FarScaleCalibration farScale = new FarScaleCalibration();
 
-    /** 段取りの1本だけが触る。 */
+    /** Touched only by the coordinator thread. */
     private @Nullable NavGraph graph;
     private @Nullable Key graphKey;
     private @Nullable Object farSource;
     private FarField far = FarField.UNKNOWN;
 
     /**
-     * 今の目的地のガイド。無ければ組み始めて{@code null}を返す。<b>メインスレッドから呼ぶこと。</b>
+     * The guide for the current goal. If there is none, starts building and returns {@code null}. <b>Call from the main thread.</b>
      *
-     * @param far 窓の外の推定。{@code null}なら目的地までの直線距離（目的地が窓の外のときだけ置く）
-     * @return 組み直し中でも、同じ条件の古いガイドがあればそれ
+     * @param far estimate outside the window. If {@code null}, straight-line distance to the goal (placed only when the goal is outside the window)
+     * @return even while rebuilding, the old guide for the same conditions if there is one
      */
     @Nullable WindowField forGoal(Level level, Player player, BlockPos goal, int renderRadius, MovementOptions options,
                                   @Nullable Far far) {
@@ -251,11 +251,11 @@ final class NavGraphGuide {
         int maxY = GameCompat.maxBuildHeight(level) - 1;
         int logicalTop = minY + level.dimensionType().logicalHeight() - 1;
         if (level.dimensionType().hasCeiling() && at.getY() <= logicalTop && goal.getY() <= logicalTop) {
-            // ネザーの岩盤の天井より上は、下から掘って入れない（岩盤は掘れない）。そこを組むと窓のセクションが倍になり、
-            // 天井の上の平らな岩盤一面がノードになる（実機: 7,056セクション・初回構築7.2秒）
+            // Above the Nether's bedrock ceiling can't be entered by digging from below (bedrock can't be mined). Building it doubles the window's sections,
+            // and the whole flat bedrock surface above the ceiling becomes nodes (in-game: 7,056 sections, first build 7.2 seconds)
             maxY = logicalTop;
         }
-        // ネザーは通路が縦に積まれていて下の層を通る経路が普通にある。エンドはもともと島だけでノードが少ない
+        // The Nether stacks passages vertically, and paths through lower layers are common. The End is only islands to begin with and has few nodes
         boolean floored = !level.dimensionType().hasCeiling() && level.dimension() != Level.END;
         Key key = new Key(level.dimension(), goal, options, canPlaceBlocks(player, options), window, minY, maxY,
                 floored);
@@ -270,14 +270,14 @@ final class NavGraphGuide {
         return usable ? current.field() : null;
     }
 
-    /** 組み立てに失敗して、組み直しを見合わせている間か。この間は組み上がりを待たずに従来の探索で進めること。 */
+    /** Whether a build failed and rebuilding is on hold. During this time, proceed with the regular search without waiting for a build. */
     boolean failedRecently() {
         return MonotonicTime.millis() < retryAfterMillis;
     }
 
     /**
-     * いま出来上がっている、この目的地のガイド。組み直しは始めない。{@link #forGoal}と違って条件（持ち物・設定）は照合しないので、
-     * 引いてある経路を見直すことにだけ使う。
+     * The guide for this goal that is currently built. Doesn't start a rebuild. Unlike {@link #forGoal} it doesn't check conditions (inventory, config),
+     * so use it only to review a path already drawn.
      */
     @Nullable WindowField latest(BlockPos goal) {
         Built current = built;
@@ -285,49 +285,49 @@ final class NavGraphGuide {
     }
 
     /**
-     * 到着時間の表示で、ガイドの窓の外の推定に掛ける倍率（{@link FarScaleCalibration}）。探索には使わないこと。
+     * Factor applied to the guide's outside-window estimate for the arrival time display ({@link FarScaleCalibration}). Don't use it for searching.
      */
     double farScaleForDisplay() {
         return farScale.scale();
     }
 
     /**
-     * {@code from}のガイドの値がどこから来たか（{@link WindowField#descend}）を1語で。経路の向きを決めたのが
-     * 窓の中の実費か、窓の縁で読んだ外の推定かを、実機のログで見分けるためのもの。
+     * Where the guide's value at {@code from} came from ({@link WindowField#descend}), in one word. For telling apart in in-game logs whether what set the path's direction was
+     * the real cost inside the window or the outside estimate read at the window edge.
      */
     static String origin(CostToGo guide, BlockPos from) {
         if (!(guide instanceof WindowField field)) {
-            return "航法グラフ以外";
+            return "not navigation graph";
         }
         WindowField.Descent descent = field.descend(from.getX(), from.getY(), from.getZ());
         if (descent == null) {
-            return "ノードでない";
+            return "not a node";
         }
         if (descent.reachedGoal()) {
-            return "目的地(窓の中%d)".formatted(Math.round(descent.inside()));
+            return "goal(inside window %d)".formatted(Math.round(descent.inside()));
         }
         BlockPos exit = descent.exit();
         BlockPos goal = field.goal();
-        return "縁%s(窓の中%d+外の推定%d, 縁から目的地まで直線%d)".formatted(exit.toShortString(),
+        return "edge %s(inside window %d + outside estimate %d, straight from edge to goal %d)".formatted(exit.toShortString(),
                 Math.round(descent.inside()), Math.round(descent.outside()),
                 Math.round(Math.hypot(exit.getX() - goal.getX(), exit.getZ() - goal.getZ())));
     }
 
-    /** 持ち物は毎回見る。置けるブロックを拾った・使い切ったで橋の辺が生えたり消えたりする。 */
+    /** Inventory is checked every time. Picking up or using up placeable blocks makes bridge edges appear or disappear. */
     private static boolean canPlaceBlocks(Player player, MovementOptions options) {
         return options.bridgingEnabled()
                 && (GameCompat.abilities(player).instabuild || ChunkView.countPlaceableBlocks(player) > 0);
     }
 
     /**
-     * 直近の探索が前進できなかったことを伝える。足元のチャンクを捨てて組み直す——ブロック更新を拾っていないので、
-     * 掘った・置いた場所の辺は古いまま残る（自分が歩いた跡の掘削・設置は、歩き通しの模型でも古いまま測って質は落ちていない）。
+     * Reports that the last search failed to make progress. Discards the chunks underfoot and rebuilds: block updates aren't tracked,
+     * so edges where you dug or placed stay stale (on the full-walk model, measuring your own digging and placing as stale didn't degrade quality).
      *
-     * <p><b>ワーカースレッドから呼ばれる</b>（探索の{@code whenComplete}）。
+     * <p><b>Called from a worker thread</b> (the search's {@code whenComplete}).
      */
     /**
-     * まだ目的地が無いうちに、プレイヤーの周りの小さな窓を1回組んで捨て、JITを温める。<b>メインスレッドから呼ぶこと。</b>
-     * 結果は使わないので、目的地は仮の点でよい。目的地が決まって本番の組み立てが始まったら打ち切られる（世代が進む）。
+     * Before there is a goal, builds and discards one small window around the player to warm up the JIT. <b>Call from the main thread.</b>
+     * The result isn't used, so the goal can be a dummy point. Once a goal is set and the real build starts, this is cancelled (the generation advances).
      */
     void warmUp(Level level, Player player, MovementOptions options) {
         if (WARMED_UP.getAndSet(true)) {
@@ -352,12 +352,12 @@ final class NavGraphGuide {
                             at.getX(), at.getZ(), WARM_UP_WINDOW,
                             LoadedArea.chunks(at.getX(), at.getZ(), WARM_UP_WINDOW, view::chunkLoaded),
                             FarField.straightLineTo(goal), pool, WARM_UP_WORKERS, () -> generation.get() != myGeneration);
-                    LOGGER.info("XaeroNav: 航法グラフの下準備 ({}ms, {})", MonotonicTime.millis() - began,
-                            warmed == null ? "目的地が決まったので打ち切り" : "セクション" + warmed.sectionsBuilt());
+                    LOGGER.info("XaeroNav: Navigation graph warm-up ({}ms, {})", MonotonicTime.millis() - began,
+                            warmed == null ? "cancelled because a goal was set" : "sections " + warmed.sectionsBuilt());
                 }, coordinator)
                 .whenComplete((ignored, error) -> {
                     if (error != null) {
-                        LOGGER.warn("XaeroNav: 航法グラフの下準備に失敗しました（案内には影響しません）", error);
+                        LOGGER.warn("XaeroNav: Navigation graph warm-up failed (does not affect guidance)", error);
                     }
                 });
     }
@@ -380,7 +380,7 @@ final class NavGraphGuide {
         long captureMillis = MonotonicTime.millis() - captureBegan;
         int minY = key.minY();
         int maxY = key.maxY();
-        // この目的地のガイドがまだ無い＝案内を待たせている間だけ全力で組む
+        // No guide for this goal yet, i.e. guidance is pending: build at full speed only during that time
         int workers = retargeted || built != null && built.key().equals(key) ? REBUILD_WORKERS : WORKERS;
         building = true;
         long myGeneration = generation.incrementAndGet();
@@ -396,11 +396,11 @@ final class NavGraphGuide {
                 }, coordinator)
                 .whenComplete((refreshed, error) -> {
                     if (error != null) {
-                        // 打ち切りは例外でなくnullで返るので、世代が古い回でもこれは本物の失敗
+                        // Cancellation returns null rather than throwing, so even for a stale generation this is a real failure
                         fail(error);
                     }
                     if (generation.get() != myGeneration) {
-                        // 新しい組み立てが始まっている。その印を落とすと、組み立てが重なる
+                        // A new build has started. Clearing its flag would make builds overlap
                         return;
                     }
                     building = false;
@@ -412,34 +412,34 @@ final class NavGraphGuide {
                     retargeted = false;
                     if (LOGGER.isDebugEnabled() && logGate.changed(true, MonotonicTime.millis(), LOG_INTERVAL_MILLIS)) {
                         NavGraph current = graph;
-                        LOGGER.debug("XaeroNav: 航法グラフ (組んだセクション={}, 構築{}ms, ガイド{}ms, 辺={}, ノード={}, "
-                                        + "グラフ{}MB, ガイド{}MB, 窓{}(ヒープ上限{}MB), 並列{}, 窓の外={}, 到着時間での窓の外の倍率={}, "
-                                        + "中心{}の値の出どころ={})",
+                        LOGGER.debug("XaeroNav: Navigation graph (sections built={}, build {}ms, guide {}ms, edges={}, nodes={}, "
+                                        + "graph {}MB, guide {}MB, window {}(heap limit {}MB), parallel {}, outside window={}, outside-window factor for arrival time={}, "
+                                        + "origin of value at center {}={})",
                                 refreshed.sectionsBuilt(), refreshed.buildMillis(), refreshed.field().buildMillis(),
                                 refreshed.field().edges(), refreshed.field().nodes(),
                                 current == null ? 0 : current.bytes() >> 20, refreshed.field().bytes() >> 20,
                                 key.window(), Runtime.getRuntime().maxMemory() >> 20, workers,
-                                farMap == null ? "直線距離" : farMap.name(), "%.2f".formatted(farScale.scale()),
+                                farMap == null ? "straight-line distance" : farMap.name(), "%.2f".formatted(farScale.scale()),
                                 at.toShortString(), origin(refreshed.field(), at));
                     }
                 });
     }
 
     /**
-     * 組み立てが失敗した。しばらく組み直さず、出来上がっていたガイドとグラフも手放す——メモリ不足の後に数百MBを
-     * 抱えたままにしないためと、途中で落ちた回の組み立て用の配列を次の回に使い回さないため。
+     * The build failed. Don't rebuild for a while, and also release the built guide and graph: so as not to keep hundreds of MB
+     * after running out of memory, and so as not to reuse a crashed build's arrays for the next one.
      */
     private void fail(Throwable error) {
         failures++;
         built = null;
         retryAfterMillis = MonotonicTime.millis() + FAILURE_BACKOFF_MILLIS;
-        LOGGER.error("XaeroNav: 航法グラフの作成に失敗しました（{}回続けて）。{}秒は組み直さず、航法グラフ無しで案内します",
+        LOGGER.error("XaeroNav: Failed to build the navigation graph ({} times in a row). Not rebuilding for {} seconds; guiding without the navigation graph",
                 failures, FAILURE_BACKOFF_MILLIS / 1000, error);
-        // 完了済みの回にwhenCompleteを付けるとメインスレッドで呼ばれるので、グラフは段取りの1本で手放す
+        // Attaching whenComplete to an already completed run calls it on the main thread, so the graph is released on the coordinator thread
         coordinator.execute(this::forgetGraph);
     }
 
-    /** 段取りの1本で呼ぶ。 */
+    /** Called on the coordinator thread. */
     private void forgetGraph() {
         graph = null;
         graphKey = null;
@@ -447,18 +447,18 @@ final class NavGraphGuide {
         far = FarField.UNKNOWN;
     }
 
-    /** 段取りの1本で走る。 */
+    /** Runs on the coordinator thread. */
     private NavGraph.@Nullable Refreshed refresh(Key key, ChunkView view, BlockPos at, int minY, int maxY,
                                                  @Nullable Far farMap, boolean invalidateAround, int workers,
                                                  BooleanSupplier cancelled) {
         NavGraph current = graph;
         if (current == null || !key.sameEdges(graphKey)) {
-            // 条件が変わったグラフを残して差分で組み直すことはできない（辺そのものが条件に依存する）
+            // A graph whose conditions changed can't be kept and rebuilt incrementally (the edges themselves depend on the conditions)
             current = new NavGraph(key.goal(), minY, maxY);
             graph = current;
             graphKey = key;
             farScale.reset();
-            // 外の推定も目的地に対するもの
+            // The outside estimate is also relative to the goal
             far = FarField.UNKNOWN;
             farSource = null;
         } else if (!key.equals(graphKey)) {
@@ -492,8 +492,8 @@ final class NavGraphGuide {
     }
 
     /**
-     * 目的地の高さだけが変わった。組みかけのガイドは古い高さへのものなので打ち切るが、組んだセクションは次の{@link #forGoal}で
-     * 使い回す——作り直すと窓全体（約9,000セクション）を組むことになる。
+     * Only the goal's height changed. The in-progress guide targets the old height, so it's cancelled, but the built sections are reused by the next {@link #forGoal}:
+     * rebuilding would mean building the whole window (about 9,000 sections).
      */
     void retarget() {
         generation.incrementAndGet();
@@ -503,7 +503,7 @@ final class NavGraphGuide {
         logGate.reset();
     }
 
-    /** 目的地が変わった・案内を止めた。組みかけは打ち切り、覚えていたグラフも手放す。 */
+    /** The goal changed or guidance stopped. Cancels the in-progress build and also releases the remembered graph. */
     void clear() {
         generation.incrementAndGet();
         built = null;
@@ -522,9 +522,9 @@ final class NavGraphGuide {
     }
 
     /**
-     * 歩いている間に組み直しがどれだけ回っているか。{@link #LOAD_LOG_INTERVAL_MILLIS}ごとにまとめて出す。
-     * 利用者のログにも残すのは、ヒープの小さい環境で重い・メモリが足りないという報告をこの1行で切り分けるため。
-     * <b>段取りの1本だけが触る。</b>
+     * How many rebuilds are running while walking. Emitted in bulk every {@link #LOAD_LOG_INTERVAL_MILLIS}.
+     * It goes into users' logs too, so this one line can triage reports of heaviness or running out of memory on small heaps.
+     * <b>Touched only by the coordinator thread.</b>
      */
     private static final class Load {
 
@@ -564,8 +564,8 @@ final class NavGraphGuide {
             }
             long span = Math.max(1L, now - since);
             Runtime runtime = Runtime.getRuntime();
-            LOGGER.info("XaeroNav: 航法グラフの負荷 (直近{}秒, 組み直し{}回(打ち切り{}), 段取りの稼働率{}%, 構築計{}ms, ガイド計{}ms, "
-                            + "1回最大{}ms, チャンク集め最大{}ms(メインスレッド), GC{}ms, ヒープ{}/{}MB)",
+            LOGGER.info("XaeroNav: Navigation graph load (last {}s, rebuilds {}(cancelled {}), coordinator utilization {}%, build total {}ms, guide total {}ms, "
+                            + "max per run {}ms, max chunk collection {}ms(main thread), GC {}ms, heap {}/{}MB)",
                     span / 1000, runs, cancelled, 100 * busyMillis / span, buildMillis, guideMillis, maxMillis,
                     maxCaptureMillis, TickLaps.gcPauseMillis() - gcSince, (runtime.totalMemory() - runtime.freeMemory()) >> 20,
                     runtime.maxMemory() >> 20);

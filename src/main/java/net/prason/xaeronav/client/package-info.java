@@ -1,4 +1,4 @@
-/** 未注釈の型は既定でnon-null。nullを許す箇所だけ{@link org.jspecify.annotations.Nullable}を付ける。 */
+/** Unannotated types are non-null by default. Only places that allow null get {@link org.jspecify.annotations.Nullable}. */
 @NullMarked
 package net.prason.xaeronav.client;
 

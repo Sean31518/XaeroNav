@@ -3,26 +3,26 @@ package net.prason.xaeronav.pathfinding.world;
 import net.minecraft.core.BlockPos;
 
 /**
- * <b>プレイヤーの周りだけが読み込まれている世界。</b>窓の外は未ロード（{@link CellData#ABSENT}）を返す。
+ * <b>A world where only the area around the player is loaded.</b> Outside the window it returns unloaded ({@link CellData#ABSENT}).
  *
- * <p>実機で経路が組み立てられていく過程——歩くにつれてチャンクが読み込まれ、見えた分だけ経路が
- * 伸びていく——をオフラインで再現するために要る。{@link FakeCells}をそのまま渡すと世界全体が
- * 最初から見えていることになり、<b>継ぎ足しの継ぎ目</b>という一番出やすい崩れが再現できない。
+ * <p>Needed to reproduce offline how the real game assembles a path: chunks load as you walk, and the path
+ * extends only as far as is visible. Passing {@link FakeCells} directly makes the whole world visible from the
+ * start, so the most common breakage, <b>extension seams</b>, can't be reproduced.
  *
- * <p>窓は正方形。バニラの描画距離が正方形にチャンクを読むのに合わせてある。
+ * <p>The window is square, matching how vanilla's render distance loads chunks in a square.
  */
 public record WindowedCells(CellSource all, BlockPos player, int radius, SearchBounds box)
         implements CellSource {
 
-    /** 箱を切らない版（世界全体が探索範囲）。 */
+    /** Version that doesn't cut a box (the whole world is the search range). */
     public WindowedCells(CellSource all, BlockPos player, int radius) {
         this(all, player, radius, all.bounds());
     }
 
     /**
-     * 窓の外に加えて<b>探索の箱の外</b>も未ロードとして返す。実機の{@code ChunkView.capture}は
-     * {@code SearchBounds}の中のチャンクしか掴まないので、箱を渡さずに測ると、遠い目的地を
-     * 狙う探索が実機より広い世界を見ることになる。
+     * Returns <b>outside the search box</b> as unloaded too, in addition to outside the window. The real game's
+     * {@code ChunkView.capture} only grabs chunks inside {@code SearchBounds}, so measuring without passing the box
+     * makes a search aiming at a distant destination see a wider world than the real game does.
      */
     @Override
     public long cell(int x, int y, int z) {
@@ -37,9 +37,9 @@ public record WindowedCells(CellSource all, BlockPos player, int radius, SearchB
     }
 
     /**
-     * 窓の外も「範囲内」と答える。{@code AStarPathfinder}はこの2つの組み合わせで
-     * 「未ロード」と「ここまで空気しか無いと分かっている」を区別しており、範囲外にすると
-     * 未ロードのチャンクが<b>底無しの奈落</b>に見える。
+     * Answers "in range" even outside the window. {@code AStarPathfinder} uses the combination of these two to
+     * distinguish "unloaded" from "known to be nothing but air up to here", and answering out of range would make
+     * unloaded chunks look like <b>a bottomless void</b>.
      */
     @Override
     public boolean isInBounds(int x, int y, int z) {

@@ -30,7 +30,7 @@ class RecentFailuresTest {
         }
         List<BlockPos> avoided = failures.avoided();
         assertEquals(8, avoided.size());
-        assertFalse(avoided.contains(new BlockPos(0, 64, 0)), "古い方から捨てる");
+        assertFalse(avoided.contains(new BlockPos(0, 64, 0)), "oldest are dropped first");
         assertTrue(avoided.contains(new BlockPos(11, 64, 0)));
     }
 

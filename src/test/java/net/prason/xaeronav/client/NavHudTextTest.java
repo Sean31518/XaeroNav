@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import org.junit.jupiter.api.Test;
 
-/** 経路の末端を目的地と取り違えないHUD文言の選択。 */
+/** Choosing HUD wording that doesn't mistake the end of the path for the destination. */
 class NavHudTextTest {
 
     @Test

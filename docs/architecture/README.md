@@ -1,8 +1,8 @@
 # Architecture decisions
 
-XaeroNav の実装で、局所的なコードコメントだけでは見失いやすい設計契約をまとめます。
-ここに置く文書は作業履歴ではありません。現在の実装を変更するときに守るべき境界と、その境界を
-検証するテストを記録します。細かな数値の根拠は、定数の近くにあるコメントを正典とします。
+This collects the design contracts in XaeroNav's implementation that are easy to lose sight of from local code comments alone.
+The documents here are not a work history. They record the boundaries to uphold when changing the current implementation, and
+the tests that verify those boundaries. For the rationale behind specific numbers, the comments next to the constants are canonical.
 
 ## Decisions
 
@@ -12,5 +12,5 @@ XaeroNav の実装で、局所的なコードコメントだけでは見失い�
 
 ## Updating these records
 
-設計を変えるコミットでは、コード、対応するテスト、この文書を同じ変更で更新します。過去の調査ログや
-採用しなかった案を丸ごと追記せず、現在も有効な判断と再検討条件だけを残します。
+Commits that change the design update the code, the corresponding tests, and these documents in the same change. Don't append
+past investigation logs or rejected proposals wholesale; keep only the decisions still in effect and the conditions for revisiting them.

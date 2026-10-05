@@ -15,7 +15,7 @@ class CoarseRouterTest {
 
     private static final int RADIUS = 40;
 
-    /** 全面が平坦な陸のマップ。ここへ海や崖を書き込んでいく。 */
+    /** A map that's flat land everywhere. Seas and cliffs are drawn onto it. */
     private static CoarseMapBuilder flatLand() {
         CoarseMapBuilder builder = new CoarseMapBuilder(-RADIUS, -RADIUS, RADIUS * 2, RADIUS * 2);
         for (int x = -RADIUS; x < RADIUS; x++) {
@@ -39,10 +39,10 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertFalse(route.isEmpty());
-        // 平坦な陸を横切るだけなので、Zは出発点の帯から外れない
+        // It just crosses flat land, so Z doesn't leave the start's band
         for (BlockPos waypoint : route.waypoints()) {
             assertTrue(waypoint.getZ() >= -16 && waypoint.getZ() <= 32,
-                    "平坦な陸なのに逸れた: " + waypoint);
+                    "veered off despite flat land: " + waypoint);
         }
         assertEquals(20 * 16 + 8, last(route).getX());
     }
@@ -50,7 +50,7 @@ class CoarseRouterTest {
     @Test
     void detoursAroundWaterInsteadOfSwimming() {
         CoarseMapBuilder builder = flatLand();
-        // 目的地との間を塞ぐ浅い湾。北側(Z<-2)がすぐ開いているので、短い迂回で避けられる
+        // A shallow bay blocking the way to the destination. The north side (Z<-2) opens right away, so a short detour avoids it
         for (int x = 4; x <= 16; x++) {
             for (int z = -2; z <= RADIUS - 1; z++) {
                 builder.replaceCell(x, z, CoarseMap.WATER, 62);
@@ -63,19 +63,19 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertFalse(route.isEmpty());
-        // 迂回するなら、湾を跨ぐ区間では必ず北へ出ている
+        // If it detours, the legs spanning the bay must be out to the north
         assertTrue(route.waypoints().stream().anyMatch(waypoint -> waypoint.getZ() < -2 * 16),
-                "湾を迂回せず突っ切った: " + route.waypoints());
+                "cut straight across the bay instead of going around: " + route.waypoints());
     }
 
     /**
-     * 迂回が長すぎるなら泳いで渡る。うつ伏せ泳ぎは疾走の約1/1.56の速さでしかないので、
-     * 「水は避けるもの」を絶対視すると、208ブロック泳げば済む湾を488ブロック歩いて回ることになる。
+     * If the detour is too long, swim across. Prone swimming is only about 1/1.56 of sprint speed, so
+     * treating "water is to be avoided" as absolute would mean walking 488 blocks around a bay that a 208-block swim would cross.
      */
     @Test
     void swimsAcrossWhenTheDetourIsLongerThanTheCrossing() {
         CoarseMapBuilder builder = flatLand();
-        // 北の開口が遠い湾。迂回は往復で112ブロック北へ出る必要がある
+        // A bay whose northern opening is far. A detour must go 112 blocks north and back
         for (int x = 4; x <= 16; x++) {
             for (int z = -6; z <= RADIUS - 1; z++) {
                 builder.replaceCell(x, z, CoarseMap.WATER, 62);
@@ -88,14 +88,14 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertTrue(route.waypoints().stream().allMatch(waypoint -> waypoint.getZ() >= -16),
-                "泳いだ方が速い湾を迂回した: " + route.waypoints());
+                "went around a bay that's faster to swim: " + route.waypoints());
     }
 
     @Test
     void crossesWaterDirectlyWhenBoatIsAvailable() {
         CoarseMapBuilder builder = flatLand();
-        // 迂回できる湾（detoursAroundWaterInsteadOfSwimmingと同じ地形）。ボート無しでは迂回するが、
-        // ボートは徒歩より速いので、ボートがあれば迂回せず突っ切る方が安くなるはず
+        // A bay that can be detoured (same terrain as detoursAroundWaterInsteadOfSwimming). Without a boat it detours, but
+        // boats are faster than walking, so with a boat cutting straight across should be cheaper
         for (int x = 4; x <= 16; x++) {
             for (int z = -6; z <= RADIUS - 1; z++) {
                 builder.replaceCell(x, z, CoarseMap.WATER, 62);
@@ -109,13 +109,13 @@ class CoarseRouterTest {
         assertTrue(route.reachedGoal());
         assertFalse(route.isEmpty());
         assertTrue(route.waypoints().stream().noneMatch(waypoint -> waypoint.getZ() < -6 * 16),
-                "ボートがあるのに迂回した: " + route.waypoints());
+                "detoured despite having a boat: " + route.waypoints());
     }
 
     @Test
     void swimsWhenDetourIsFarLonger() {
         CoarseMapBuilder builder = flatLand();
-        // 端から端まで塞ぐ海峡。迂回路が無いので、遠回りより泳ぐ方が安い
+        // A strait blocking from edge to edge. There's no detour, so swimming is cheaper than going the long way
         for (int x = 4; x <= 6; x++) {
             for (int z = -RADIUS; z < RADIUS; z++) {
                 builder.replaceCell(x, z, CoarseMap.WATER, 62);
@@ -143,16 +143,16 @@ class CoarseRouterTest {
         CoarseRouter.Route route = CoarseRouter.findRoute(map, atChunk(0, 0), atChunk(20, 0), false,
                 CoarseRouter.BridgePolicy.ALLOW);
 
-        // 溶岩で完全に分断されているので、目的地へは到達できない
+        // It's completely cut off by lava, so the destination can't be reached
         assertFalse(route.reachedGoal());
         for (BlockPos waypoint : route.waypoints()) {
-            assertTrue(waypoint.getX() < 4 * 16, "溶岩帯に踏み込んだ: " + waypoint);
+            assertTrue(waypoint.getX() < 4 * 16, "stepped into the lava belt: " + waypoint);
         }
     }
 
     /**
-     * 溶岩が混じるだけのセルは通れる。ネザーは既知セルの過半数がこれになるので、
-     * 通行不能にすると経路がまったく繋がらない。
+     * Cells that merely contain some lava are passable. In the Nether the majority of known cells are like this, so
+     * making them impassable would leave routes completely disconnected.
      */
     @Test
     void crossesMixedLavaWhenItIsTheOnlyWay() {
@@ -171,11 +171,11 @@ class CoarseRouterTest {
         assertEquals(20 * 16 + 8, last(route).getX());
     }
 
-    /** ただし迂回できるなら迂回する——「通れる」と「選ぶ」は別。 */
+    /** But if it can detour, it does: "passable" and "chosen" are different things. */
     @Test
     void detoursAroundMixedLavaWhenCleanGroundExists() {
         CoarseMapBuilder builder = flatLand();
-        // 進路上に溶岩混じりの帯を置くが、Z方向に少し逸れれば素の陸で回り込める
+        // A lava-mixed band is placed on the path, but veering a little in Z lets it go around on plain land
         for (int x = 4; x <= 6; x++) {
             for (int z = -2; z <= 2; z++) {
                 builder.replaceCell(x, z, CoarseMap.LAVA_MIXED, 62);
@@ -191,13 +191,13 @@ class CoarseRouterTest {
             int chunkX = waypoint.getX() >> 4;
             int chunkZ = waypoint.getZ() >> 4;
             boolean insideMixedLava = chunkX >= 4 && chunkX <= 6 && chunkZ >= -2 && chunkZ <= 2;
-            assertFalse(insideMixedLava, "迂回できるのに溶岩混じりを突っ切った: " + waypoint);
+            assertFalse(insideMixedLava, "cut through lava-mixed cells despite a detour: " + waypoint);
         }
     }
 
     /**
-     * {@link CoarseRouter.BridgePolicy#AVOID}は溶岩混じりも通行不能にする。ネザーではこれで
-     * 経路が繋がらなくなることが多いが、それは呼び出し側が次の段へ進む合図になる。
+     * {@link CoarseRouter.BridgePolicy#AVOID} makes lava-mixed cells impassable too. In the Nether this often leaves routes
+     * disconnected, but that's the signal for the caller to move on to the next stage.
      */
     @Test
     void avoidPolicyRefusesMixedLavaEvenWhenItIsTheOnlyWay() {
@@ -214,11 +214,11 @@ class CoarseRouterTest {
 
         assertFalse(route.reachedGoal());
         for (BlockPos waypoint : route.waypoints()) {
-            assertTrue(waypoint.getX() < 4 * 16, "溶岩混じりに踏み込んだ: " + waypoint);
+            assertTrue(waypoint.getX() < 4 * 16, "stepped into lava-mixed cells: " + waypoint);
         }
     }
 
-    /** 迂回路があるなら{@code AVOID}でも当然そちらを通って到達する。 */
+    /** If there's a detour, even {@code AVOID} naturally takes it and arrives. */
     @Test
     void avoidPolicyStillReachesGoalByDetouring() {
         CoarseMapBuilder builder = flatLand();
@@ -236,7 +236,7 @@ class CoarseRouterTest {
         assertEquals(20 * 16 + 8, last(route).getX());
     }
 
-    /** {@code BRIDGE}は、他のどのポリシーでも通れない溶岩の帯を橋で渡る前提で横断する。 */
+    /** {@code BRIDGE} crosses lava bands no other policy can pass, on the premise of bridging them. */
     @Test
     void bridgePolicyCrossesFullLavaThatBlocksEveryOtherPolicy() {
         CoarseMapBuilder builder = flatLand();
@@ -257,7 +257,7 @@ class CoarseRouterTest {
         assertEquals(20 * 16 + 8, last(bridged).getX());
     }
 
-    /** {@code BRIDGE}でも、溶岩を避けられるならそちらを通る——最後の手段であって近道ではない。 */
+    /** Even with {@code BRIDGE}, if lava can be avoided it takes that way: a last resort, not a shortcut. */
     @Test
     void bridgePolicyStillPrefersCleanGround() {
         CoarseMapBuilder builder = flatLand();
@@ -276,15 +276,15 @@ class CoarseRouterTest {
             int chunkX = waypoint.getX() >> 4;
             int chunkZ = waypoint.getZ() >> 4;
             boolean insideLava = chunkX >= 4 && chunkX <= 6 && chunkZ >= -2 && chunkZ <= 2;
-            assertFalse(insideLava, "迂回できるのに溶岩を渡った: " + waypoint);
+            assertFalse(insideLava, "crossed lava despite a detour: " + waypoint);
         }
     }
 
     @Test
     void prefersKnownGroundOverUnmappedShortcut() {
         CoarseMapBuilder builder = new CoarseMapBuilder(-RADIUS, -RADIUS, RADIUS * 2, RADIUS * 2);
-        // 地図に無い一帯を、既知の陸の帯が1本だけ横切っている。少し逸れれば乗れる位置に置くのは、
-        // 未知のペナルティが「遠回りしてでも避ける」ほど重くはないため（遠い帯なら直進が正しい）
+        // A single band of known land crosses an area missing from the map. It's placed where veering a little reaches it,
+        // because the unknown penalty isn't heavy enough to "avoid even with a long detour" (for a distant band, going straight is correct)
         for (int x = -RADIUS; x < RADIUS; x++) {
             for (int z = 2; z <= 4; z++) {
                 builder.putFloor(x, z, CoarseMap.LAND, 64);
@@ -298,9 +298,9 @@ class CoarseRouterTest {
                 CoarseRouter.BridgePolicy.ALLOW);
 
         assertTrue(route.reachedGoal());
-        // 未知を突っ切る直線より、分かっている陸の帯へ寄る
+        // Rather than a straight line through the unknown, it veers to the known band of land
         assertTrue(route.waypoints().stream().anyMatch(waypoint -> waypoint.getZ() >= 2 * 16),
-                "既知の陸を使わず未知を突っ切った: " + route.waypoints());
+                "cut through the unknown instead of using known land: " + route.waypoints());
     }
 
     @Test
@@ -317,7 +317,7 @@ class CoarseRouterTest {
     @Test
     void prefersFlatGroundOverClimbingWhenDistanceIsSimilar() {
         CoarseMapBuilder builder = flatLand();
-        // 目的地へ一直線の帯だけが高い尾根。1マス北へ避ければ平坦
+        // Only the band straight toward the destination is a high ridge. Stepping one cell north is flat
         for (int x = 1; x <= 19; x++) {
             builder.replaceCell(x, 0, CoarseMap.LAND, 140);
         }
@@ -328,15 +328,15 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         for (BlockPos waypoint : route.waypoints()) {
-            assertTrue(waypoint.getY() < 140, "尾根の上を通った: " + waypoint);
+            assertTrue(waypoint.getY() < 140, "went over the ridge: " + waypoint);
         }
     }
 
     @Test
     void avoidsCliffyCellsEvenWhenAverageHeightMatchesSurroundings() {
         CoarseMapBuilder builder = flatLand();
-        // 平均高さは周囲と同じ64だが、セル内の起伏（0〜128）が大きい＝崖のチャンク。
-        // 平均だけを見る旧ロジックでは検出できず、1マス北の平坦な迂回路と無差別だった
+        // Average height is 64, same as the surroundings, but the in-cell relief (0-128) is large = a cliff chunk.
+        // The old logic that looked only at averages couldn't detect it and was indifferent between it and the flat detour one cell north
         for (int x = 1; x <= 19; x++) {
             builder.putFloor(x, 0, CoarseMap.LAND, 64, 0, 128);
         }
@@ -347,24 +347,24 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertTrue(route.waypoints().stream().anyMatch(waypoint -> waypoint.getZ() != 8),
-                "起伏の大きいセルを避けず素通りした: " + route.waypoints());
+                "passed straight through a high-relief cell instead of avoiding it: " + route.waypoints());
     }
 
     /**
-     * 崖ペナルティに上限が無いと、極端に起伏の激しい1マス（実測ではありえない値だが、境界の
-     * 検証として意図的に大きくする）を通るより、壁を大きく迂回する方が常に安くなってしまう。
-     * ネザーでは起伏30ブロック程度でも溶岩混じりセルより高くつくので、
-     * この上限は「どれだけ起伏があっても、迂回が数セル分ぶんより高くならない」ことを保証する。
+     * Without a cap on the cliff penalty, making a wide detour around a wall would always be cheaper than passing through
+     * one extremely rugged cell (a value that can't occur in practice, deliberately large to test the boundary).
+     * In the Nether, even about 30 blocks of relief costs more than a lava-mixed cell, so
+     * this cap guarantees that "no matter how much relief there is, it never costs more than a detour of a few cells".
      */
     @Test
     void cliffPenaltyCapLetsARuggedShortcutBeatALongDetour() {
         CoarseMapBuilder builder = flatLand();
-        // x=0の1列だけを南北に溶岩の壁にし、z=0だけ開ける。開けた1マスは起伏10000という
-        // 極端な崖（highMax=10000はshortの範囲内——32767を超えると6引数putのキャストで
-        // オーバーフローし、意図と逆に「起伏0」へ丸められてしまうので注意）。
-        // 壁を迂回するには斜め移動でz方向に最低6マス分の往復が要り、その分（斜め12マス、
-        // 直進より約283tick高い）は崖ペナルティの上限（約77tick）を明確に上回る——
-        // 上限が効いていなければ壁を迂回する方が安くなる
+        // Only the x=0 column is a north-south lava wall, open only at z=0. The open cell is an extreme cliff
+        // with relief 10000 (highMax=10000 is within short range; note that exceeding 32767 overflows in the 6-argument put's
+        // cast and gets rounded to "relief 0", the opposite of the intent).
+        // Going around the wall needs at least 6 cells of back-and-forth in z with diagonal moves, and that (12 diagonal cells,
+        // about 283 ticks more than going straight) clearly exceeds the cliff penalty cap (about 77 ticks);
+        // if the cap weren't working, going around the wall would be cheaper
         for (int z = -5; z <= 5; z++) {
             if (z == 0) {
                 continue;
@@ -378,15 +378,15 @@ class CoarseRouterTest {
                 CoarseRouter.BridgePolicy.ALLOW);
 
         assertTrue(route.reachedGoal());
-        // 迂回した場合はz=8から一時的に外れるはず。崖の1マスを素通りしたなら終始z=8のまま
+        // A detour would temporarily leave z=8. If it passed straight through the cliff cell, it stays at z=8 throughout
         assertTrue(route.waypoints().stream().allMatch(waypoint -> waypoint.getZ() == 8),
-                "壁を迂回した＝崖ペナルティの上限が効いていない: " + route.waypoints());
+                "went around the wall = the cliff penalty cap isn't working: " + route.waypoints());
     }
 
     /**
-     * ネザーの3D迷路の核心: 同じセルに上下2本の独立した床があるとき、垂直遷移で繋いで
-     * 到達できる。始点・終点のYがそれぞれの床に近いことも{@link CoarseMap#nearestFloor}で
-     * 正しく解決される必要がある。
+     * The crux of the Nether's 3D maze: when a cell has two independent floors stacked vertically, they can be reached by
+     * connecting them with a vertical transition. The start and end Y being near their respective floors must also be
+     * resolved correctly by {@link CoarseMap#nearestFloor}.
      */
     @Test
     void connectsTwoStackedFloorsInTheSameCellViaAVerticalTransition() {
@@ -401,20 +401,20 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertFalse(route.isEmpty());
-        assertEquals(90, last(route).getY(), "登った先の床(90)の高さで終わるはず");
+        assertEquals(90, last(route).getY(), "should end at the height of the floor climbed to (90)");
     }
 
     /**
-     * 水平移動は隣接セルの全床にではなく、今の床に最も近い床だけに繋がる。これが無いと、
-     * 階層をまたぐ移動が「本当に繋がっているか分からない階層間移動は必ず垂直遷移の
-     * 割増コストを払う」というルールを、水平移動のふりをして素通りしてしまう
-     * （隣接セルの遠い床へも普通の坂と同じ{@code heightPenalty}だけで渡れてしまい、
-     * {@link #connectsTwoStackedFloorsInTheSameCellViaAVerticalTransition}が課している
-     * 割増を迂回する抜け道になる）。
+     * Horizontal moves connect not to every floor of the adjacent cell, but only to the floor closest to the current one.
+     * Without this, moves crossing levels would bypass, disguised as horizontal moves, the rule that "moves between levels
+     * not known to really be connected always pay the vertical transition surcharge"
+     * (it could cross to a distant floor of an adjacent cell for just the ordinary slope {@code heightPenalty},
+     * becoming a loophole around the surcharge imposed by
+     * {@link #connectsTwoStackedFloorsInTheSameCellViaAVerticalTransition}).
      *
-     * <p>始点のセルは高さ40の床1つだけ。隣（目的地のセル）には高さ42（近い）と高さ90（遠い）の
-     * 2つの床がある。それでも目的地Y=90へは到達できる——最寄りの床(42)を経由して
-     * 垂直遷移で登る2段構えの経路になるだけで、90が「繋がっていない床」として消えることはない。
+     * <p>The start cell has only one floor at height 40. Its neighbor (the destination cell) has two floors, at height 42
+     * (near) and height 90 (far). The destination Y=90 is still reachable: it just becomes a two-stage route via the nearest
+     * floor (42) and then up by vertical transition; 90 doesn't disappear as an "unconnected floor".
      */
     @Test
     void horizontalStepReachesTheFarFloorOnlyThroughTheNearFloorAndAVerticalTransition() {
@@ -433,8 +433,8 @@ class CoarseRouterTest {
     }
 
     /**
-     * {@link CoarseRouter#costToGo}——段階4で層3のヒューリスティックへ併用するguide本体。
-     * ゴールから逆向きに全状態へのコストを計算し、ブロック座標で引けるラッパーを返す。
+     * {@link CoarseRouter#costToGo}: the guide itself, combined with layer 3's heuristic in stage 4.
+     * Computes costs to every state backward from the goal and returns a wrapper that can be looked up by block coordinates.
      */
     @Test
     void costToGoIsZeroAtTheGoalItself() {
@@ -456,14 +456,14 @@ class CoarseRouterTest {
         double far = guide.estimate(atChunk(10, 0).getX(), 64, atChunk(10, 0).getZ());
 
         assertTrue(near > 0.0);
-        assertTrue(far > near, "遠いセルの方がコストが高くなければならない: near=" + near + " far=" + far);
+        assertTrue(far > near, "the farther cell must have a higher cost: near=" + near + " far=" + far);
     }
 
     /**
-     * 探索範囲の外（この地図が知らない座標）を引いても、無限大ではなく0を返す。
-     * {@code AStarPathfinder}側は幾何学的なHeuristicとのmaxを取って使うので、0を返せば
-     * 「情報が無いので寄与しない」で済む——無限大を返すと、層3の探索範囲がこの地図の
-     * 読み取り範囲より広いだけで、範囲外の全ノードのヒューリスティックが汚染される。
+     * Looking up outside the search range (coordinates this map doesn't know) returns 0, not infinity.
+     * {@code AStarPathfinder} takes the max with the geometric Heuristic, so returning 0 just means
+     * "no information, no contribution"; returning infinity would contaminate the heuristic of every out-of-range node
+     * merely because layer 3's search range is wider than this map's read range.
      */
     @Test
     void costToGoReturnsZeroOutsideTheMap() {
@@ -476,9 +476,9 @@ class CoarseRouterTest {
     }
 
     /**
-     * ゴールから完全に分断されたセル（溶岩の壁の向こう側）も、無限大ではなく0を返す。
-     * {@link #costToGoReturnsZeroOutsideTheMap}と同じ安全側の理由——到達不能を無限大で
-     * 表現すると、そのセルのヒューリスティックがmax経由で探索全体を壊しかねない。
+     * A cell completely cut off from the goal (beyond a lava wall) also returns 0, not infinity.
+     * Same safe-side reason as {@link #costToGoReturnsZeroOutsideTheMap}: representing unreachable as infinity
+     * could let that cell's heuristic break the entire search via the max.
      */
     @Test
     void costToGoReturnsZeroForCellsUnreachableFromTheGoal() {
@@ -494,7 +494,7 @@ class CoarseRouterTest {
         assertEquals(0.0, guide.estimate(cutOff.getX(), 64, cutOff.getZ()));
     }
 
-    /** 同じセル内の階層をまたぐcost-to-goは、垂直遷移のコスト（割増込み）を反映する。 */
+    /** cost-to-go across levels within the same cell reflects the vertical transition cost (including the surcharge). */
     @Test
     void costToGoAccountsForVerticalTransitionsWithinTheSameCell() {
         CoarseMapBuilder builder = new CoarseMapBuilder(-RADIUS, -RADIUS, RADIUS * 2, RADIUS * 2);
@@ -506,16 +506,16 @@ class CoarseRouterTest {
         CostToGo guide = CoarseRouter.costToGo(map, goal, false, CoarseRouter.BridgePolicy.ALLOW);
 
         double atLowerFloor = guide.estimate(8, 41, 8);
-        assertTrue(atLowerFloor > 0.0, "50ブロックの階層差はコスト0では済まないはず");
+        assertTrue(atLowerFloor > 0.0, "a 50-block level difference shouldn't cost 0");
     }
 
     /**
-     * ジ・エンドの群島。目的地の島との間は奈落で、同じ高さの島を経由すれば回り込める。
-     * 島は4チャンク角、間は奈落2チャンク（32ブロック）。
+     * An archipelago in the End. Between it and the destination island is void, and it can go around via islands at the same height.
+     * Islands are 4 chunks square, with 2 chunks (32 blocks) of void between them.
      */
     private static CoarseMapBuilder archipelago() {
         CoarseMapBuilder builder = new CoarseMapBuilder(-RADIUS, -RADIUS, RADIUS * 2, RADIUS * 2);
-        // 何も書かなければ床0＝未知。奈落は明示的にVOIDで埋める
+        // Writing nothing means floor 0 = unknown. The void is filled explicitly with VOID
         for (int x = -RADIUS; x < RADIUS; x++) {
             for (int z = -RADIUS; z < RADIUS; z++) {
                 builder.putFloor(x, z, CoarseMap.VOID, CoarseMap.UNKNOWN_HEIGHT,
@@ -534,8 +534,8 @@ class CoarseRouterTest {
     }
 
     /**
-     * 奈落は「まだ知らない」ではなく「床が無いと分かっている」。未知セル並みに安く通れると、
-     * 層1がジ・エンドの島間をまっすぐ突っ切る中間目標を並べ、詳細探索が毎回予算を焼く。
+     * The void isn't "not known yet" but "known to have no floor". If it were as cheap to pass as unknown cells,
+     * layer 1 would line up intermediate targets cutting straight between the End's islands, and the detailed search would burn its budget every time.
      */
     @Test
     void doesNotRouteThroughVoidWhenAvoiding() {
@@ -547,15 +547,15 @@ class CoarseRouterTest {
         CoarseRouter.Route route = CoarseRouter.findRoute(map, atChunk(1, 1), atChunk(11, 1), false,
                 CoarseRouter.BridgePolicy.AVOID);
 
-        assertFalse(route.reachedGoal(), "奈落を挟んだ島へAVOIDで届いてはいけない");
+        assertFalse(route.reachedGoal(), "AVOID must not reach an island across the void");
     }
 
     /**
-     * <b>奈落は{@link CoarseRouter.BridgePolicy#ALLOW}の時点で開く（溶岩より1段早い）。</b>
+     * <b>The void opens up at {@link CoarseRouter.BridgePolicy#ALLOW} (one stage earlier than lava).</b>
      *
-     * <p>溶岩の橋には設定のスイッチがあるのに対し、奈落の橋には無い（層3は{@code canPlaceBlocks}
-     * だけで判断する）。ALLOWで奈落まで通行不能にすると、層3の区間分割がジ・エンドで区間を
-     * 1つも作れず、島間を1回の探索で渡ろうとして予算を焼く。
+     * <p>Lava bridges have a config switch, but void bridges don't (layer 3 decides by {@code canPlaceBlocks}
+     * alone). If ALLOW made the void impassable too, layer 3's leg splitting couldn't create a single leg in the End,
+     * and it would try to cross between islands in one search and burn the budget.
      */
     @Test
     void voidOpensOneStepEarlierThanLava() {
@@ -564,9 +564,9 @@ class CoarseRouterTest {
         island(voidBuilder, 10, 0, 64);
         assertTrue(CoarseRouter.findRoute(voidBuilder.build(), atChunk(1, 1), atChunk(11, 1), false,
                 CoarseRouter.BridgePolicy.ALLOW).reachedGoal(),
-                "ALLOWで奈落が通行不能だと、層3の区間分割がジ・エンドで成立しない");
+                "if the void is impassable under ALLOW, layer 3's leg splitting doesn't work in the End");
 
-        // 溶岩は据え置き。ALLOWでは「過半数が溶岩」のセルを渡らない
+        // Lava is unchanged. ALLOW doesn't cross cells that are "mostly lava"
         CoarseMapBuilder lavaBuilder = flatLand();
         for (int x = 4; x <= 8; x++) {
             for (int z = -RADIUS; z < RADIUS; z++) {
@@ -575,10 +575,10 @@ class CoarseRouterTest {
         }
         assertFalse(CoarseRouter.findRoute(lavaBuilder.build(), atChunk(0, 0), atChunk(12, 0), false,
                 CoarseRouter.BridgePolicy.ALLOW).reachedGoal(),
-                "溶岩の橋は設定で切れる以上、ALLOWで勝手に渡ってはいけない");
+                "lava bridges can be turned off in the config, so ALLOW must not cross them on its own");
     }
 
-    /** 橋を架ける前提（最後の手段）なら、同じ地形で届く。 */
+    /** On the premise of building bridges (the last resort), it reaches on the same terrain. */
     @Test
     void bridgesAcrossVoidWhenNothingElseWorks() {
         CoarseMapBuilder builder = archipelago();
@@ -589,21 +589,21 @@ class CoarseRouterTest {
         CoarseRouter.Route route = CoarseRouter.findRoute(map, atChunk(1, 1), atChunk(11, 1), false,
                 CoarseRouter.BridgePolicy.BRIDGE);
 
-        assertTrue(route.reachedGoal(), "BRIDGEでも届かないなら奈落を渡る手段が無い");
+        assertTrue(route.reachedGoal(), "if even BRIDGE doesn't reach, there's no way to cross the void");
     }
 
     /**
-     * <b>これが「回り込み」の核心。</b>低い島へは（下向きの橋が作れないので）詳細探索が降りられない。
-     * 同じ高さの島を経由する道があるなら、奈落を最短で突っ切るより<b>遠回りでもそちらを選ぶ</b>
-     * ——奈落の倍率がそれを決めている。
+     * <b>This is the crux of "going around".</b> The detailed search can't descend to a lower island (no downward bridges can be built).
+     * If there's a way via islands at the same height, it <b>chooses that even if it's a detour</b> over cutting straight
+     * across the void; the void multiplier decides this.
      */
     @Test
     void prefersSteppingStoneIslandsOverTheShortestVoidCrossing() {
         CoarseMapBuilder builder = archipelago();
         island(builder, 0, 0, 64);
-        // 目的地の島。まっすぐ向かうと奈落が6チャンク（96ブロック）続く
+        // The destination island. Heading straight there crosses 6 chunks (96 blocks) of void
         island(builder, 12, 0, 64);
-        // 飛び石。遠回りになるが、奈落は1チャンクずつしか跨がない
+        // Stepping stones. A detour, but it only spans one chunk of void at a time
         island(builder, 5, 6, 64);
         island(builder, 10, 5, 64);
         CoarseMap map = builder.build();
@@ -612,12 +612,12 @@ class CoarseRouterTest {
                 CoarseRouter.BridgePolicy.BRIDGE);
 
         assertTrue(route.reachedGoal());
-        // まっすぐ突っ切っていれば、経路はZ=0の帯から出ない。飛び石を経由していればZが下がる
+        // If it cut straight across, the route wouldn't leave the Z=0 band. If it goes via the stepping stones, Z drops
         int maxZ = route.waypoints().stream().mapToInt(BlockPos::getZ).max().orElse(0);
-        assertTrue(maxZ > 32, "奈落を最短で突っ切っている（飛び石を経由していない）: maxZ=" + maxZ);
+        assertTrue(maxZ > 32, "cut straight across the void (not via the stepping stones): maxZ=" + maxZ);
 
-        // 対照: 同じ地形の奈落を陸にすると、遠回りする理由が消えてまっすぐ進む。
-        // これが無いと「そもそも常に遠回りする経路しか出ない」テストと区別が付かない
+        // Control: turning the void into land on the same terrain removes the reason to detour, so it goes straight.
+        // Without this, it couldn't be told apart from a test where "only detouring routes ever come out"
         CoarseMapBuilder allLand = archipelago();
         for (int x = -RADIUS; x < RADIUS; x++) {
             for (int z = -RADIUS; z < RADIUS; z++) {
@@ -627,16 +627,16 @@ class CoarseRouterTest {
         CoarseRouter.Route control = CoarseRouter.findRoute(allLand.build(), atChunk(1, 1), atChunk(13, 1),
                 false, CoarseRouter.BridgePolicy.BRIDGE);
         int controlMaxZ = control.waypoints().stream().mapToInt(BlockPos::getZ).max().orElse(0);
-        assertTrue(controlMaxZ <= 32, "陸なら遠回りする理由が無い: maxZ=" + controlMaxZ);
+        assertTrue(controlMaxZ <= 32, "on land there's no reason to detour: maxZ=" + controlMaxZ);
     }
 
     /**
-     * <b>奈落のwaypointがY=0に落ちないこと。</b>{@link CoarseMap#VOID}は高さを持たないので、
-     * {@code toBlockPos}のフォールバック（直前の既知の高さ）が効かないと0になる。
+     * <b>Void waypoints don't drop to Y=0.</b> {@link CoarseMap#VOID} has no height, so if the fallback in
+     * {@code toBlockPos} (the previous known height) doesn't kick in, it becomes 0.
      *
-     * <p>ネザーで同じ形の「Y=0への誤誘導」を踏んだ前例がある——詳細探索がワールド最下層へ
-     * 経路を引こうとしてノード上限を焼き切った。奈落の上の足場は<b>出発した島の高さ</b>に置くので、
-     * そこを引き継ぐのが正しい。
+     * <p>There's a precedent of hitting the same kind of "misdirection to Y=0" in the Nether: the detailed search tried to draw
+     * a path to the bottom of the world and burned through the node cap. Footing over the void is placed at <b>the height of the
+     * island departed from</b>, so carrying that over is correct.
      */
     @Test
     void voidWaypointsInheritTheHeightOfTheIslandTheyLeftFrom() {
@@ -650,18 +650,18 @@ class CoarseRouterTest {
         assertTrue(route.reachedGoal());
         for (BlockPos waypoint : route.waypoints()) {
             assertTrue(waypoint.getY() > 32,
-                    "奈落のwaypointが低すぎる（Y=0への誤誘導の再発）: " + waypoint);
+                    "void waypoint too low (misdirection to Y=0 has recurred): " + waypoint);
         }
     }
 
     /**
-     * 奈落と未訪問は別物。データが無いだけのセルは従来どおり通れる——未探索を通行不能にすると
-     * 迂回路ごと消えて詰む。
+     * Void and unvisited are different things. Cells that merely lack data stay passable as before; making unexplored
+     * areas impassable would wipe out detours along with them and leave it stuck.
      */
     @Test
     void unvisitedCellsStayPassableUnlikeVoid() {
         CoarseMapBuilder builder = flatLand();
-        // 目的地との間を「未訪問」で塞ぐ（床を消すのではなく、そもそも書かない領域を作る）
+        // Block the way to the destination with "unvisited" (not by erasing floors, but by making an area that's never written)
         CoarseMapBuilder sparse = new CoarseMapBuilder(-RADIUS, -RADIUS, RADIUS * 2, RADIUS * 2);
         for (int x = -RADIUS; x < RADIUS; x++) {
             for (int z = -RADIUS; z < RADIUS; z++) {
@@ -675,11 +675,11 @@ class CoarseRouterTest {
         CoarseRouter.Route route = CoarseRouter.findRoute(sparse.build(), atChunk(0, 0), atChunk(12, 0), false,
                 CoarseRouter.BridgePolicy.AVOID);
 
-        assertTrue(route.reachedGoal(), "未訪問セルを通行不能にすると、探索していない方角へ行けなくなる");
+        assertTrue(route.reachedGoal(), "making unvisited cells impassable makes unexplored directions unreachable");
         assertFalse(builder.build().containsChunk(999, 999));
     }
 
-    /** 指定の大きさの正方形の島を置く。 */
+    /** Places a square island of the given size. */
     private static void squareIsland(CoarseMapBuilder builder, int minChunkX, int minChunkZ, int size) {
         for (int x = minChunkX; x < minChunkX + size; x++) {
             for (int z = minChunkZ; z < minChunkZ + size; z++) {
@@ -689,16 +689,16 @@ class CoarseRouterTest {
     }
 
     /**
-     * 出発島と目的島の間に「直線上の小さい飛び石」と「少し南の大きい島」がある地形。
-     * {@code southSize}を変えるだけで、南の島の大きさ以外は同じ地形になる。
+     * Terrain with "a small stepping stone on the straight line" and "a large island a little to the south" between the start and destination islands.
+     * Changing only {@code southSize} gives the same terrain apart from the southern island's size.
      */
     private static CoarseMap twoBranches(int southSize) {
         CoarseMapBuilder builder = archipelago();
         squareIsland(builder, 0, -1, 3);
         squareIsland(builder, 14, -1, 3);
-        // 直線上にある1セルだけの飛び石。幾何学的にはこちらが近い
+        // A single-cell stepping stone on the straight line. Geometrically this is closer
         builder.replaceCell(8, 0, CoarseMap.LAND, 64);
-        // 少し南（4セル）の島。sizeで大きさを変える
+        // An island a little to the south (4 cells). Size varies with size
         squareIsland(builder, 7, 3, southSize);
         return builder.build();
     }
@@ -708,8 +708,8 @@ class CoarseRouterTest {
     }
 
     /**
-     * <b>ジ・エンドで「大きい島を渡りながら」行きたい</b>というユーザー要望（2026-08-30）。
-     * 直線上の1セルの岩より、少し南の3×3の島を経由する方を選ぶ。
+     * A user request (2026-08-30) to <b>travel "across large islands" in the End</b>.
+     * It chooses going via the 3x3 island a little to the south over the single-cell rock on the straight line.
      */
     @Test
     void prefersALargeIslandOverATinySteppingStoneOnTheDirectLine() {
@@ -718,12 +718,12 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertTrue(maxWaypointZ(route) >= 3 * 16,
-                "直線上の1セルの岩を踏んだ（大きい島へ回っていない）: " + route.waypoints());
+                "stepped on the single-cell rock on the straight line (didn't go around to the large island): " + route.waypoints());
     }
 
     /**
-     * <b>対照。</b>南の島も1セルに縮めると、遠回りする理由が消えて直線上の岩を踏む。
-     * これが無いと「そもそも常に南へ回るだけ」の地形と区別が付かない。
+     * <b>Control.</b> Shrinking the southern island to one cell as well removes the reason to detour, so it steps on the rock on the straight line.
+     * Without this, it couldn't be told apart from terrain where "it just always goes around to the south".
      */
     @Test
     void takesTheDirectSteppingStoneWhenTheSouthernIslandIsJustAsTiny() {
@@ -732,7 +732,7 @@ class CoarseRouterTest {
 
         assertTrue(route.reachedGoal());
         assertTrue(maxWaypointZ(route) < 3 * 16,
-                "南も同じ大きさなのに遠回りした＝島の大きさ以外の理由で曲がっている: " + route.waypoints());
+                "detoured even though the south is the same size = turning for a reason other than island size: " + route.waypoints());
     }
 
     private static BlockPos last(CoarseRouter.Route route) {

@@ -5,26 +5,26 @@ import net.prason.xaeronav.XaeroNav;
 import net.prason.xaeronav.pathfinding.astar.PathResult;
 
 /**
- * 「目的地へ行けない」の判定。{@code PathfindingState}から詰み判定だけを切り出したもの
- * ——他の状態遷移と絡みが薄く、単体テストしやすい形に独立させてある。
+ * Decides "the destination can't be reached". The deadlock check carved out of {@code PathfindingState};
+ * it has little entanglement with the other state transitions, so it was made standalone in an easily unit-testable form.
  *
- * <p>詰みは「<b>狙った先へ届きもせず、目的地へ近づきもしなかった</b>探索」が
- * {@link #SEARCH_STREAK}回続いたこと、と定義する。
+ * <p>A deadlock is defined as {@link #SEARCH_STREAK} consecutive searches that "<b>neither reached their target
+ * nor got any closer to the destination</b>".
  *
- * <p>経路が引けたかどうかでは判定できない。予算切れの探索は行き止まりへ向かう部分経路を毎回
- * 返すので、実機ログではステップ数55→23→5→18→93→0…が5分間続く間ずっと同じ溶岩の海の縁に
- * 居た。逆に「近づいたか」だけで見ると、溶岩の海を大きく迂回する区間（目的地から遠ざかりながら
- * 正しく進んでいる）を詰みと誤判定する——そこでは探索は狙った中間目標へ<b>届いている</b>ので、
- * 2つを併せて初めて正しく切り分けられる。
+ * <p>It can't be decided by whether a path was produced. Searches that run out of budget return a partial path toward a dead end every time,
+ * so in an in-game log the player stayed at the edge of the same lava sea the whole time step counts went 55→23→5→18→93→0… for 5 minutes.
+ * Conversely, looking only at "did it get closer" misjudges stretches that make a large detour around a lava sea (moving away from the destination
+ * while correctly progressing) as deadlocks; there the search <b>does reach</b> its intended intermediate target, so
+ * only combining the two separates them correctly.
  *
- * <p>近さの測り方にプレイヤー自身の位置も入れる。部分経路を辿って歩いて前進するのも正常な
- * 進み方なので、その間に投げた探索が何回失敗していようと詰みではない。
+ * <p>The player's own position is included in measuring closeness. Walking forward along a partial path is also a normal
+ * way to progress, so however many searches fail meanwhile, it isn't a deadlock.
  *
- * <p><b>連続として数えるのは、ほぼ同じ場所から投げた探索だけ</b>（{@link #RETRY_MOVE_BLOCKS}）。
- * 詰みの根拠は「同じ実験を繰り返しても結果が変わらない」ことなので、始点が動いていれば
- * 別の実験——読み込み済みチャンクも層1の地図も変わり、実際に結果が変わりうる。実機
- * （ジ・エンドの崖ぎわ、06:36）では、プレイヤーが崖に沿って26ブロック行き来する間の失敗が
- * 連続として数えられ「行けません」が出たが、その16秒後に橋49本で渡り切っている。
+ * <p><b>Only searches dispatched from roughly the same place count as consecutive</b> ({@link #RETRY_MOVE_BLOCKS}).
+ * The basis for a deadlock is that "repeating the same experiment doesn't change the result", so if the start has moved
+ * it's a different experiment: the loaded chunks and layer 1's map change too, and the result really can change. In-game
+ * (at the End's cliff edge, 06:36), failures while the player went back and forth 26 blocks along the cliff were
+ * counted as consecutive and "can't get there" appeared, but 16 seconds later it made it across with 49 bridges.
  */
 final class StuckTracker {
 
@@ -33,14 +33,14 @@ final class StuckTracker {
     private static final double RETRY_MOVE_BLOCKS = 16.0;
 
     private volatile double bestApproachBlocks = Double.MAX_VALUE;
-    /** {@link #bestApproachBlocks}を縮められないまま終わった探索の連続回数。 */
+    /** Consecutive count of searches that ended without shrinking {@link #bestApproachBlocks}. */
     private volatile int stalledSearches;
-    /** 直近で「前進しなかった」と数えた探索の始点。 */
+    /** Start of the most recent search counted as "made no progress". */
     private volatile BlockPos lastStalledAt;
     private volatile PathfindingState.StuckReason reason;
     private volatile PathfindingState.StuckReason pendingNotice;
 
-    /** 目的地ごとの全リセット（{@code PathfindingState#clear()}用）。 */
+    /** Full reset per destination (for {@code PathfindingState#clear()}). */
     void reset() {
         bestApproachBlocks = Double.MAX_VALUE;
         stalledSearches = 0;
@@ -50,32 +50,32 @@ final class StuckTracker {
     }
 
     /**
-     * 詰みの判定だけを取り下げる（到着時用）。連続カウントや最接近距離までは戻さない
-     * ——到着表示が終わるまでは同じ目的地が続く可能性があり、そこは{@link #reset()}の仕事にする。
+     * Withdraws only the deadlock verdict (for arrival). The consecutive count and closest approach aren't reset,
+     * since the same destination may continue until the arrival display ends; that's {@link #reset()}'s job.
      */
     void clearReason() {
         reason = null;
         pendingNotice = null;
     }
 
-    /** 詰みと判断済みならその理由、まだなら{@code null}。 */
+    /** The reason if judged a deadlock, otherwise {@code null}. */
     PathfindingState.StuckReason reason() {
         return reason;
     }
 
-    /** 詰まりかけている（連続失敗が1回以上ある）か。まだ確定はしていない。 */
+    /** Whether it's close to stuck (at least one consecutive failure). Not yet confirmed. */
     boolean stranded() {
         return stalledSearches > 0;
     }
 
-    /** チャットへまだ知らせていない詰み通知があれば取り出して消費する。無ければ{@code null}。 */
+    /** Takes and consumes a deadlock notice not yet announced in chat, if any. {@code null} if none. */
     PathfindingState.StuckReason takePendingNotice() {
         PathfindingState.StuckReason notice = pendingNotice;
         pendingNotice = null;
         return notice;
     }
 
-    /** 詰みと判断したあとで、もう一度探索を投げてよい頃合いか。 */
+    /** Whether, after judging a deadlock, it's time to dispatch a search again. */
     boolean retryDue(BlockPos lastStart, BlockPos playerPos, boolean recalcIntervalElapsed) {
         return lastStart == null
                 || lastStart.distSqr(playerPos) >= RETRY_MOVE_BLOCKS * RETRY_MOVE_BLOCKS
@@ -83,14 +83,14 @@ final class StuckTracker {
     }
 
     /**
-     * この探索の結果を詰みの判定へ反映する。
+     * Applies this search's result to the deadlock check.
      *
-     * @param hasCompleteGroundRoute 完走した地上経路が今も表示中か（中継区間{@code TO_SURFACE}は
-     *         含めない）。trueなら詰みではないとみなし、状態を戻す——実機（22:42）では、110ステップ・
-     *         橋47本の経路を表示したまま「目的地へ行けません」が出ていた
-     * @param routeUnmapped 層1（Xaeroの地図、橋を架ける前提の梯子の最終段）が今の目的地まで
-     *         届いていないか。詰みの理由を確度の高い順に決めるのに使う——ここが最も情報量が多く、
-     *         それでも届かないなら詳細探索をいくら回しても届かない
+     * @param hasCompleteGroundRoute whether a completed ground route is still displayed (the relay stretch {@code TO_SURFACE}
+     *         excluded). If true, it's not considered a deadlock and the state is reset; in-game (22:42), "can't reach the destination"
+     *         appeared while a 110-step path with 47 bridges was displayed
+     * @param routeUnmapped whether layer 1 (Xaero's map, the last rung of the ladder that assumes bridging) fails to reach
+     *         the current destination. Used to decide the deadlock reason in order of confidence: this carries the most information,
+     *         and if even this doesn't reach, no amount of detailed searching will
      */
     void noteOutcome(BlockPos start, BlockPos planEnd, BlockPos currentGoal, boolean hasCompleteGroundRoute,
                       PathResult result, boolean routeUnmapped, Runnable onStalled) {
@@ -100,10 +100,10 @@ final class StuckTracker {
             return;
         }
         double approach = Math.min(horizontalDistance(start, currentGoal), horizontalDistance(planEnd, currentGoal));
-        // 高水位がPROGRESS_BLOCKSを切ったら、そこから更にその幅ぶん近づいた探索は
-        // 原理的に出せない（距離は0未満にならない）。一度でも目的地のそばまで届いた目的地では
-        // 以後どんな探索も前進と認められず、未到達がSEARCH_STREAK回続くだけで「行けません」になる
-        // ——改善しえない値を歯止めに使うと永久に外れない
+        // Once the high-water mark drops below PROGRESS_BLOCKS, a search that gets a further PROGRESS_BLOCKS closer
+        // is impossible in principle (distance can't go below 0). For a destination that was reached close to even once,
+        // no later search counts as progress, and just SEARCH_STREAK unreached searches in a row produce "can't get there";
+        // using a value that can't improve as a ratchet means it never releases
         boolean improvable = bestApproachBlocks >= PROGRESS_BLOCKS;
         boolean progressed = result.complete() || !improvable || approach <= bestApproachBlocks - PROGRESS_BLOCKS;
         bestApproachBlocks = Math.min(bestApproachBlocks, approach);
@@ -112,9 +112,9 @@ final class StuckTracker {
             reason = null;
             return;
         }
-        // 薄い地図で組んだ3D粗層や、地形が変わる前の航法グラフが、詰まったまま更新されずに残るのを防ぐ。
-        // ここを通るのは「狙った先へ届きも目的地へ近づきもしなかった」探索だけなので、組み直しの引き金として
-        // ちょうどよい（実際に組み直すかはガイド側が間引く）
+        // Prevents a 3D coarse layer built on a thin map, or a nav graph from before the terrain changed, from staying stuck without being rebuilt.
+        // Only searches that "neither reached their target nor got closer to the destination" pass here, so it's a good
+        // rebuild trigger (whether to actually rebuild is throttled by the guide side)
         onStalled.run();
         BlockPos previouslyStalledAt = lastStalledAt;
         boolean sameSpot = previouslyStalledAt != null
@@ -126,13 +126,13 @@ final class StuckTracker {
         }
         reason = classify(result, routeUnmapped);
         pendingNotice = reason;
-        XaeroNav.LOGGER.info("XaeroNav: 目的地へ行けないと判断しました (理由={}, 最接近={}ブロック, 目的地={})",
+        XaeroNav.LOGGER.info("XaeroNav: Decided the destination can't be reached (reason={}, closest={} blocks, destination={})",
                 reason, Math.round(bestApproachBlocks), currentGoal.toShortString());
     }
 
     /**
-     * 詰みの理由を、確度の高い順に見て決める。次に確かなのが{@code EXHAUSTED}（探索範囲の中に
-     * 到達手段が無いことの証明。上限を厳守したならその内側に限った証明）で、残りは資源不足。
+     * Decides the deadlock reason by looking in order of confidence. Next most certain is {@code EXHAUSTED} (proof that there's
+     * no means of reaching it within the search range; if the caps were strictly held, a proof limited to within them), and the rest are resource shortages.
      */
     private static PathfindingState.StuckReason classify(PathResult result, boolean routeUnmapped) {
         if (routeUnmapped) {
@@ -141,15 +141,15 @@ final class StuckTracker {
         if (result.termination() != PathResult.Termination.EXHAUSTED) {
             return PathfindingState.StuckReason.SEARCH_TOO_HARD;
         }
-        // 舐め尽くしても上限が捨てた手は試していない。「道が無い」と言うと上限を緩めても無駄に聞こえる
+        // Even after exhausting the search, moves discarded by the caps weren't tried. Saying "no path" would make relaxing the caps sound pointless
         return result.limitsHeld()
                 ? PathfindingState.StuckReason.LIMITS_HELD
                 : PathfindingState.StuckReason.NO_WAY_THROUGH;
     }
 
     /**
-     * {@code PathfindingState#horizontalDistance}と同じ式を独立に持つ。詰み判定はyを見ない
-     * （地図上の距離だけで「近づいたか」を測る）という意味的な決定を、この式自体に閉じ込めるため。
+     * Holds the same formula as {@code PathfindingState#horizontalDistance} independently. This confines to the formula itself the semantic
+     * decision that the deadlock check ignores y (measuring "did it get closer" by map distance alone).
      */
     private static double horizontalDistance(BlockPos a, BlockPos b) {
         double dx = a.getX() - b.getX();

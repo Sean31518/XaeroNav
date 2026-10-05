@@ -1,25 +1,25 @@
 package net.prason.xaeronav.pathfinding.astar;
 
-/** コスト計算はあくまで事前見積もりなので、提示直前に安全性を再チェックした結果。 */
+/** The cost calculation is only an advance estimate, so this is the result of rechecking safety right before presenting. */
 public enum PathRisk {
     NONE,
     LAVA_ADJACENT,
     WATER_INFLOW,
     /**
-     * 足を踏み外したら死ぬ区間。<b>底が無い（奈落）場合だけでなく、床は在るが落差が致死の場合も
-     * 含む</b>——警告の基準は「下に何かあるか」ではなく「外したときに死ぬか」。
+     * A section where a misstep is fatal. <b>This covers not only bottomless (void) cases but also ones with a floor where the
+     * drop is lethal</b>: the warning criterion is not "is there something below" but "would a miss kill you".
      */
     VOID_BELOW,
-    /** 息継ぎできないまま潜り続ける区間。空気が尽きて溺れる（{@code PathSafetyChecker#drowningRuns}）。 */
+    /** A section of continued submersion with no chance to breathe. Air runs out and you drown ({@code PathSafetyChecker#drowningRuns}). */
     DROWNING,
-    /** 着地時に落下ダメージを受ける区間。設定で許可したときだけ経路に現れる。 */
+    /** A section that deals fall damage on landing. Appears in paths only when allowed in the config. */
     FALL_DAMAGE,
-    /** 着地寸前に水バケツを置かないと落下ダメージを受ける区間。 */
+    /** A section that deals fall damage unless a water bucket is placed just before landing. */
     MLG_REQUIRED,
     /**
-     * マグマブロックの上を通る区間。スニークしていれば無傷で渡れる（バニラの
-     * {@code isSteppingCarefully}）が、走って踏むと燃える——通行可にしている以上、
-     * その条件を伝えないと「案内どおり歩いたら焼かれた」になる。
+     * A section over magma blocks. You can cross unharmed while sneaking (vanilla's
+     * {@code isSteppingCarefully}), but stepping on them while running burns you. Since they're treated as passable,
+     * not conveying that condition leads to "I followed the guidance and got burned".
      */
     SNEAK_OVER_MAGMA
 }

@@ -9,14 +9,14 @@ import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.navgraph.WindowField;
 
 /**
- * まだ経路が分かっていない区間の所要時間の見積もり（tick）。実線の終点、経路がまだ無ければ現在地から目的地まで。
+ * Estimated travel time (ticks) for the stretch whose path isn't known yet: from the end of the solid line, or from the current position to the destination if there's no path yet.
  *
- * <p>航法グラフのガイドがあればその値を使う。探索が向きを決めるのに使っている値そのもので、窓の中は実際に辿れる道の値段、
- * 窓の外は推定。窓の外の推定は過小に出るので、この道のりで学んだ倍率（{@link FarScaleCalibration}）を掛ける。
- * ガイドがまだ無い間（目的地を決めた直後の数秒、ガイドを切る設定）は、地図の点線の長さをスプリントで走った時間にする。
+ * <p>Uses the nav graph guide's value if there is one. That is the very value the search uses to choose its direction: inside the window it's the cost of a road that can actually be walked,
+ * outside the window it's an estimate. The outside estimate comes out low, so it's multiplied by the scale learned on this trip ({@link FarScaleCalibration}).
+ * While there's no guide yet (the first few seconds after setting a destination, or with the guide turned off), the length of the map's dotted line at sprint speed is used.
  *
- * <p>ガイドを下る（{@link WindowField#descend}）のは数百ノードを辿る処理で、HUDは毎フレーム描かれるので、
- * 入力が変わらない間は前の値を返す。
+ * <p>Descending the guide ({@link WindowField#descend}) walks hundreds of nodes, and the HUD is drawn every frame,
+ * so the previous value is returned as long as the inputs haven't changed.
  */
 final class GoalEta {
 
@@ -28,7 +28,7 @@ final class GoalEta {
     private double cachedTicks;
 
     /**
-     * @param waypoints まだ通っていない長距離ルートの中間目標（{@link PathfindingState.NavigationView#coarseRouteWaypoints}）
+     * @param waypoints intermediate targets of the long-distance route not yet passed ({@link PathfindingState.NavigationView#coarseRouteWaypoints})
      */
     double ticks(BlockPos from, BlockPos goal, List<BlockPos> waypoints) {
         WindowField field = PathfindingState.INSTANCE.guideForDisplay(goal);
@@ -53,14 +53,14 @@ final class GoalEta {
         if (descent != null) {
             return descent.inside() + scale * descent.outside();
         }
-        // ノードでない点（経路の終点が崩れた足場の上など）。近くのノードか外の推定の値になる
+        // A point that isn't a node (e.g. the path ends on collapsed footing). Gets a nearby node's value or the outside estimate
         double value = field.estimate(from.getX(), from.getY(), from.getZ());
         return field.measuredInWindow(from.getX(), from.getZ()) ? value : scale * value;
     }
 
     /**
-     * 地図に描く点線（{@link MapPathOverlay}）と同じ折れ線の長さ（水平、ブロック）。通過済みの中間目標は
-     * 点線と同じ規則で読み飛ばす。
+     * Length (horizontal, in blocks) of the same polyline as the dotted line drawn on the map ({@link MapPathOverlay}). Intermediate
+     * targets already passed are skipped by the same rule as the dotted line.
      */
     static double alongDots(BlockPos from, BlockPos goal, List<BlockPos> waypoints) {
         double length = 0.0;

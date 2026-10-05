@@ -1,22 +1,22 @@
 package net.prason.xaeronav.pathfinding.coarse;
 
 /**
- * 長距離ルート用の粗い地形。1セル＝1チャンク（16×16ブロック）で、地形の種別と代表の高さだけを持つ。
+ * Coarse terrain for long-distance routes. 1 cell = 1 chunk (16×16 blocks), holding only the terrain kind and a representative height.
  *
- * <p>読み込み済みチャンクの中しか見られない詳細探索に対して、こちらはXaeroが保存している
- * 訪問済み領域の地図から作る。目的が「海や溶岩を避けてどちら回りで行くか」を決めることなので、
- * 1マス単位の通行可否は持たない（幅1マスの橋は表現できない）。実際に辿る経路は、
- * ここが出した中間目標に向けて詳細探索が引き直す。
+ * <p>Unlike the detailed search, which can only see inside loaded chunks, this is built from the map of visited areas
+ * that Xaero saves. Its purpose is deciding "which way around to go to avoid seas and lava", so
+ * it holds no per-block passability (a 1-block-wide bridge can't be represented). The path actually followed is
+ * replanned by the detailed search toward the intermediate targets produced here.
  *
- * <p>1セルは<b>最大{@value #MAX_FLOORS}層の床</b>を持つ（床＝高さ昇順に並んだ{kind, height,
- * minHeight, maxHeight}の組）。天井のある次元（ネザー）ではXaeroの地図がY帯ごとの洞窟レイヤーに
- * 分かれており、同じXZに複数の独立した通路が上下に重なりうる。それを1つの高さへ潰す
- * （旧実装）と、垂直に分断された通路が「安い段差」として繋がって見えたり、waypointが
- * 到達不能な階層へ落ちたりする。地上・ジ・エンドは常に床数1になるので、既存の2.5D的な
- * 挙動はそのまま保たれる。
+ * <p>A cell holds <b>up to {@value #MAX_FLOORS} floors</b> (a floor = a {kind, height,
+ * minHeight, maxHeight} tuple, sorted by ascending height). In dimensions with a ceiling (the Nether), Xaero's map is split into cave layers
+ * per Y band, and several independent passages can stack vertically at the same XZ. Collapsing them into one height
+ * (the old implementation) made vertically separated passages look connected by a "cheap step", or dropped waypoints
+ * onto unreachable levels. The Overworld and the End always have 1 floor, so the existing 2.5D-style
+ * behavior is preserved as is.
  *
- * <p>生成後は不変。メインスレッドで組み立ててワーカースレッドから読む前提で、
- * 可変フィールドを持たせないこと。
+ * <p>Immutable once built. Assumed to be assembled on the main thread and read from worker threads, so
+ * don't give it mutable fields.
  */
 public final class CoarseMap {
 
@@ -26,41 +26,41 @@ public final class CoarseMap {
     public static final byte LAVA = 3;
 
     /**
-     * 溶岩が混じるが、まだ歩いて抜けられるセル。
+     * A cell mixed with lava that can still be walked through.
      *
-     * <p>{@link #LAVA}と分けるのは、チャンクの一部が溶岩というだけで通行不能にすると
-     * ネザーの地形の過半数が壁になるため（実測: 既知セルの58%が溶岩判定になった）。
-     * 1マス単位で溶岩を避けられるかどうかは粗い地図には分からないので、ここでは
-     * 「通れるが高い」に留めて、実際に抜けられるかの判断は層2・層3へ渡す。
+     * <p>Kept separate from {@link #LAVA} because making a chunk impassable just because part of it is lava
+     * turns the majority of Nether terrain into walls (measured: 58% of known cells were judged lava).
+     * Whether lava can be avoided block by block isn't known from the coarse map, so here it stays
+     * "passable but expensive", and the decision of whether it can actually be crossed is left to layers 2 and 3.
      */
     public static final byte LAVA_MIXED = 4;
 
     /**
-     * 床がまったく無いセル（ジ・エンドの奈落、ネザーの大空洞で底が読み取り範囲より下）。
+     * A cell with no floor at all (the End's void, or a large Nether cavern whose bottom is below the read range).
      *
-     * <p><b>{@link #NO_DATA}と分けるのが要点。</b>Xaeroは訪れた列を必ず記録し、不透明ブロックが
-     * 1つも見つからなかった列には「空気・高さ＝ワールド最低Y」を書く（{@code MapWriter#loadPixel}）。
-     * つまり<b>奈落は「データが無い」のではなく「床が無いというデータ」</b>で、タイルの有無で
-     * 未訪問と区別できる。区別せずに{@link #NO_DATA}へ倒していた頃は、未知セルの倍率
-     * （通行可能・ほぼ最安）が奈落にも適用され、層1がジ・エンドの島間をまっすぐ突っ切る
-     * 中間目標を並べていた——詳細探索はそこへ橋を架けられず、毎回予算を焼いていた。
+     * <p><b>Keeping it separate from {@link #NO_DATA} is the point.</b> Xaero always records visited columns, and for columns where
+     * not a single opaque block was found it writes "air, height = world minimum Y" ({@code MapWriter#loadPixel}).
+     * So <b>the void isn't "no data" but "data saying there's no floor"</b>, and it can be told apart from unvisited areas
+     * by whether a tile exists. Back when it was lumped into {@link #NO_DATA} without distinction, the unknown-cell multiplier
+     * (passable, nearly the cheapest) applied to the void too, and layer 1 lined up intermediate targets cutting straight across
+     * between the End's islands; the detailed search couldn't bridge there and burned its budget every time.
      *
-     * <p>高さは持たない（{@link #UNKNOWN_HEIGHT}）。奈落に代表高さは無く、0のような具体値を
-     * 入れると層2・層3がそこを目指してしまう。
+     * <p>It has no height ({@link #UNKNOWN_HEIGHT}). The void has no representative height, and putting in a concrete value like 0
+     * would make layers 2 and 3 aim there.
      */
     public static final byte VOID = 5;
 
-    /** データが無いセルの高さ。 */
+    /** Height of a cell with no data. */
     public static final short UNKNOWN_HEIGHT = Short.MIN_VALUE;
 
     /**
-     * 1セルが持てる床の上限。
+     * Maximum number of floors a cell can hold.
      *
-     * <p><b>{@code CoarseMapBuilder#putFloor}は上限を超えると「いちばん高い床」を捨てる。</b>
-     * 天井のある次元でここが足りないと、捨てられるのは<b>上の階＝歩ける階</b>になりやすい——
-     * ネザーの1列は「溶岩の海・下の洞窟・森の地面・天井近くの通路」と簡単に4層を超える。
-     * {@code XaeroMapReader#MAX_CAVE_LAYERS}（洞窟レイヤーの枠）はこの値と揃えてあり、
-     * 天井の無い次元では{@code XaeroMapReader#layersFor}が地表レイヤーへ1枚ぶん空ける。
+     * <p><b>{@code CoarseMapBuilder#putFloor} discards the "highest floor" when the limit is exceeded.</b>
+     * If this is too small in a dimension with a ceiling, what gets discarded tends to be <b>the upper level = the walkable level</b>:
+     * a single Nether column easily exceeds 4 layers with "lava sea, lower cave, forest floor, passage near the ceiling".
+     * {@code XaeroMapReader#MAX_CAVE_LAYERS} (the cave layer slots) is kept in line with this value, and
+     * in dimensions without a ceiling {@code XaeroMapReader#layersFor} leaves one slot free for the surface layer.
      */
     public static final int MAX_FLOORS = 6;
 
@@ -68,23 +68,23 @@ public final class CoarseMap {
     private final int minChunkZ;
     private final int chunksX;
     private final int chunksZ;
-    /** セルごとの床数（0〜{@link #MAX_FLOORS}）。長さ{@code chunksX*chunksZ}。 */
+    /** Floor count per cell (0 to {@link #MAX_FLOORS}). Length {@code chunksX*chunksZ}. */
     private final byte[] floorCount;
-    /** 長さ{@code chunksX*chunksZ*MAX_FLOORS}。セル内は高さ昇順。 */
+    /** Length {@code chunksX*chunksZ*MAX_FLOORS}. Sorted by ascending height within a cell. */
     private final byte[] kind;
     private final short[] height;
     private final short[] minHeight;
     private final short[] maxHeight;
     private final int knownCells;
     /**
-     * セルごとの陸塊ID（{@code LAND}でないセルは{@link #NO_ISLAND}）。長さ{@code chunksX*chunksZ}。
-     * 8近傍で繋がった{@code LAND}セルの塊に同じIDが入る。
+     * Landmass ID per cell ({@link #NO_ISLAND} for cells that aren't {@code LAND}). Length {@code chunksX*chunksZ}.
+     * The same ID is given to a cluster of {@code LAND} cells connected via their 8 neighbors.
      */
     private final int[] islandId;
-    /** 陸塊IDごとのセル数。{@code islandSize[islandId[cell]]}で引く。 */
+    /** Cell count per landmass ID. Looked up with {@code islandSize[islandId[cell]]}. */
     private final int[] islandSize;
 
-    /** {@link #islandId}で「陸ではない」ことを表す値。 */
+    /** Value in {@link #islandId} meaning "not land". */
     public static final int NO_ISLAND = -1;
 
     CoarseMap(int minChunkX, int minChunkZ, int chunksX, int chunksZ, byte[] floorCount,
@@ -120,7 +120,7 @@ public final class CoarseMap {
         return chunksZ;
     }
 
-    /** データが読めたセルの数。0なら、この範囲はXaeroの地図に無い（未訪問）。 */
+    /** Number of cells whose data could be read. If 0, this range isn't on Xaero's map (unvisited). */
     public int knownCells() {
         return knownCells;
     }
@@ -135,7 +135,7 @@ public final class CoarseMap {
         return localX >= 0 && localX < chunksX && localZ >= 0 && localZ < chunksZ;
     }
 
-    /** このセルが持つ床の数。範囲外・データ無しなら0。 */
+    /** Number of floors this cell has. 0 if out of range or without data. */
     public int floorCount(int chunkX, int chunkZ) {
         if (!containsChunk(chunkX, chunkZ)) {
             return 0;
@@ -147,14 +147,14 @@ public final class CoarseMap {
         return kind[floorIndex(chunkX, chunkZ, floor)];
     }
 
-    /** その床の代表の高さ。水の場合は水底ではなく水面の高さ。 */
+    /** Representative height of that floor. For water, the height of the water surface rather than the bottom. */
     public short heightAtFloor(int chunkX, int chunkZ, int floor) {
         return height[floorIndex(chunkX, chunkZ, floor)];
     }
 
     /**
-     * その床の内部で観測できた最小・最大の高さ。平均だけでは崖のあるチャンクと緩斜面のチャンクを
-     * 区別できないので、この差（{@code maxHeightAtFloor - minHeightAtFloor}）を崖の目安に使う。
+     * Minimum and maximum heights observed inside that floor. The average alone can't distinguish a chunk with a cliff from one with a gentle slope,
+     * so this difference ({@code maxHeightAtFloor - minHeightAtFloor}) is used as a cliff indicator.
      */
     public short minHeightAtFloor(int chunkX, int chunkZ, int floor) {
         return minHeight[floorIndex(chunkX, chunkZ, floor)];
@@ -165,8 +165,8 @@ public final class CoarseMap {
     }
 
     /**
-     * {@code fromFloorHeight}に最も近い高さの床を選ぶ。垂直遷移（同じセル内で階層をまたぐ）の
-     * 着地点選びと、waypoint座標の解決に使う。床が無ければ-1。
+     * Picks the floor whose height is closest to {@code fromFloorHeight}. Used for choosing the landing spot of a vertical transition (crossing levels within the same cell)
+     * and for resolving waypoint coordinates. -1 if there are no floors.
      */
     public int nearestFloor(int chunkX, int chunkZ, int fromFloorHeight) {
         int count = floorCount(chunkX, chunkZ);
@@ -186,27 +186,27 @@ public final class CoarseMap {
     }
 
     /**
-     * 種類ごとのセル数を数えた文字列（診断用）。1セルに複数の床があるときは最初の床で代表させる。
+     * A string counting cells per kind (for diagnostics). When a cell has several floors, the first floor represents it.
      *
-     * <p>実機（ジ・エンド、2026-08-28）で必要になった: 奈落を挟んだ経路選択が試行ごとに揺れるのに、
-     * ログには{@code knownCells}（床が1枚でもあるセルの数）しか出ておらず、<b>奈落が奈落として
-     * 見えているのか、そもそもデータが無いのか</b>を切り分けられなかった。{@code NO_DATA}は
-     * 最安でも陸の1.6倍で通れてしまうので、奈落が{@code NO_DATA}に倒れていれば
-     * 「奈落を突っ切る線が安く見える」の説明がそれだけで付く。<b>この内訳は説明だけでなく
-     * 値段そのものを動かす</b>——{@link CoarseRouter}は既知の陸:奈落比で{@code NO_DATA}の倍率を
-     * 較正するので、奈落が{@code NO_DATA}へ倒れると較正の材料まで同時に失われる。
+     * <p>Needed in-game (the End, 2026-08-28): route choices across the void wobbled from attempt to attempt, but
+     * the log showed only {@code knownCells} (the number of cells with at least one floor), so it couldn't be told <b>whether the void
+     * was seen as void, or there was no data at all</b>. {@code NO_DATA}
+     * is passable at as little as 1.6x the cost of land, so if the void had fallen into {@code NO_DATA},
+     * that alone would explain "the line cutting across the void looks cheap". <b>This breakdown not only explains
+     * but moves the price itself</b>: {@link CoarseRouter} calibrates the {@code NO_DATA} multiplier from the known land:void ratio,
+     * so if the void falls into {@code NO_DATA}, the calibration material is lost at the same time.
      */
     public String kindBreakdown() {
         int[] counts = kindCounts();
-        return "陸=" + counts[LAND] + ", 奈落=" + counts[VOID] + ", 水=" + counts[WATER]
-                + ", 溶岩=" + (counts[LAVA] + counts[LAVA_MIXED])
-                + ", データ無し=" + counts[NO_DATA];
+        return "land=" + counts[LAND] + ", void=" + counts[VOID] + ", water=" + counts[WATER]
+                + ", lava=" + (counts[LAVA] + counts[LAVA_MIXED])
+                + ", no data=" + counts[NO_DATA];
     }
 
     /**
-     * 種類ごとのセル数（添字は{@link #NO_DATA}〜{@link #VOID}の定数値）。1セルに複数の床が
-     * あるときは最初の床で代表させる。{@link #kindBreakdown}の内部集計を{@link CoarseRouter}の
-     * 未知セル較正（既知の陸:奈落比から{@code NO_DATA}の値段を見積もる）とも共有する。
+     * Cell count per kind (indexed by the constant values {@link #NO_DATA} through {@link #VOID}). When a cell has several floors,
+     * the first floor represents it. Shares {@link #kindBreakdown}'s internal tally with {@link CoarseRouter}'s
+     * unknown-cell calibration (estimating the price of {@code NO_DATA} from the known land:void ratio).
      */
     int[] kindCounts() {
         int[] counts = new int[VOID + 1];
@@ -224,11 +224,11 @@ public final class CoarseMap {
     }
 
     /**
-     * このセルが属する陸塊のID。陸でなければ{@link #NO_ISLAND}。
+     * ID of the landmass this cell belongs to. {@link #NO_ISLAND} if it isn't land.
      *
-     * <p>「渡った先が同じ島か、別の島か」を区別するために要る——{@link CoarseRouter}は
-     * <b>別の陸塊へ移った瞬間だけ</b>島の大きさを値段に反映する。セルごとに課すと、
-     * 小さい島を横切るあいだ何度も課金されてしまう。
+     * <p>Needed to distinguish "is the other side the same island or a different one": {@link CoarseRouter}
+     * factors island size into the price <b>only at the moment it moves to a different landmass</b>. Charging per cell
+     * would charge many times while crossing a small island.
      */
     public int islandIdAt(int chunkX, int chunkZ) {
         if (!containsChunk(chunkX, chunkZ)) {
@@ -238,11 +238,11 @@ public final class CoarseMap {
     }
 
     /**
-     * このセルが属する陸塊のセル数（1セル＝1チャンク＝16×16ブロック）。陸でなければ0。
+     * Cell count of the landmass this cell belongs to (1 cell = 1 chunk = 16×16 blocks). 0 if it isn't land.
      *
-     * <p>ジ・エンドで「島と島を渡るのはなるべく避けたい。大きい島を渡りながら行きたい」という
-     * 要求に応えるための材料。層1はチャンク解像度なので、これが「島の大きさ」として使える
-     * 唯一の情報になる。
+     * <p>Material for meeting the request, in the End, "avoid island-to-island crossings where possible; travel across large islands".
+     * Layer 1 is at chunk resolution, so this is the only information
+     * usable as "island size".
      */
     public int islandSizeAt(int chunkX, int chunkZ) {
         int id = islandIdAt(chunkX, chunkZ);

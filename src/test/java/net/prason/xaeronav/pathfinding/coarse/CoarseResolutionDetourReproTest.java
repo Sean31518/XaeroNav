@@ -16,17 +16,17 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import org.junit.jupiter.api.Test;
 
 /**
- * 「無駄なルート（遠回り）・謎にわたらせる」のオフライン再現。ユーザー報告:
- * 「謎にわたらせたりしている」「無駄なルート（遠回り）が多い。<b>近距離だと起きない</b>」。
+ * Offline reproduction of "wasteful routes (detours) / mysteriously makes you cross". User report:
+ * "it mysteriously makes you cross things", "lots of wasteful routes (detours). <b>Doesn't happen at short range</b>".
  *
- * <p>見立て（[[xaeronav-next-plans]]）: チャンク解像度の層1（{@link CoarseMap}）は16ブロック
- * 未満の陸の渡りを表現できない。狭い地峡は{@link LiveCoarseSampler}の集計で
- * {@code waterSamples*2 >= samples}に倒れて{@code WATER}チャンクになり、地峡が地図から消える。
- * すると層1は「水を泳いで渡る／大きく迂回する」中間目標しか出せず、詳細探索(層3)はその
- * 中間目標へ忠実に橋を架ける・泳ぐ＝「謎にわたらせる」。
+ * <p>Hypothesis ([[xaeronav-next-plans]]): the chunk-resolution layer 1 ({@link CoarseMap}) can't represent land
+ * crossings narrower than 16 blocks. A narrow isthmus tips over to {@code waterSamples*2 >= samples} in
+ * {@link LiveCoarseSampler}'s aggregation and becomes a {@code WATER} chunk, so the isthmus disappears from the map.
+ * Layer 1 can then only output intermediate targets that "swim across the water / take a big detour", and the detailed
+ * search (layer 3) faithfully builds bridges or swims to those targets = "mysteriously makes you cross".
  *
- * <p>このテストは断定ではなく観測。ブロック解像度の地形で詳細探索が何をするか、同じ地形を
- * {@link LiveCoarseSampler}で潰した粗い地図で層1が何を出すか、を並べて出力する。
+ * <p>This test observes rather than asserts. It prints side by side what the detailed search does on block-resolution
+ * terrain and what layer 1 outputs on the coarse map of the same terrain squashed by {@link LiveCoarseSampler}.
  */
 class CoarseResolutionDetourReproTest {
 
@@ -42,9 +42,9 @@ class CoarseResolutionDetourReproTest {
     private static final int MAX_Z = 96;
 
     /**
-     * 開始側の陸(x<64) と 目的地側の陸(x>=144) を、幅{@code isthmusWidth}ブロックの地峡だけが
-     * 繋いでいる。地峡以外の x∈[64,144) は水路。地峡の北({@code northBridge}が真なら) には
-     * z∈[64,80) に幅16ブロック＝チャンク解像度でも見える陸の橋を置く。
+     * The start-side land (x<64) and destination-side land (x>=144) are connected only by an isthmus {@code isthmusWidth}
+     * blocks wide. Outside the isthmus, x∈[64,144) is a channel. North of the isthmus (if {@code northBridge} is true),
+     * a 16-block-wide land bridge = visible even at chunk resolution, is placed at z∈[64,80).
      */
     private static FakeCells terrain(int isthmusWidth, boolean northBridge) {
         SearchBounds bounds = new SearchBounds(MIN_X, 40, MIN_Z, MAX_X, 110, MAX_Z);
@@ -56,7 +56,7 @@ class CoarseResolutionDetourReproTest {
                 boolean onIsthmus = z >= 0 && z < isthmusWidth;
                 boolean onNorthBridge = northBridge && z >= 64 && z < 80;
                 if (inChannel && !onIsthmus && !onNorthBridge) {
-                    // 水路: 石の底 + 水2マス
+                    // Channel: stone floor + 2 blocks of water
                     cells.set(x, GROUND_Y - 2, z, FakeCells.STONE);
                     cells.set(x, WATER_SURFACE_Y - 1, z, FakeCells.WATER);
                     cells.set(x, WATER_SURFACE_Y, z, FakeCells.WATER);
@@ -93,7 +93,7 @@ class CoarseResolutionDetourReproTest {
         };
     }
 
-    /** 地峡の走る帯(chunkZ=0..) を x方向に一列プリントする。 */
+    /** Prints the band the isthmus runs along (chunkZ=0..) as one row in the x direction. */
     private static void dumpIsthmusRow(String label, CoarseMap map) {
         StringBuilder sb = new StringBuilder(label).append("  chunkZ=0: ");
         for (int cx = MIN_X >> 4; cx <= (MAX_X - 1) >> 4; cx++) {
@@ -172,8 +172,8 @@ class CoarseResolutionDetourReproTest {
     }
 
     /**
-     * 主シナリオ: 幅4ブロックの地峡が唯一の陸路。詳細探索は地峡を歩く。層1は地峡を
-     * 見失って水路を泳ぐ／橋の中間目標を出す。
+     * Main scenario: a 4-block-wide isthmus is the only land route. The detailed search walks the isthmus. Layer 1
+     * loses the isthmus and outputs intermediate targets that swim the channel / bridge it.
      */
     @Test
     void narrowIsthmusVanishesFromCoarseMapAndForcesAWaterCrossing() {
@@ -203,22 +203,22 @@ class CoarseResolutionDetourReproTest {
         SearchLimits limits = new SearchLimits(1_000_000, 20_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
         PathResult detail = new AStarPathfinder(narrow, limits).search(start, goal, NEVER, 0);
 
-        // 詳細探索は幅4の地峡を水に入らず歩き切る＝陸路は実在する
-        assertTrue(detail.complete(), "詳細探索は地峡を歩いて到達できる: " + detail.termination());
-        assertEquals(0, waterSteps(narrow, detail), "陸路があるのに詳細探索が水に入った");
+        // The detailed search walks the full 4-wide isthmus without entering water = the land route really exists
+        assertTrue(detail.complete(), "the detailed search can reach by walking the isthmus: " + detail.termination());
+        assertEquals(0, waterSteps(narrow, detail), "the detailed search entered water despite a land route");
 
-        // それでも層1は地峡を見失って水路を横断する中間目標を出す
+        // Even so, layer 1 loses the isthmus and outputs intermediate targets that cross the channel
         assertTrue(throughWaterCells(narrowCoarse, narrowRoute) > 0,
-                "層1が水路を横断していない＝再現できていない: " + narrowRoute.waypoints());
-        // 地峡がチャンク解像度で見える幅なら、同じ地形で層1は水に入らない
+                "layer 1 doesn't cross the channel = not reproduced: " + narrowRoute.waypoints());
+        // If the isthmus is wide enough to be seen at chunk resolution, layer 1 doesn't enter water on the same terrain
         assertEquals(0, throughWaterCells(wideCoarse, wideRoute),
-                "幅16の地峡なら層1は陸路を通るはず: " + wideRoute.waypoints());
+                "with a 16-wide isthmus, layer 1 should take the land route: " + wideRoute.waypoints());
     }
 
     /**
-     * 遠回りシナリオ: 幅4の地峡(z∈[0,4)、見えない) の北に、z≥{@code openFrom}で開ける
-     * 陸のブロックがある(チャンク解像度で見える)。地峡が見えないぶん、層1は北へ迂回するか
-     * 水路を泳ぐしかない。詳細探索は地峡を歩く。
+     * Detour scenario: north of a 4-wide isthmus (z∈[0,4), invisible), there's land that opens up at z≥{@code openFrom}
+     * (visible at chunk resolution). Since the isthmus is invisible, layer 1 can only detour north or swim the
+     * channel. The detailed search walks the isthmus.
      */
     private static FakeCells terrainWithNorthGap(int isthmusWidth, int channelMaxX, int openFrom) {
         SearchBounds bounds = new SearchBounds(MIN_X, 40, MIN_Z, MAX_X, 110, MAX_Z);
@@ -260,8 +260,8 @@ class CoarseResolutionDetourReproTest {
         CoarseRouter.Route route = reportCoarse("coarse route", coarse, start, goal);
         int coarseMaxZ = route.waypoints().stream().mapToInt(BlockPos::getZ).max().orElse(0);
 
-        assertTrue(detail.complete() && detailMaxZ <= 8, "詳細探索は地峡沿い(z≈2)を歩く: maxZ=" + detailMaxZ);
+        assertTrue(detail.complete() && detailMaxZ <= 8, "the detailed search walks along the isthmus (z≈2): maxZ=" + detailMaxZ);
         assertTrue(coarseMaxZ >= 24,
-                "層1が地峡を見失って北へ迂回する（遠回り）はず: coarseMaxZ=" + coarseMaxZ);
+                "layer 1 should lose the isthmus and detour north (the long way round): coarseMaxZ=" + coarseMaxZ);
     }
 }

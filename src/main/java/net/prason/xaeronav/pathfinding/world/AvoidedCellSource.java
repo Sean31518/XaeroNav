@@ -8,20 +8,21 @@ import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.core.BlockPos;
 
 /**
- * 指定したセルだけを「無い」ことにした地形。<b>直前に経路の再確認が不成立と判定したセルを、
- * 次の探索が選び直さないようにする。</b>
+ * Terrain where only the given cells are treated as "absent". <b>Keeps the next search from picking again the cells
+ * that the previous route re-check judged as failing.</b>
  *
- * <p>探索側のセル判定と{@code PathValidator}の判定が同じ座標で食い違うと、探索が通した経路が
- * 即座に無効と判断され、引き直した経路がまた同じセルを通る——実機報告(#47)では、同じ座標
- * ({@code 2051,63,1283}の足場)で「地形が変わった→迂回→合流失敗→引き直し」が14秒間繰り返された。
- * 食い違いそのものを無くすのが本筋だが、<b>食い違いが残っていても輪を止められる</b>のがここ。
+ * <p>When the search's cell checks and {@code PathValidator}'s checks disagree at the same coordinate, the route the
+ * search let through is immediately judged invalid, and the re-planned route passes through the same cell again. In a
+ * real-world report (#47), "terrain changed → detour → failed to rejoin → re-plan" repeated for 14 seconds at the same
+ * coordinate (the footing at {@code 2051,63,1283}). The proper fix is to remove the disagreement itself, but this
+ * is what <b>stops the loop even if a disagreement remains</b>.
  *
- * <p>{@link CellData#ABSENT}を返すのは、それがこのコードベースで既に「触れない・立てない・
- * 掘れない」を表す値だから（未ロードチャンクと同じ扱い）。掘って開けることもできないので、
- * 探索は必ずそのセルを避けた線を引く。
+ * <p>It returns {@link CellData#ABSENT} because in this codebase that value already means "cannot touch, cannot
+ * stand, cannot dig" (treated the same as an unloaded chunk). It cannot be dug open either, so the search always
+ * draws a line that avoids the cell.
  *
- * <p>ワールドは書き換えない。構築時に委譲先も読まない（差分だけを持つ）——{@link PlannedCellSource}
- * と同じ構成。
+ * <p>The world is not modified. The delegate is not read at construction time either (only the difference is held),
+ * the same structure as {@link PlannedCellSource}.
  */
 public final class AvoidedCellSource implements CellSource {
 
@@ -34,8 +35,8 @@ public final class AvoidedCellSource implements CellSource {
     }
 
     /**
-     * 避けるセルが1つも無いなら委譲先をそのまま返す。{@link #cell}は探索1回で数百万回呼ばれるので、
-     * 避けるものが無い通常時にまで1段の間接参照を挟まない。
+     * Returns the delegate as-is if there are no cells to avoid. {@link #cell} is called millions of times per search,
+     * so the usual case with nothing to avoid should not pay for an extra level of indirection.
      */
     public static CellSource wrap(CellSource source, Collection<BlockPos> avoided) {
         if (avoided.isEmpty()) {
