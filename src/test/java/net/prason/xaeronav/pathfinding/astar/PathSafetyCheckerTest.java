@@ -13,16 +13,16 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * 提示直前の安全性チェック。コストで表現しきれない「歩けるが条件がある」区間に
- * 印が付くかを見る。
+ * Safety check right before presenting a path. Checks that sections the cost can't fully express, "walkable but
+ * with conditions", get marked.
  */
 class PathSafetyCheckerTest {
 
     private static final BooleanSupplier NOT_CANCELLED = () -> false;
 
     /**
-     * マグマブロックは足場として通行可（スニークすれば無傷）だが、走って踏めば燃える。
-     * 通れる以上、条件を伝えないと「案内どおり歩いたら焼かれた」になる。
+     * Magma blocks are passable as footing (harmless if you sneak), but stepping on them while running burns you.
+     * Since they're passable, not conveying the condition leads to "I followed the guidance and got burned".
      */
     @Test
     void marksStepsOverMagmaAsNeedingASneak() {
@@ -36,15 +36,15 @@ class PathSafetyCheckerTest {
                 .search(new BlockPos(0, 61, 0), new BlockPos(4, 61, 0), NOT_CANCELLED);
         PathResult annotated = PathSafetyChecker.annotate(cells, raw);
 
-        assertTrue(annotated.complete(), "マグマブロックは通行可");
+        assertTrue(annotated.complete(), "Magma blocks are passable");
         assertEquals(3, annotated.steps().stream()
                         .filter(step -> step.risk() == PathRisk.SNEAK_OVER_MAGMA).count(),
-                "マグマの上を通る3歩すべてに印が付くはず: " + annotated.steps());
+                "All 3 steps over magma should be marked: " + annotated.steps());
     }
 
     /**
-     * 奈落の上に架ける橋。足場を1つ外せば落ちて助からないので、底のある割れ目に架ける橋
-     * （印なし＝シアン）とは区別して描く必要がある。
+     * A bridge built over the void. Missing one footing block means a fatal fall, so it must be drawn differently from a bridge
+     * over a crack with a bottom (unmarked = cyan).
      */
     @Test
     void marksBridgesOverABottomlessGap() {
@@ -57,18 +57,18 @@ class PathSafetyCheckerTest {
                 .search(new BlockPos(0, 61, 0), new BlockPos(4, 61, 0), NOT_CANCELLED);
         PathResult annotated = PathSafetyChecker.annotate(cells, raw);
 
-        assertTrue(annotated.complete(), "奈落の上にも橋は架かる: " + annotated.steps());
+        assertTrue(annotated.complete(), "Bridges can be built over the void too: " + annotated.steps());
         assertEquals(3, annotated.steps().stream()
                         .filter(step -> step.risk() == PathRisk.VOID_BELOW).count(),
-                "奈落の上の足場すべてに印が付くはず: " + annotated.steps());
+                "Every footing block over the void should be marked: " + annotated.steps());
     }
 
     /**
-     * 底のある割れ目に架ける橋は警告しない。足場を外しても落ちるだけで、そこから登り直せる。
+     * Bridges over a crack with a bottom aren't warned about. Missing a footing block just means falling, and you can climb back from there.
      *
-     * <p>割れ目を4マス深くしてあるのは、降りて歩いて登る経路を潰して<b>橋を強制する</b>ため
-     * （安全な落下は3マスまで）。1マスの段差にすると、橋が一本も出ないまま
-     * 「警告が無い」ことだけを確かめる空のテストになる。
+     * <p>The crack is 4 blocks deep to rule out the climb-down, walk, climb-up path and <b>force a bridge</b>
+     * (safe falls go up to 3 blocks). With a 1-block step it would become an empty test that only confirms
+     * "no warning" without a single bridge appearing.
      */
     @Test
     void leavesBridgesOverAFlooredGapUnmarked() {
@@ -88,11 +88,11 @@ class PathSafetyCheckerTest {
                 .search(new BlockPos(0, 65, 0), new BlockPos(4, 65, 0), NOT_CANCELLED);
         PathResult annotated = PathSafetyChecker.annotate(cells, raw);
 
-        assertTrue(annotated.complete(), "底のある割れ目は渡れる: " + annotated.steps());
+        assertTrue(annotated.complete(), "A crack with a bottom can be crossed: " + annotated.steps());
         assertEquals(3, annotated.steps().stream().filter(PathStep::bridging).count(),
-                "この割れ目は橋でしか渡れない: " + annotated.steps());
+                "This crack can only be crossed by bridge: " + annotated.steps());
         assertTrue(annotated.steps().stream().allMatch(step -> step.risk() == PathRisk.NONE),
-                "床の見える割れ目の橋に警告を出してはいけない: " + annotated.steps());
+                "A bridge over a crack whose floor is visible must not be warned about: " + annotated.steps());
     }
 
     @Test
@@ -108,6 +108,6 @@ class PathSafetyCheckerTest {
         PathResult annotated = PathSafetyChecker.annotate(cells, raw);
 
         assertTrue(annotated.steps().stream().allMatch(step -> step.risk() == PathRisk.NONE),
-                "普通の地面に印を付けてはいけない: " + annotated.steps());
+                "Ordinary ground must not be marked: " + annotated.steps());
     }
 }

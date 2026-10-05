@@ -7,13 +7,13 @@ import net.prason.xaeronav.pathfinding.astar.PathResult;
 import net.prason.xaeronav.pathfinding.navgraph.WindowField;
 
 /**
- * 途中までの経路2本の、末端から目的地までの残り。どちらが目的地の近くまで引けているかを比べる。
+ * For two partial paths, the remaining distance from their ends to the goal. Compares which one reaches closer to the goal.
  *
- * <p>物差しは、両方の末端が窓の中にあるときだけ航法グラフのガイドを使う。窓の外の値は推定で尺度が揃わず
- * （{@link WindowField#measuredInWindow}）、引き算すると推定のずれがそのまま結論になる。そのときは
- * 目的地までの水平距離で比べる。どちらの物差しでも、比べる2つは同じ種類の値どうしにする。
+ * <p>The yardstick is the nav graph guide only when both ends are inside the window. Values outside the window are estimates on mismatched scales
+ * ({@link WindowField#measuredInWindow}), and subtracting them turns the estimation error straight into the conclusion. In that case
+ * compare the horizontal distance to the goal. Either way, the two values compared are of the same kind.
  *
- * @param oldAhead 表示中の経路の方が、目的地の近くまで引けているか。同じなら新しい結果を採る
+ * @param oldAhead whether the displayed path reaches closer to the goal. If equal, the new result is taken
  */
 record PartialProgress(double oldLeft, double newLeft, String yardstick, boolean oldAhead) {
 
@@ -25,10 +25,10 @@ record PartialProgress(double oldLeft, double newLeft, String yardstick, boolean
                 && guide.measuredInWindow(newEnd.getX(), newEnd.getZ())) {
             double oldLeft = guide.estimate(oldEnd.getX(), oldEnd.getY(), oldEnd.getZ());
             double newLeft = guide.estimate(newEnd.getX(), newEnd.getY(), newEnd.getZ());
-            return new PartialProgress(oldLeft, newLeft, "ガイド", oldLeft < newLeft);
+            return new PartialProgress(oldLeft, newLeft, "guide", oldLeft < newLeft);
         }
         double oldLeft = PathfindingState.horizontalDistance(oldEnd, goal);
         double newLeft = PathfindingState.horizontalDistance(newEnd, goal);
-        return new PartialProgress(oldLeft, newLeft, "距離", oldLeft < newLeft);
+        return new PartialProgress(oldLeft, newLeft, "distance", oldLeft < newLeft);
     }
 }

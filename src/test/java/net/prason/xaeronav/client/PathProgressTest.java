@@ -16,13 +16,13 @@ import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 「いま経路のどこにいるか」の対応づけ。
+ * Mapping "where on the path am I now".
  *
- * <p>再計算の要否・案内表示・描画の切り詰めが同じ答えを使うための土台なので、ここがずれると
- * 「案内は次の角を出しているのに線は手前から描かれる」といった食い違いが一斉に出る。
+ * <p>It's the foundation that recompute decisions, guidance display, and render trimming all share, so if it drifts,
+ * mismatches like "the guidance shows the next corner but the line is drawn from behind" appear all at once.
  *
- * <p>とくに大事なのが、経路が自分自身の近くを通る地形（洞窟の折り返し階段）で遠くの区間へ
- * 飛び移らないこと。飛び移ると残り距離が突然変わり、案内が別の場所を指す。
+ * <p>Especially important is not jumping to a distant segment in terrain where the path passes near itself (cave
+ * switchback stairs). A jump suddenly changes the remaining distance and the guidance points somewhere else.
  */
 class PathProgressTest {
 
@@ -36,7 +36,7 @@ class PathProgressTest {
         return new PathResult(steps, PathResult.Termination.REACHED_GOAL, positions.size(), positions.size());
     }
 
-    /** ステップ{@code i}のマス中心に立ったときのプレイヤー座標。 */
+    /** Player coordinates when standing at the center of step {@code i}'s cell. */
     private static Vec3 standingOn(BlockPos pos) {
         return new Vec3(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
     }
@@ -49,17 +49,17 @@ class PathProgressTest {
         }
         PathResult result = path(positions);
 
-        // 先頭から順に歩く
+        // Walk in order from the start
         for (int i = 0; i < positions.size(); i++) {
             PathProgress.INSTANCE.update(result, standingOn(positions.get(i)));
-            assertEquals(i, PathProgress.INSTANCE.indexFor(result), "ステップ" + i + "に対応づく");
+            assertEquals(i, PathProgress.INSTANCE.indexFor(result), "Step " + i + " is matched");
             assertEquals(0.0, PathProgress.INSTANCE.distance(), 1.0e-9);
         }
     }
 
     @Test
     void aPlayerFarAheadIsFoundByTheFullScan() {
-        // 窓（前方32ステップ）の外へ一気に飛んだ場合。テレポートやチャンク読み込み後の位置補正で起きる
+        // A sudden jump outside the window (32 steps ahead). Happens with teleports or position corrections after chunk loading
         List<BlockPos> positions = new ArrayList<>();
         for (int i = 1; i <= 100; i++) {
             positions.add(new BlockPos(i, Y, 0));
@@ -68,14 +68,14 @@ class PathProgressTest {
 
         PathProgress.INSTANCE.update(result, standingOn(positions.get(80)));
 
-        assertEquals(80, PathProgress.INSTANCE.indexFor(result), "窓の外なら全体を探し直す");
+        assertEquals(80, PathProgress.INSTANCE.indexFor(result), "Outside the window, search the whole path again");
         assertEquals(0.0, PathProgress.INSTANCE.distance(), 1.0e-9);
     }
 
     @Test
     void doesNotJumpBackToAnEarlierLegThatPassesNearby() {
-        // 往路（z=0）と復路（z=2）が2マス隣を並走する経路。復路を歩いているときに
-        // 往路へ飛び移ると、残り距離が突然増えて案内が逆を向く
+        // A path whose outbound leg (z=0) and return leg (z=2) run parallel two blocks apart. Jumping to the
+        // outbound leg while walking the return leg suddenly increases the remaining distance and the guidance points backwards
         List<BlockPos> positions = new ArrayList<>();
         for (int i = 1; i <= 30; i++) {
             positions.add(new BlockPos(i, Y, 0));
@@ -85,14 +85,14 @@ class PathProgressTest {
         }
         PathResult result = path(positions);
 
-        // 往路を歩き切ってから復路へ入る
+        // Walk the outbound leg fully, then enter the return leg
         for (BlockPos pos : positions.subList(0, 45)) {
             PathProgress.INSTANCE.update(result, standingOn(pos));
         }
 
         int index = PathProgress.INSTANCE.indexFor(result);
         assertEquals(44, index);
-        assertTrue(positions.get(index).getZ() == 2, "復路の側に留まる: " + positions.get(index));
+        assertTrue(positions.get(index).getZ() == 2, "Stays on the return-leg side: " + positions.get(index));
     }
 
     @Test
@@ -103,13 +103,13 @@ class PathProgressTest {
         PathProgress.INSTANCE.update(tracked, standingOn(new BlockPos(2, Y, 0)));
 
         assertEquals(0, PathProgress.INSTANCE.indexFor(other),
-                "対応づけていない経路については先頭を返す（描画が途中から始まらないように）");
+                "For a path not mapped yet, returns the start (so rendering doesn't begin midway)");
     }
 
     @Test
     void measuresTheDistanceWithAndWithoutTheVerticalGap() {
-        // 水面を泳いでいて経路が5マス下を通っている場面。縦を数えると既定の逸脱閾値(4)を
-        // 超えるが、水の中では上下に自由に動けるので経路からは外れていない
+        // Swimming on the surface with the path passing 5 blocks below. Counting vertically exceeds the default
+        // deviation threshold (4), but underwater you can move freely up and down, so you haven't left the path
         List<BlockPos> positions = new ArrayList<>();
         for (int i = 1; i <= 20; i++) {
             positions.add(new BlockPos(i, Y, 0));
@@ -130,8 +130,8 @@ class PathProgressTest {
         PathProgress.INSTANCE.update(null, new Vec3(0, Y, 0));
 
         assertEquals(Double.MAX_VALUE, PathProgress.INSTANCE.distance(),
-                "経路が無い間は「経路から限りなく遠い」＝再計算の対象として扱う");
+                "While there's no path, treat it as \"infinitely far from the path\" = subject to recompute");
         assertEquals(Double.MAX_VALUE, PathProgress.INSTANCE.horizontalDistance(),
-                "水平で測る側も同じ（水中の逸脱判定がここを読む）");
+                "Same for the horizontal measure (the underwater deviation check reads this)");
     }
 }

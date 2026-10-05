@@ -5,51 +5,51 @@
 
 ## Decision
 
-Minecraftのworldへ触れて探索入力を準備する処理と、重い経路探索を別のスレッド境界に置きます。
+Preparing search input by touching the Minecraft world and the heavy pathfinding sit on opposite sides of a thread boundary.
 
-- クライアントスレッドは、プレイヤーとworldの参照、読み込み済みチャンクからの`ChunkView`構築、
-  Xaero地図データの取得、状態遷移を担当する。
-- `PathfindingExecutor`のワーカーは、渡されたビューを占有してセル読み取り、A*、危険注釈を行う。
-- 新しい要求、clear、logout、次元変更ではgenerationを進める。完了したfutureは、自分が取得した
-  generationと現在値が一致するときだけ結果を公開できる。
-- HUD、ワールド描画、地図描画は、個別の可変フィールドを組み合わせず、1フレームにつき1つの
-  immutable `NavigationView`を読む。
+- The client thread handles references to the player and world, building `ChunkView` from loaded chunks,
+  fetching Xaero map data, and state transitions.
+- `PathfindingExecutor` workers take exclusive ownership of the view they're given and do cell reads, A*, and hazard annotation.
+- A new request, clear, logout, or dimension change advances the generation. A completed future may publish its result only
+  when the generation it captured matches the current one.
+- HUD, world rendering, and map rendering don't combine individual mutable fields; they read one
+  immutable `NavigationView` per frame.
 
 ## Invariants
 
-- `CellSource`と`ChunkView`は単一ワーカーが占有する。キャッシュを持つ同じインスタンスを並行する
-  探索へ渡してはいけない。
-- 通常予算とdeep fallbackを並行実行するときは、それぞれ独立したビューを渡す。
-- futureの完了callbackからMinecraftのUI、player、worldを直接変更しない。必要な結果はスレッド安全な
-  受け渡しを通し、クライアントtickで適用する。
-- キャンセルは計算量を減らすために行うが、正しさはgeneration照合で守る。割り込みが遅れても古い結果を
-  復活させてはいけない。結果を受け取る側が居なくなる遷移（clear・到着・離陸）では、世代を進めるのに
-  加えて`PathfindingExecutor#cancelAll`で走っている探索を止める。
-- `NavigationView`へ含める状態を変更したら、全ての書き込み経路でsnapshotを再発行する。
-- logout後はgoal、route、世代、Xaeroの一時waypoint、worldを保持するビューを残さない。
+- `CellSource` and `ChunkView` are owned by a single worker. Never pass the same caching instance to concurrent
+  searches.
+- When running the regular budget and the deep fallback concurrently, give each its own view.
+- Don't modify Minecraft's UI, player, or world directly from a future's completion callback. Pass the needed results
+  through a thread-safe handoff and apply them on the client tick.
+- Cancellation is done to reduce work, but correctness is guarded by the generation check. Even if an interrupt is late,
+  an old result must never come back. On transitions where nobody is left to receive the result (clear, arrival, takeoff),
+  besides advancing the generation, stop running searches with `PathfindingExecutor#cancelAll`.
+- When changing the state included in `NavigationView`, reissue the snapshot on every write path.
+- After logout, keep no view holding the goal, route, generation, Xaero's temporary waypoint, or world.
 
 ## Why
 
-探索は数百ms以上かかることがあり、クライアントスレッドで実行すると描画と入力を止めます。一方、
-Minecraftのチャンク管理やXaeroの地図APIを任意のワーカーから操作することもできません。また、単なる
-futureのキャンセルだけでは、完了直前の古い処理が新しい状態を上書きする競合を防げません。
+Searches can take hundreds of ms or more, and running them on the client thread stalls rendering and input. On the other hand,
+Minecraft's chunk management and Xaero's map API can't be driven from arbitrary workers. And merely
+cancelling a future doesn't prevent the race where an old task just about to finish overwrites the new state.
 
-明示的な所有権、generation、immutable snapshotの3つを組み合わせ、重い処理を逃がしながら表示状態の
-一貫性を保ちます。
+Combining explicit ownership, generations, and immutable snapshots offloads the heavy work while keeping the displayed state
+consistent.
 
 ## Verification
 
-- `PathfindingExecutor*Test`: 通常探索、deep fallback、緩和、粗いガイド
-- `SearchHandoverTest`: 目的地の変更・clear・離陸と着地の手順で、古い結果が届かないことと、走っている
-  探索（deep fallbackの2本目を含む）がビューを読むのをやめること
-- `DiagnosticJobRunnerTest`: 診断探索の世代管理
-- `StuckTrackerTest`: 状態機械から抽出した詰み判定
-- `NavHud*Test`, `MapPathOverlayTest`, `PathGeometryTest`: 公開snapshotの利用側
-- `CliffSpliceTest`, `SeamRepairSectionTest`, `SpliceJoinTest`: 非同期結果を使う経路差し替え
+- `PathfindingExecutor*Test`: regular search, deep fallback, loosening, coarse guide
+- `SearchHandoverTest`: on goal changes, clear, and takeoff/landing, old results don't arrive and running
+  searches (including the second deep fallback search) stop reading their views
+- `DiagnosticJobRunnerTest`: generation handling for diagnostic searches
+- `StuckTrackerTest`: stuck detection extracted from the state machine
+- `NavHud*Test`, `MapPathOverlayTest`, `PathGeometryTest`: consumers of the published snapshot
+- `CliffSpliceTest`, `SeamRepairSectionTest`, `SpliceJoinTest`: path replacement using async results
 
-`SearchHandoverTest`は`PathfindingState`と同じ部品・同じ手順を再現したもので、`PathfindingState`
-そのものはMinecraftのクライアントが要るため通していません。状態機械をさらに分割するときは、
-fake scheduler/executorによる統合テストを先に追加します。
+`SearchHandoverTest` reproduces the same parts and the same steps as `PathfindingState`; `PathfindingState`
+itself isn't tested because it needs a Minecraft client. When splitting the state machine further,
+add integration tests with a fake scheduler/executor first.
 
 ## Code map
 

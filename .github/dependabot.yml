@@ -1,8 +1,8 @@
 version: 2
 updates:
-  # Gradleプラグイン・JUnit・（Xaeroを除く）依存の更新。
-  # NeoForgeとMinecraftのバージョンはgradle.propertiesにあるのでDependabotの対象外 —
-  # あれはMOD側で意図して選ぶ値で、自動で上げてよいものではない。
+  # Updates for Gradle plugins, JUnit, and dependencies (except Xaero).
+  # NeoForge and Minecraft versions live in gradle.properties, so Dependabot doesn't cover them:
+  # those are values the mod chooses deliberately, not something to bump automatically.
   - package-ecosystem: gradle
     directory: "/"
     schedule:

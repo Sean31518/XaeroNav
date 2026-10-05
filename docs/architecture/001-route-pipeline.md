@@ -5,98 +5,102 @@
 
 ## Decision
 
-XaeroNav は長距離の徒歩経路を、解像度と責務の異なる層で扱います。
+XaeroNav handles long-distance walking routes in layers that differ in resolution and responsibility.
 
-1. `CoarseRouter`（層1）は Xaero の地図データから、チャンク単位の大局的な中間目標列を作る。
-2. `CorridorLegSolver`（層2）は粗い各区間を、地表データに基づくブロック解像度の廊下へ精緻化する。
-3. `AStarPathfinder`（層3）は読み込み済みチャンクの実ブロックを使い、プレイヤーが実際に辿る移動列を作る。
+1. `CoarseRouter` (Layer 1) builds a sequence of chunk-level, big-picture intermediate targets from Xaero's map data.
+2. `CorridorLegSolver` (Layer 2) refines each coarse leg into a block-resolution corridor based on surface data.
+3. `AStarPathfinder` (Layer 3) uses the real blocks in loaded chunks to build the sequence of moves the player actually follows.
 
-層3がどこを狙い、何をガイド（cost-to-go）にするかは次元で分かれます。
+Where Layer 3 aims and what it uses as its guide (cost-to-go) depends on the dimension.
 
-| 次元 | 狙う先 | ガイド | 重み |
+| Dimension | Aims at | Guide | Weight |
 |---|---|---|---|
-| 航法グラフが組み上がっている回（全次元） | 最終目的地 | 航法グラフ（`NavGraph` / `WindowField`） | 1.0 |
-| まだの回・使えない回（天井の無い次元） | 層1・層2の中間目標 | 区間の箱で組む層1 | 設定値 |
-| まだの回・使えない回（天井のある次元） | 最終目的地 | 3D粗層（`VoxelCostToGo`） | 設定値 |
+| Runs where the navigation graph has been built (all dimensions) | Final destination | Navigation graph (`NavGraph` / `WindowField`) | 1.0 |
+| Runs where it isn't ready or usable (dimensions without a ceiling) | Layer 1/Layer 2 intermediate targets | Layer 1 built over the leg's box | Configured value |
+| Runs where it isn't ready or usable (dimensions with a ceiling) | Final destination | 3D coarse layer (`VoxelCostToGo`) | Configured value |
 
-ネザーでは3D粗層が組み上がるまで航法グラフを使わない（窓の外が幾何下限だと3D粗層だけより悪い）。
+In the Nether, the navigation graph isn't used until the 3D coarse layer has been built (with the geometric lower bound outside the window, it's worse than the 3D coarse layer alone).
 
-### 航法グラフ
+### Navigation graph
 
-読み込み済みの窓（プレイヤーから水平224ブロックの正方形、描画距離の方が狭ければそちら）の中を、
-**層3とまったく同じ移動生成**で16³のセクションごとに辺へ落とし、目的地から逆Dijkstraして残りコストを作る。
-窓の外へ出る辺の先と窓の縁には「外の推定」を置く。現世は層1、ネザーは3D粗層を1.3倍したもの（3D粗層は真の残りの
-0.77倍前後に縮んでいる）、エンドと地図が無いときは目的地までの直線距離（幾何下限）で、直線距離は目的地が窓の外に
-あるときだけ置く。
+Inside the loaded window (a square reaching 224 blocks horizontally from the player, or the render distance if that's smaller),
+edges are derived per 16³ section **with exactly the same move generation as Layer 3**, and a reverse Dijkstra from the destination
+builds the remaining cost. The ends of edges leaving the window and the window's rim are seeded with a "far estimate": Layer 1 in the
+Overworld, the 3D coarse layer × 1.3 in the Nether (the 3D coarse layer runs at about 0.77× the true remaining cost), and in the End
+or with no map, the straight-line distance to the destination (the geometric lower bound), which is only placed while the destination
+is outside the window.
 
-- セクションは自然に立てる点（掘らず・置かずに立てる高さ、水は全深さ）から水平8・垂直2の殻の中だけを持つ。
-- セクションは目的地ごとに覚え、歩いた分の帯だけ並列に組み足す。窓から離れたセクションは捨てる。
-  周りのチャンクが欠けたまま組んだセクションは、多く読めるようになったら組み直す。
-- ガイドは8ブロック歩くごとにワーカーで組み直し、組み上がるまでは直前のガイドか従来の探索で進む。
-- 窓224ではグラフとガイドが最大約270MBを使う。Javaのヒープ上限（`Runtime#maxMemory`）が2.5GB未満なら窓を160にする
-  （約150MB）。間の192はネザーの最悪が160より悪いので選ばない。2GB未満のヒープは対象外。
-- 組み立てに失敗したら30秒は組み直さず、その間は従来の探索で案内する。
-- 組み直したガイドで、引いてある経路の先を1回だけ見直す（`RouteReview`）。目的地が窓の中にあり、
-  線に沿った値段がガイドの値より40tick以上高ければ引き直す。経路は窓の外を推定で狙って引かれ、
-  以後は末端から継ぎ足すだけなので、窓が進んで推定が正確になっても手前の向きは自然には直らない。
-- 探索の箱も同じ窓で切り、高さは全高を見る。
+- A section holds only the shell within 8 horizontally and 2 vertically of naturally standable points (heights standable without
+  digging or placing, and every depth of water).
+- Sections are stored per destination, and only the band walked into is added, in parallel. Sections far from the window are dropped.
+  Sections built while surrounding chunks were missing are rebuilt once more of them can be read.
+- The guide is rebuilt on a worker every 8 blocks walked; until it's ready, navigation continues with the previous guide or the
+  conventional search.
+- At window 224 the graph and guide use up to about 270MB. If Java's heap limit (`Runtime#maxMemory`) is under 2.5GB, the window is
+  160 (about 150MB). 192, in between, isn't chosen because its Nether worst case is worse than 160's. Heaps under 2GB aren't supported.
+- If building fails, it isn't rebuilt for 30 seconds, and guidance uses the conventional search in the meantime.
+- With a rebuilt guide, the rest of the drawn path is reviewed once (`RouteReview`). If the destination is inside the window and the
+  cost along the line is at least 40 ticks higher than the guide's value, the path is redrawn. The path was drawn aiming outside the
+  window by estimate and is afterwards only extended from its end, so even when the window advances and the estimate becomes
+  accurate, the direction of the near part isn't corrected on its own.
+- The search's box is cut to the same window, and covers the full height.
 
-層1と層2の出力は、実際に踏む経路ではなく層3へ向きを伝える中間目標です。中間目標の座標へ完全一致
-することを要求してはいけません。粗いセルの代表点を強制すると、通れる場所がセル内にあっても不必要な
-遠回りや失敗になります。層1はガイドの有無にかかわらず引き、地図の点線、HUDの所要時間、窓の外の推定に使います。
+The output of Layers 1 and 2 is intermediate targets that tell Layer 3 the direction, not the path actually walked. Don't require
+an exact match to an intermediate target's coordinates. Forcing a coarse cell's representative point causes unnecessary detours or
+failures even when there's a passable spot within the cell. Layer 1 is drawn regardless of whether there's a guide, and is used for the map's dotted line, the HUD's travel time, and the estimate outside the window.
 
 ## Invariants
 
-- 各層のコストはtickを単位とし、同じ移動を層ごとに矛盾する価格で評価しない。
-- 層3のヒューリスティックへ渡す層1のcost-to-goは実コストの下限でなければならない。下限性を失う変更は、
-  A*の最適性と探索順を変えるため禁止する。
-- 航法グラフのガイドは**グラフに無い点で0を返さない**。掘った・置いたブロックで生まれた立ち位置は
-  グラフに無く、そこで0を返すと探索がそこへ吸い寄せられる。近くのノードの値から延ばし、無ければ外の推定か幾何下限にする。
-- 外の推定は**分からない点を無限大（不明）にする**。質の悪い推定は何も置かないより有害で、エンドで層1を
-  窓の縁に置くと幾何下限より悪い。
-- 窓の中の目的地が殻に繋がっていなければ、その回は航法グラフを使わない（`WindowField#reachesGoal`）。
-  窓全体の値が縁の外の推定だけから来て、窓の中の正確な値と尺度が食い違う。
-- 探索の始点が殻に繋がっていないことだけでは断らない。エンドでは16ブロックを超える奈落で隔てられた島が普通で、
-  そこから断って従来の探索へ落とすと悪くなる（1.022→1.235倍）。
-- 窓の縁に置く直線距離は、目的地が窓の中にあるときは置かない。窓の外を何も知らない過小な値が縁へ探索を吸い寄せる。
-- 航法グラフの辺は目的地と移動の条件（掘れるか・置けるか）に依存する。どちらかが変われば組み直す。
-- 未知チャンクは通行不能にしない。未探索地を挟む目的地へ進めなくなるためである。一方、既知の安全な
-  迂回路を常に捨てないよう、層1では既知の陸より高いコストにする。
-- 層2は持ち物、体力、正確なブロック形状を知らない。掘削、ブロック設置、痛い落下など、その情報を
-  必要とする最終判断は層3だけが行う。
-- 層1の中間目標間隔は、層3が一度に解く詳細探索距離より短く保つ。
-- ネザーでは状態を `(chunkX, chunkZ, floor)` として扱う。同じXZの独立した床を安い段差として
-  連結してはいけない。
+- Every layer's cost is in ticks, and the same move must not be priced inconsistently across layers.
+- Layer 1's cost-to-go passed to Layer 3's heuristic must be a lower bound on the real cost. Changes that lose admissibility
+  are forbidden, because they change A*'s optimality and search order.
+- The navigation graph's guide **doesn't return 0 at points not in the graph**. Standing spots created by dug or placed blocks
+  aren't in the graph, and returning 0 there attracts the search to them. Extend from nearby nodes' values, or else use the far estimate or the geometric lower bound.
+- The far estimate **makes points it doesn't know infinite (unknown)**. A poor estimate is more harmful than placing nothing; in the End,
+  putting Layer 1 on the window's rim is worse than the geometric lower bound.
+- If the destination inside the window isn't connected to the shell, the navigation graph isn't used for that run (`WindowField#reachesGoal`).
+  All values in the window would come only from the estimate outside the rim, and their scale would disagree with the accurate values inside the window.
+- The search start not being connected to the shell alone isn't a reason to refuse. In the End, islands separated by voids wider than 16 blocks
+  are normal, and refusing there to fall back to the conventional search makes things worse (1.022 -> 1.235×).
+- The straight-line distance on the window's rim isn't placed when the destination is inside the window. An underestimate that knows nothing about outside the window attracts the search to the rim.
+- The navigation graph's edges depend on the destination and the movement conditions (whether digging and placing are allowed). If either changes, it's rebuilt.
+- Unknown chunks are not made impassable, since that would block progress toward destinations beyond unexplored land. On the other hand,
+  so that known safe detours are never discarded, Layer 1 gives them a higher cost than known land.
+- Layer 2 doesn't know the inventory, health, or exact block shapes. Final decisions that need that information, such as digging,
+  placing blocks, or painful falls, are made only by Layer 3.
+- Layer 1's intermediate target spacing is kept shorter than the detailed search distance Layer 3 solves at once.
+- In the Nether, state is treated as `(chunkX, chunkZ, floor)`. Independent floors at the same XZ must not be connected as
+  cheap steps.
 
 ## Why
 
-読み込み済みチャンクだけで遠距離を詳細探索すると、目的地まで地形が存在せず経路が途切れます。
-反対に、地図由来の粗い線をそのまま歩行経路にすると、橋、掘削、当たり判定、持ち物、安全性を判断
-できません。大局的な方向と実際の移動を分離することで、ストリーミング中も案内を継ぎ足せます。
+Detailed search over long distances using only loaded chunks breaks off, because the terrain all the way to the destination doesn't exist.
+Conversely, walking the coarse line derived from the map as-is can't make decisions about bridges, digging, collision, inventory, or
+safety. Separating the big-picture direction from the actual moves lets guidance keep being extended while chunks stream in.
 
-ただし層1・層2は層3と別のコストモデルで辺を張る「別の推測」で、中間目標へ寄ること自体が遠回りになり、
-定数の調整では質に天井がありました。読み込み済みの範囲では層3の移動そのものから本物の残りコストを作れるので、
-そこは航法グラフに任せます。歩き通しの模型（`NavGraphWalkBenchTest`、組み直しの遅れ込み）で、
-現世の広域長距離は1.067/1.165倍から1.016/1.030倍（洞窟始点のルートは1.029/1.058倍）、エンドは1.122倍・未到達1本から
-1.013/1.029倍、ネザーは3D粗層だけの1.048/1.104倍から1.013/1.023倍になりました（平均/最悪、全視界の最適経路比、窓160）。
-見直しは目的地が窓に入ってから走るので、窓が狭いと遠回りに気づくのが遅れます。窓160と224を比べた計測では、
-ネザーが平均1.044→1.001・最悪1.147→1.003倍、現世が1.018→1.009倍になりました。192はネザーの最悪が160より悪く、240はエンド外側の島の1本で経路が出なくなりました。
+However, Layers 1 and 2 are "a different guess" that builds edges with a cost model different from Layer 3's; steering toward intermediate
+targets is itself a detour, and tuning constants put a ceiling on quality. Within the loaded range, the real remaining cost can be built from
+Layer 3's moves themselves, so that's left to the navigation graph. In the walk-through model (`NavGraphWalkBenchTest`, including rebuild delays),
+Overworld wide long-distance went from 1.067/1.165× to 1.016/1.030× (routes starting in caves 1.029/1.058×), the End from 1.122× with one unreached route
+to 1.013/1.029×, and the Nether from 1.048/1.104× with the 3D coarse layer alone to 1.013/1.023× (mean/worst, ratio to the full-visibility optimal path, window 160).
+The review runs once the destination enters the window, so a narrow window notices detours later. In measurements comparing windows 160 and 224,
+the Nether went from mean 1.044 -> 1.001 and worst 1.147 -> 1.003×, and the Overworld from 1.018 -> 1.009×. With 192 the Nether worst case was worse than 160, and with 240 one route among the End's outer islands no longer produced a path.
 
-16³セクションの代表点だけを残すHPA*式の圧縮は、代表点を通る遠回りを強制して値が滑らかでなくなり、
-1.05〜1.4倍に落ちたため採っていません。
+HPA*-style compression that keeps only representative points of 16³ sections forces detours through those points, making values non-smooth;
+it dropped to 1.05-1.4×, so it wasn't adopted.
 
 ## Verification
 
-- `GuideAdmissibilityTest`: 層1のcost-to-goの下限性
-- `WindowFieldTest`: 航法グラフのガイドが最適な残りコストと一致すること、グラフに無い点で0を返さないこと、
-  閉じた小部屋を繋がっていないと見分けること、殻に繋がらない目的地で使わないこと
-- `CoarseRouterTest`, `CoarseWaypointFidelityTest`: 層1の経路と中間目標
-- `CorridorWaypointsTest`, `SurfaceGridTest`: 層2の精緻化
-- `AStarPathfinderTest`, `PathOptimalityTest`, `LongRouteOptimalityTest`: 層3の移動と最適性
-- `NetherCaveLayerSlabReproTest`, `NetherThinMapGuideTest`: 複数床を持つ次元
-- `ProgressiveDiscoveryTest`, `ProgressiveWalkTerrainTest`: 地形読み込み中の継ぎ足し
-- `RouteReviewTest`: 見直しが遠回りを見つけ、最適な経路には手を出さないこと
-- `NavGraphWalkBenchTest`（`bench`、判定なし）: 航法グラフで歩き通したときの質・構築時間・メモリ
+- `GuideAdmissibilityTest`: admissibility of Layer 1's cost-to-go
+- `WindowFieldTest`: the navigation graph's guide matches the optimal remaining cost, doesn't return 0 at points not in the graph,
+  tells closed small rooms apart as unconnected, and isn't used with destinations not connected to the shell
+- `CoarseRouterTest`, `CoarseWaypointFidelityTest`: Layer 1 routes and intermediate targets
+- `CorridorWaypointsTest`, `SurfaceGridTest`: Layer 2 refinement
+- `AStarPathfinderTest`, `PathOptimalityTest`, `LongRouteOptimalityTest`: Layer 3 moves and optimality
+- `NetherCaveLayerSlabReproTest`, `NetherThinMapGuideTest`: dimensions with multiple floors
+- `ProgressiveDiscoveryTest`, `ProgressiveWalkTerrainTest`: extension while terrain is loading
+- `RouteReviewTest`: the review finds detours and leaves optimal paths alone
+- `NavGraphWalkBenchTest` (`bench`, no assertions): quality, build time, and memory when walking all the way with the navigation graph
 
 ## Code map
 

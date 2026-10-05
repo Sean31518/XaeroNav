@@ -11,33 +11,33 @@ import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * <b>実験用。</b>経路全体を覆う3次元の粗い地図から作るcost-to-go。
+ * <b>Experimental.</b> A cost-to-go built from a 3D coarse map covering the whole route.
  *
- * <p>答えたい問いは1つ——<b>窓の外の地形を正しく知っていれば、ネザーの遠回りは消えるのか。</b>
- * 探索の箱の中だけで組んだ3D格子は、1区間の展開ノードを26倍減らしたのに<b>経路は悪くなった</b>
- * （窓の外にある正しい迂回路を知らないまま、間違った方向へ速く進んだだけだった）。
- * ここはフィクスチャ全体＝Xaeroの地図が持つはずの範囲から組む。
+ * <p>It answers one question: <b>if the terrain outside the window were known correctly, would the Nether detours disappear?</b>
+ * A 3D grid built only inside the search box cut expanded nodes per segment by 26x, yet <b>the routes got worse</b>
+ * (not knowing the correct detour outside the window, it just went the wrong way faster).
+ * This one is built from the whole fixture = the range Xaero's map should have.
  *
- * <p>値段は<b>実費に寄せる</b>。前回の試作は立てない格子を一律「疾走の7倍」にしていて、
- * 溶岩だらけのネザーでは「壁を突っ切る方が安い」と言ってしまっていた。
+ * <p>Prices are <b>close to actual cost</b>. The previous prototype priced non-standable cells uniformly at "7x sprint",
+ * which in the lava-filled Nether ended up saying "plowing through walls is cheaper".
  */
 final class WideVoxelGuide implements CostToGo {
 
-    /** 格子の一辺（ブロック）。 */
+    /** Grid cell edge length (blocks). */
     private static final int CELL = 4;
 
-    /** 立てる場所を探すときの列の間隔（ブロック）。 */
+    /** Column spacing when looking for standable spots (blocks). */
     private static final int COLUMN_STEP = 2;
 
     private static final byte SOLID = 0;
     private static final byte OPEN = 1;
     private static final byte STANDABLE = 2;
 
-    /** 空洞を渡る1ブロックの値段（橋）。{@code ActionCosts}の実費。 */
+    /** Price of crossing one block of gap (bridge). Actual cost from {@code ActionCosts}. */
     private static final double BRIDGE_PER_BLOCK =
             ActionCosts.PLACE_BLOCK_OVERHEAD_TICKS + ActionCosts.SPRINT_ONE_BLOCK;
 
-    /** 岩を抜ける1ブロックの値段（掘削）。 */
+    /** Price of going through one block of rock (digging). */
     private static final double DIG_PER_BLOCK =
             ActionCosts.DIG_OVERHEAD_TICKS + ActionCosts.SPRINT_ONE_BLOCK;
 
@@ -67,8 +67,8 @@ final class WideVoxelGuide implements CostToGo {
     }
 
     /**
-     * 床の位置だけが完全に分かる理想化モデル。床以外は岩か空洞かを区別せず、
-     * 空洞と同じ値段にする。Xaeroの疎な実データを再現したものではない。
+     * An idealized model where only floor positions are fully known. Non-floor cells don't distinguish rock from gap,
+     * priced the same as a gap. Not a reproduction of Xaero's sparse real data.
      */
     static WideVoxelGuide build(CellSource view, SearchBounds box, BlockPos goal, boolean floorsOnly) {
         int nx = (box.maxX() - box.minX()) / CELL + 1;

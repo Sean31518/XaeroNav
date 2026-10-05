@@ -3,11 +3,11 @@ package net.prason.xaeronav.pathfinding.astar;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * 探索中の1ノード。座標ごとに1つだけ生成し、コスト・経路・ヒープ位置をすべてここに持たせる。
+ * A single node in the search. Exactly one is created per coordinate, and it holds the cost, path and heap position.
  *
- * <p>gScore・cameFrom・closedを別々のMapに分けると、ノード1つあたり複数回のハッシュ計算と
- * エントリ確保が発生する。1オブジェクトに集約することで、ノードのハッシュ引きは
- * {@link AStarPathfinder}の座標→ノードのMap1本だけになる。
+ * <p>Splitting gScore, cameFrom and closed into separate Maps would cost several hash computations and
+ * entry allocations per node. Consolidating them into one object means the only hash lookup for a node is
+ * {@link AStarPathfinder}'s single coordinate→node Map.
  */
 final class PathNode {
 
@@ -16,22 +16,22 @@ final class PathNode {
     final int z;
 
     /**
-     * ボートに乗った状態か。<b>座標と並ぶノードの同一性の一部</b>で、
-     * {@link AStarPathfinder}は乗っている状態と乗っていない状態を別のノードとして持つ。
+     * Whether riding a boat. <b>Part of the node's identity alongside its coordinates</b>;
+     * {@link AStarPathfinder} keeps the riding and non-riding states as separate nodes.
      *
-     * <p>{@link #bridgeRun}や{@link #submergedTicks}のように非キーの近似にできない。乗る手間は
-     * 1手に集中する大きな一時コストで、A*は安い辺から展開するため、同一ノードに集約すると
-     * <b>必ず泳ぎ側が先に確定して{@link #closed}になり、ボートの枝が二度と改善できない</b>——
-     * 総コストでどれだけ有利でも選ばれなくなる。
+     * <p>This can't be a non-key approximation like {@link #bridgeRun} or {@link #submergedTicks}. Boarding is a large
+     * one-off cost concentrated in a single move, and A* expands cheap edges first, so if both were merged into one node
+     * <b>the swimming side would always be finalized first and become {@link #closed}, and the boat branch could never improve</b>;
+     * it would never be chosen, however much better its total cost.
      */
     final boolean boating;
 
     /**
-     * ゴールまでの推定コスト。生成時に1度だけ計算する。{@link #guideHole}のノードだけ、緩和のたびに親から引き継いで上がる。
+     * Estimated cost to the goal. Computed once at creation. Only {@link #guideHole} nodes inherit it from the parent and rise with each relaxation.
      */
     double estimatedCostToGoal;
 
-    /** ガイドがこのセルの値を持たない（{@link CostToGo#searchEstimate}が{@link Double#NaN}）。 */
+    /** The guide has no value for this cell ({@link CostToGo#searchEstimate} is {@link Double#NaN}). */
     final boolean guideHole;
 
     double cost = ActionCosts.INFEASIBLE;
@@ -41,80 +41,80 @@ final class PathNode {
     MoveKind kind;
 
     /**
-     * ここまで連続して、自分で置いた足場の上を進んだブロック数（{@link MoveKind#BRIDGE}と
-     * {@link MoveKind#PILLAR}）。{@link AStarPathfinder#addBridge}が上限判定に使う。
+     * The number of blocks travelled consecutively up to here on footing you placed yourself ({@link MoveKind#BRIDGE} and
+     * {@link MoveKind#PILLAR}). Used by {@link AStarPathfinder#addBridge} for the cap check.
      *
-     * <p>0に戻るのは<b>地形として実在する床に立ったとき</b>。Traverse・Ascend・Descend・Fall・Jumpは
-     * どれも到着先の足元が地形データ上{@code standable}であることを要求するので、これらを挟めば
-     * 自然に0へ戻る。Pillarだけは足場を要求しない（自分が直前に置いたブロックの上に立つため）ので、
-     * 数え直さずに引き継ぐ——ここで0に戻していた頃は、橋を上限まで架けてから1マス積むだけで
-     * 上限を破れた。
+     * <p>It resets to 0 <b>when standing on a floor that actually exists as terrain</b>. Traverse, Ascend, Descend, Fall and Jump
+     * all require the destination's footing to be {@code standable} in the terrain data, so putting one of them in between
+     * naturally resets it to 0. Only Pillar requires no footing (you stand on the block you just placed), so it carries the
+     * count over without resetting; back when this reset to 0, bridging up to the cap and then stacking one block was enough to
+     * break the cap.
      *
-     * <p><b>このノードの同一性には含まれない</b>（キーは座標のみ）。同じセルへ短い橋で来た経路と
-     * 長い橋で来た経路は同じノードに集約され、先に最安で確定した方の連続長が残る。辺コスト自体は
-     * 連続長に依存しない（上限を超えた橋を作らないだけ）ので経路のコストは歪まないが、
-     * 上限の判定は「最安で到達した経路の連続長」に基づく近似になる——飛び石を挟めば安く渡れる
-     * 地形で、その飛び石経由の可能性を取りこぼしうる。取りこぼした結果「範囲内に道が無い」に
-     * なった場合は{@link AStarPathfinder#bridgeRunCapBlocked()}を見て上限を外して探し直す。
+     * <p><b>Not part of this node's identity</b> (the key is the coordinates only). A path arriving at the same cell over a short
+     * bridge and one arriving over a long bridge are merged into the same node, and the run length of whichever is finalized
+     * cheapest first is kept. Edge costs don't depend on the run length (bridges over the cap are simply not created), so path
+     * costs aren't distorted, but the cap check becomes an approximation based on "the run length of the cheapest path to arrive",
+     * which can miss the possibility of going via stepping stones on terrain where they'd allow a cheap crossing. If that miss
+     * results in "no path within range", the search is retried without the cap by checking {@link AStarPathfinder#bridgeRunCapBlocked()}.
      */
     int bridgeRun;
 
     /**
-     * ここまでの経路で置いた足場の総数（{@link MoveKind#BRIDGE}と{@link MoveKind#PILLAR}）。
-     * {@link AStarPathfinder#addBridge}が持ち物の予算との比較に使う。始点は0とは限らない——
-     * 手前の区間が使うと決まっている枚数を{@link Carryover#placedBlocks()}で受け取る。
+     * The total number of blocks placed along the path so far ({@link MoveKind#BRIDGE} and {@link MoveKind#PILLAR}).
+     * Used by {@link AStarPathfinder#addBridge} to compare against the inventory budget. The start isn't necessarily 0:
+     * the number already committed by the preceding segment is received via {@link Carryover#placedBlocks()}.
      *
-     * <p><b>{@link #bridgeRun}と違い、床に立っても0に戻らない。</b>あちらは「1本の橋が何マス
-     * 続いているか」で外したときの危険を測るのに対し、こちらは消費した資源の累積——渡り切って
-     * 地面に降りてもブロックは戻ってこない。
+     * <p><b>Unlike {@link #bridgeRun}, it doesn't reset to 0 on standing on a floor.</b> That one measures the danger of a miss by
+     * "how many blocks one bridge continues", whereas this is the cumulative resources consumed; the blocks don't come back once
+     * you've crossed and stepped down onto the ground.
      *
-     * <p>{@link #bridgeRun}と同じく<b>このノードの同一性には含まれない</b>（キーは座標のみ）。
-     * 同じセルへ設置の少ない経路と多い経路で来た場合、先に最安で確定した方の値が残る近似になる。
-     * 辺コストはこの値に依存しない（予算を超えた橋を作らないだけ）ので経路のコストは歪まない。
-     * 取りこぼした結果「範囲内に道が無い」になった場合は
-     * {@link AStarPathfinder#placedBudgetBlocked()}を見て予算を外して探し直す。
+     * <p>Like {@link #bridgeRun}, <b>it's not part of this node's identity</b> (the key is the coordinates only).
+     * When paths with fewer and more placements reach the same cell, it's an approximation keeping the value of whichever is finalized cheapest first.
+     * Edge costs don't depend on this value (bridges over the budget are simply not created), so path costs aren't distorted.
+     * If a miss results in "no path within range",
+     * the search is retried without the budget by checking {@link AStarPathfinder#placedBudgetBlocked()}.
      */
     int placedTotal;
 
     /**
-     * ここまで頭が水に浸かったまま経過したtick数。水面に顔を出すか陸に上がれば0に戻る。
-     * {@link AStarPathfinder#relax}が上限判定に使う。
+     * The number of ticks elapsed up to here with the head underwater. Resets to 0 on surfacing or reaching land.
+     * Used by {@link AStarPathfinder#relax} for the cap check.
      *
-     * <p>空気は{@code AIR_SUPPLY_TICKS}で尽きるので、これは「息が続くか」そのもの。
-     * <b>マス数ではなくtickで数える</b>のが要点——水中の採掘は1マスに数十tick、しかも
-     * 泳ぎながらなら25倍かかるのに、マス数で数えると40tickの採掘が「1マス」にしかならず、
-     * 水中を掘り進む経路が息の上限をすり抜けていた。
+     * <p>Air runs out after {@code AIR_SUPPLY_TICKS}, so this is literally "whether your breath lasts".
+     * <b>Counting in ticks rather than blocks</b> is the key: mining underwater takes tens of ticks per block, and 25 times
+     * as long while swimming, yet counting by blocks turned 40 ticks of mining into just "one block", letting routes that
+     * dig through underwater slip past the breath cap.
      *
-     * <p>数える基準が<b>頭のセル</b>なのはバニラに合わせたため——{@code LivingEntity#baseTick}は
-     * {@code isEyeInFluid(WATER)}で空気を減らすので、腰まで浸かっていても顔が出ていれば減らない。
+     * <p>It counts by the <b>head cell</b> to match vanilla: {@code LivingEntity#baseTick} decreases air via
+     * {@code isEyeInFluid(WATER)}, so air doesn't drop while your face is out, even when submerged to the waist.
      *
-     * <p>{@link #bridgeRun}と同じく<b>ノードの同一性には含まれない</b>（キーは座標のみ）。
-     * 同じセルへ短い潜水で来た経路と長い潜水で来た経路は同じノードに集約され、先に最安で
-     * 確定した方が残る。上限のせいで範囲内に道が無くなった場合は
-     * {@link AStarPathfinder#submergedRunCapBlocked()}を見て上限を外して探し直す。
+     * <p>Like {@link #bridgeRun}, <b>it's not part of the node's identity</b> (the key is the coordinates only).
+     * A path arriving at the same cell after a short dive and one after a long dive are merged into the same node, and
+     * whichever is finalized cheapest first is kept. If the cap leaves no path within range,
+     * the search is retried without the cap by checking {@link AStarPathfinder#submergedRunCapBlocked()}.
      *
-     * <p>始点は常に0から数える。潜り始めに空気が満タンとは限らないぶんは、上限側に
-     * 余裕を持たせて吸収している。
+     * <p>The start is always counted from 0. The possibility that air isn't full when the dive begins is absorbed by
+     * leaving headroom on the cap side.
      */
     double submergedTicks;
 
-    /** {@link BinaryHeapOpenSet}内での位置。decrease-keyに必要。-1はオープンセット外を表す。 */
+    /** Position within {@link BinaryHeapOpenSet}. Needed for decrease-key. -1 means outside the open set. */
     int heapPosition = -1;
 
     /**
-     * 一度展開したか。{@link #heapPosition}では「今オープンセットに入っているか」しか分からず、
-     * 展開済みのノードは未発見のノードと見分けがつかない。
+     * Whether this node has been expanded. {@link #heapPosition} only tells whether it's "in the open set now", so
+     * expanded nodes are indistinguishable from undiscovered ones.
      *
-     * <p>ヒューリスティックに重みを掛けると一貫性が崩れ、展開済みのノードのコストが後から改善しうる。
-     * そのたびにオープンセットへ戻すと同じセルを何度も展開し直す（実測で1セルあたり6回超、
-     * 到達に必要な展開数が異なるセル数の6倍に膨らんでいた）。戻さない代わりに、経路のコストは
-     * 最適の{@code heuristicWeight}倍以内に収まる（重み付きA*の保証）。
+     * <p>Weighting the heuristic breaks consistency, so the cost of an already-expanded node can improve later.
+     * Putting it back into the open set each time re-expands the same cell over and over (measured at over 6 times per cell,
+     * with the expansions needed to reach the goal ballooning to 6 times the number of distinct cells). In exchange for not
+     * putting it back, the path cost stays within {@code heuristicWeight} times the optimum (the weighted A* guarantee).
      */
     boolean closed;
 
     /**
-     * 横に踏み外したら死ぬ場所があるか（{@code AStarPathfinder#edgeHazardPenalty}の覚え書き）。0は未判定・1は無し・2は有り。
-     * 1セルへは周りの多くの手から着くので、手ごとに周りを読み直すとネザーのランダム経路検査が約1割遅かった。
+     * Whether there is a fatal spot to step off sideways (a memo for {@code AStarPathfinder#edgeHazardPenalty}). 0 = unchecked, 1 = none, 2 = present.
+     * A cell is reached from many surrounding moves, and re-reading the surroundings per move made the Nether random-route check about 10% slower.
      */
     byte edgeHazard;
 

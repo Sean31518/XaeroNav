@@ -25,8 +25,8 @@ import net.prason.xaeronav.client.gui.XaeroNavConfigScreen;
 import net.prason.xaeronav.config.ModConfigSpecStore;
 import net.prason.xaeronav.config.XaeroNavConfig;
 
-// 21.xではクライアント専用MODとしてdist=CLIENTを指定する。20.4の@Modにはdist属性が無いため、
-// クライアントクラスを使う処理はFMLClientSetupEventの中へ閉じ込める。
+// On 21.x, specify dist=CLIENT as a client-only mod. 20.4's @Mod has no dist attribute, so
+// anything using client classes is confined within FMLClientSetupEvent.
 //? if >=1.21 {
 @Mod(value = XaeroNav.MOD_ID, dist = Dist.CLIENT)
 //?} else {
@@ -34,7 +34,7 @@ import net.prason.xaeronav.config.XaeroNavConfig;
 *///?}
 public final class NeoForgeEntry {
 
-    /** 設定画面の登録はクライアント側で行うので、そこまでコンテナを持ち越す。 */
+    /** The config screen is registered on the client side, so the container is carried over until then. */
     private static ModContainer container;
 
     public NeoForgeEntry(IEventBus modEventBus, ModContainer modContainer) {
@@ -60,17 +60,17 @@ public final class NeoForgeEntry {
         }
     }
 
-    // クライアント専用クラス（Minecraft/RenderLevelStageEvent等）への参照はFMLClientSetupEvent内に
-    // 閉じ込める。@Mod(dist=CLIENT)でガードすることで、専用サーバー上でもこのクラス自体がロードされない。
-    // 注釈での購読（@EventBusSubscriber）にしないのは、NeoForge 21.0.xが購読先のバスを自動で選ばず
-    // MODバスのイベントを拒否するため。addListenerならバージョンによらずバスを明示できる
+    // References to client-only classes (Minecraft/RenderLevelStageEvent etc.) are confined within FMLClientSetupEvent.
+    // Guarding with @Mod(dist=CLIENT) keeps this class itself from loading even on dedicated servers.
+    // Annotation-based subscription (@EventBusSubscriber) isn't used because NeoForge 21.0.x doesn't pick the bus
+    // automatically and rejects mod bus events. addListener can state the bus explicitly regardless of version
     public static final class ClientSetup {
 
         public static void onClientSetup(FMLClientSetupEvent event) {
             XaeroNavClient.reloadBlockLists();
             NeoForge.EVENT_BUS.register(new NeoForgeEvents());
 
-            // Modsの一覧からもキーバインド（XaeroNavKeys.OPEN_CONFIG_SCREEN）と同じ画面を開けるようにする
+            // Make the same screen as the keybind (XaeroNavKeys.OPEN_CONFIG_SCREEN) openable from the Mods list too
             //? if >=1.20.5 {
             container.registerExtensionPoint(IConfigScreenFactory.class,
                     (modContainer, parent) -> new XaeroNavConfigScreen(parent));

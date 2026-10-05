@@ -18,28 +18,28 @@ import com.electronwill.nightconfig.core.UnmodifiableConfig;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 /**
- * 設定の定義（パス・型・既定値・レンジ・コメント）が意図せず変わっていないことを見る。
+ * Checks that the config definitions (path, type, default, range, comment) have not changed unintentionally.
  *
- * <p>設定の定義をローダー非依存の記述へ移し替える作業では、38項目を手で書き写すことになる。
- * 既定値やレンジを1つ取り違えても、コンパイルは通り、他のテストも落ちず、ユーザーの手元で
- * 設定が静かに別の値になるだけになる。それを防ぐための突き合わせ。
+ * <p>Moving the config definitions to a loader-independent description means copying 38 entries by hand.
+ * Getting a single default or range wrong still compiles, no other test fails, and the setting just
+ * silently becomes a different value on the user's machine. This comparison prevents that.
  */
 class ConfigSpecGoldenTest {
 
-    /** 実際の中身。作業ディレクトリ（build/test-run）へ出すので、cleanで一緒に消える。 */
+    /** The actual contents. Written to the working directory (build/test-run) so clean removes it too. */
     private static final Path ACTUAL = Path.of("config-spec.actual");
 
     @Test
     void specMatchesGolden() throws IOException {
         String actual = dump(((ModConfigSpecStore) XaeroNavConfig.store()).modConfigSpec().getSpec());
         Files.writeString(ACTUAL, actual, StandardCharsets.UTF_8);
-        assertEquals(golden(), actual, "設定の定義がゴールデンと違う。差分は " + ACTUAL.toAbsolutePath() + " と突き合わせる");
+        assertEquals(golden(), actual, "Config definitions differ from the golden file. Compare against " + ACTUAL.toAbsolutePath() + " for the diff");
     }
 
     private static String golden() throws IOException {
         try (InputStream in = ConfigSpecGoldenTest.class.getResourceAsStream("/config-spec.golden")) {
             if (in == null) {
-                return "<ゴールデンが無い>";
+                return "<golden file missing>";
             }
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
@@ -60,7 +60,7 @@ class ConfigSpecGoldenTest {
             } else if (value instanceof ModConfigSpec.ValueSpec valueSpec) {
                 out.add(describe(path, valueSpec));
             } else {
-                out.add(path + " | 未知のノード: " + value.getClass().getName());
+                out.add(path + " | unknown node: " + value.getClass().getName());
             }
         }
     }

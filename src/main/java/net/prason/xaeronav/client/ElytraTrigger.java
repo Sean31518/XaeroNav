@@ -1,28 +1,28 @@
 package net.prason.xaeronav.client;
 
 /**
- * エリトラの滑空を「飛行モード」とみなす・みなさないの判定。境界での往復を防ぐヒステリシスだけを
- * 受け持ち、{@code Minecraft}に触れないので単体で検証できる。
+ * Decides whether elytra gliding counts as "flight mode". Handles only the hysteresis that prevents flip-flopping at the boundary,
+ * and doesn't touch {@code Minecraft}, so it can be tested on its own.
  *
- * <p>ヒステリシスは2種類ある。
+ * <p>There are two kinds of hysteresis.
  *
- * <h4>時間: 一瞬の滑空判定では飛行モードへ入らない</h4>
+ * <h4>Time: a momentary glide doesn't enter flight mode</h4>
  *
- * <p>エリトラを着けたまま連続でジャンプすると、バニラは数tickだけ{@code isFallFlying}を立てる。
- * 飛行モードへの切り替えは{@code generation}を進めて走っている探索ごと捨て、着地時には表示中の
- * 経路を消して引き直すので、跳ねるたびに経路が丸ごと作り直されていた。<b>入りに
- * {@link #SUSTAIN_TICKS}の継続を要求する</b>ことで、跳ねただけの滑空判定は飛行モードに
- * 到達しなくなる。本物の滑空は0.5秒どころではないので取りこぼさない。
+ * <p>Jumping repeatedly while wearing an elytra makes vanilla set {@code isFallFlying} for just a few ticks.
+ * Switching to flight mode advances {@code generation} and discards the running search, and on landing the displayed
+ * route is cleared and redrawn, so the whole route was rebuilt on every hop. <b>Requiring
+ * {@link #SUSTAIN_TICKS} of continuity to enter</b> means glide flags from mere hops never reach
+ * flight mode. Real gliding lasts far more than 0.5 seconds, so it isn't missed.
  *
- * <h4>高さ: 抜けるときの閾値を下げる</h4>
+ * <h4>Height: lower threshold for exiting</h4>
  *
- * <p>入りと抜けで同じ高さを見ると、境界の上を滑空している間ずっと飛行と歩行を往復する。
+ * <p>Using the same height for entering and exiting flips between flying and walking the whole time you glide just above the boundary.
  */
 final class ElytraTrigger {
 
     /**
-     * 滑空判定がこれだけ続いて初めて飛行モードへ入る（tick）。0.5秒——跳ねたときに立つ滑空判定は
-     * これよりずっと短い。
+     * Flight mode is entered only after the glide flag has lasted this long (ticks). 0.5 seconds; the glide flag raised by a hop
+     * is much shorter than this.
      */
     static final int SUSTAIN_TICKS = 10;
 
@@ -30,11 +30,11 @@ final class ElytraTrigger {
     private int fallFlyingTicks;
 
     /**
-     * このtickの状態から飛行モードが有効かを更新して返す。
+     * Updates and returns whether flight mode is active from this tick's state.
      *
-     * @param fallFlying        エリトラで滑空中か（{@code Player#isFallFlying}）
-     * @param groundClearance   足元から真下の地面までの高さ（ブロック）
-     * @param requiredClearance 入るのに要る高さ。0以下なら高さを問わない
+     * @param fallFlying        whether gliding with an elytra ({@code Player#isFallFlying})
+     * @param groundClearance   height (blocks) from the feet straight down to the ground
+     * @param requiredClearance height required to enter. 0 or less means any height
      */
     boolean update(boolean fallFlying, int groundClearance, int requiredClearance) {
         if (!fallFlying) {

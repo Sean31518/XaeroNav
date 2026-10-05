@@ -6,33 +6,33 @@ import net.minecraft.core.BlockPos;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>「地図に無いセル」は層1にとって最安クラスの通り道になっている。</b>
+ * <b>"Cells missing from the map" are among the cheapest routes for layer 1.</b>
  *
- * <p>{@link CoarseRouter}の{@code NO_DATA}の値段は<b>固定ではない</b>——既知セルの陸:奈落比から
- * その場で較正される（{@code CoarseRouter#calibratedUnknownMultiplier}）。ただし<b>下限は1.6・
- * 陸=1.0・奈落={@code VOID_BRIDGE_MULTIPLIER}（≒10）</b>で、既知セルが少ない・既知の大半が陸、
- * のどちらかなら較正は1.6付近に留まる。この下限を割ることはない——「分からないことは高くつく
- * 理由にならない」という元の設計意図は崩していない。
+ * <p>The price of {@code NO_DATA} in {@link CoarseRouter} is <b>not fixed</b>: it is calibrated on the spot
+ * from the land:void ratio of known cells ({@code CoarseRouter#calibratedUnknownMultiplier}). But <b>the
+ * floor is 1.6, with land = 1.0 and void = {@code VOID_BRIDGE_MULTIPLIER} (≒ 10)</b>, and if known cells are
+ * few or mostly land, calibration stays near 1.6. It never goes below this floor: the original design
+ * intent "not knowing is not a reason for something to be expensive" is preserved.
  *
- * <p>未知を通行可能にしておくこと自体は意図的な設計（そうしないと未探索の方角へ一切ルートが
- * 出ない）だが、<b>ジ・エンドでは「まだ地図に無い」の実体はほぼ奈落</b>——実機地形3件の実測
- * （{@code EndUnknownVoidRatioBenchTest}）で既知セルの奈落比は35〜53%——なので、既知の奈落比が
- * 高いときに較正が1.6より上がることを{@link #prefersTheKnownDetourWhenTheKnownAreaIsMostlyVoid}が
- * 固定している。
+ * <p>Keeping the unknown passable is itself a deliberate design (otherwise no route would ever head toward
+ * unexplored directions), but <b>in The End, "not on the map yet" is in reality mostly void</b>: measured on
+ * three real terrains ({@code EndUnknownVoidRatioBenchTest}), the void ratio of known cells is 35-53%. So
+ * {@link #prefersTheKnownDetourWhenTheKnownAreaIsMostlyVoid} pins down that calibration rises above 1.6
+ * when the known void ratio is high.
  *
- * <p><b>「部分的な地図のせいで経路が変わる」は実機データで否定済み（2026-08-29）。</b>
- * 実機ジ・エンドの地形で読めている半径を4チャンクまで削っても、経路は完全な地図のときと同一
- * だった——未知が（較正後の値であっても）一様に安いので、部分的な地図でも最短の帯を選ぶ結果が
- * 変わらない。だから実機地形での確認は置かず、<b>倍率の大小関係そのもの</b>だけを固定する。
+ * <p><b>"Partial maps change the route" has been refuted with real-game data (2026-08-29).</b>
+ * Even trimming the read radius on real End terrain down to 4 chunks, the route was identical to the
+ * one with the full map: unknown is uniformly cheap (even after calibration), so even a partial map picks
+ * the same shortest band. So there's no check on real terrain; only <b>the ordering of the multipliers itself</b> is pinned down.
  */
 class UnknownCellRoutingTest {
 
     /**
-     * 未知の帯と奈落の帯を並べて、層1がどちらを通るかで倍率の大小を確かめる。ここが逆転すれば、
-     * 部分的な地図でも奈落を避けた経路が出るようになっている。
+     * Lays an unknown band next to a void band and checks the ordering of the multipliers by which one layer 1
+     * takes. If this flips, paths avoiding the void come out even with a partial map.
      *
-     * <p>この地形は既知の大半（未知の帯を除く全体）が陸なので、既知の奈落比は低く、較正は
-     * 下限の1.6のまま動かない——較正の影響を受けない前提でのテスト。
+     * <p>In this terrain most of the known area (everything except the unknown band) is land, so the known
+     * void ratio is low and calibration stays at the 1.6 floor: a test that assumes no effect from calibration.
      */
     @Test
     void unknownCellsAreFarCheaperThanKnownVoid() {
@@ -40,7 +40,7 @@ class UnknownCellRoutingTest {
         CoarseMapBuilder builder = new CoarseMapBuilder(-radius, -radius, radius * 2, radius * 2);
         for (int x = -radius; x < radius; x++) {
             for (int z = -radius; z < radius; z++) {
-                // x∈[4,8] の帯: z<0 は奈落（床が無いと分かっている）、z>=0 は未知（書かない）
+                // Band x∈[4,8]: z<0 is void (known to have no floor), z>=0 is unknown (not written)
                 if (x >= 4 && x <= 8) {
                     if (z < 0) {
                         builder.putFloor(x, z, CoarseMap.VOID, CoarseMap.UNKNOWN_HEIGHT,
@@ -53,7 +53,7 @@ class UnknownCellRoutingTest {
         }
         CoarseMap map = builder.build();
 
-        // 始点・目的地とも z=-8（奈落の帯の正面）。未知の帯(z>=0)へ迂回するかどうか
+        // Start and destination both at z=-8 (facing the void band). Whether it detours into the unknown band (z>=0)
         BlockPos start = new BlockPos(0 * 16 + 8, 64, -8 * 16 + 8);
         BlockPos goal = new BlockPos(12 * 16 + 8, 64, -8 * 16 + 8);
         CoarseRouter.Route route = CoarseRouter.findRoute(map, start, goal, false,
@@ -62,20 +62,20 @@ class UnknownCellRoutingTest {
         int maxZ = route.waypoints().stream().mapToInt(BlockPos::getZ).max().orElse(Integer.MIN_VALUE);
         assertTrue(route.reachedGoal());
         assertTrue(maxZ >= 0,
-                "未知の帯へ迂回しなかった＝未知が奈落より安いという前提が崩れている: " + route.waypoints());
+                "didn't detour into the unknown band = the premise that unknown is cheaper than void is broken: " + route.waypoints());
     }
 
     /**
-     * <b>既知の大半が奈落なら、未知セルの値段も奈落寄りに較正され、遠回りでも既知の陸を選ぶ。</b>
+     * <b>If most of the known area is void, unknown cells are calibrated toward void too, and known land is chosen even if longer.</b>
      *
-     * <p>地形: 始点(0,0)→目的地(10,0)の間、x=1〜9・z=0は<b>未知のまま</b>（直進すれば9セルの
-     * 未知越え）。一方、z=6を通る「コの字」の迂回路（x=0の列で北上→z=6を東進→x=10の列で南下、
-     * 計22セル）は全部<b>既知の陸</b>。これとは別に、経路から離れた場所（x=-20〜-11の帯）へ
-     * 既知の奈落を大量に置いて「既知セルの大半が奈落」というサンプルを作る。
+     * <p>Terrain: between start (0,0) and destination (10,0), x=1-9, z=0 is <b>left unknown</b> (going straight
+     * crosses 9 unknown cells). Meanwhile, the "U-shaped" detour via z=6 (north along column x=0 → east along
+     * z=6 → south along column x=10, 22 cells total) is all <b>known land</b>. Separately, lots of known void is
+     * placed away from the route (the band x=-20 to -11) to create the sample "most known cells are void".
      *
-     * <p>較正なし（固定1.6倍）なら直進(9×1.6+1≒15.4)が迂回(22)より安いので直進が勝つ——
-     * これが{@link #takesTheDirectCrossingWhenTheKnownAreaIsMostlyLand}の対照。既知の奈落比が
-     * 高いここでは、較正後の倍率（この地形では8倍超）が直進を22超まで押し上げ、迂回が逆転して勝つ。
+     * <p>Without calibration (fixed 1.6x), straight (9×1.6+1 ≒ 15.4) is cheaper than the detour (22), so
+     * straight wins; this is the control for {@link #takesTheDirectCrossingWhenTheKnownAreaIsMostlyLand}. Here,
+     * with a high known void ratio, the calibrated multiplier (over 8x on this terrain) pushes straight above 22 and the detour wins instead.
      */
     @Test
     void prefersTheKnownDetourWhenTheKnownAreaIsMostlyVoid() {
@@ -84,14 +84,14 @@ class UnknownCellRoutingTest {
         int maxZ = route.waypoints().stream().mapToInt(BlockPos::getZ).max().orElse(Integer.MIN_VALUE);
         assertTrue(route.reachedGoal());
         assertTrue(maxZ >= 5 * 16,
-                "既知が奈落だらけなのに未知越えを直進した＝較正が効いていない: " + route.waypoints());
+                "went straight across the unknown though the known area is mostly void = calibration isn't working: " + route.waypoints());
     }
 
     /**
-     * <b>対照。</b>迂回路の外側（経路から離れた場所）を陸にすると、既知の奈落比が低いままなので
-     * 較正は下限の1.6で止まり、{@link #prefersTheKnownDetourWhenTheKnownAreaIsMostlyVoid}と同じ
-     * 迂回路があっても直進（未知越え）の方が安いままになる。これが無いと「そもそも迂回路がある
-     * 地形では常に迂回する」地形と区別が付かない。
+     * <b>Control.</b> Making the outside of the detour (away from the route) land keeps the known void ratio
+     * low, so calibration stops at the 1.6 floor, and going straight (across the unknown) stays cheaper even
+     * with the same detour as {@link #prefersTheKnownDetourWhenTheKnownAreaIsMostlyVoid}. Without this, it
+     * couldn't be told apart from terrain where "it always detours whenever a detour exists".
      */
     @Test
     void takesTheDirectCrossingWhenTheKnownAreaIsMostlyLand() {
@@ -100,24 +100,24 @@ class UnknownCellRoutingTest {
         int maxZ = route.waypoints().stream().mapToInt(BlockPos::getZ).max().orElse(Integer.MIN_VALUE);
         assertTrue(route.reachedGoal());
         assertTrue(maxZ < 5 * 16,
-                "既知が陸だらけなのに未知越えを避けた＝較正が効きすぎて1.6の下限を割っている: "
+                "avoided crossing the unknown though the known area is mostly land = calibration overshoots below the 1.6 floor: "
                         + route.waypoints());
     }
 
     /**
-     * 始点(0,0)から目的地(10,0)まで、x=1〜9・z=0を未知のまま残し、z=6経由の「コの字」の
-     * 既知陸の迂回路を用意する。{@code voidBackground}が{@code true}なら、経路から離れた
-     * x=-20〜-11の帯を既知の奈落で埋めて既知セルの奈落比を上げる（{@code false}なら陸で埋める）。
+     * Between start (0,0) and destination (10,0), leaves x=1-9, z=0 unknown and prepares a "U-shaped" known-land
+     * detour via z=6. If {@code voidBackground} is {@code true}, fills the band x=-20 to -11, away from the
+     * route, with known void to raise the known cells' void ratio (fills it with land if {@code false}).
      */
     private static CoarseRouter.Route detourVersusFogRoute(boolean voidBackground) {
         int radius = 20;
         CoarseMapBuilder builder = new CoarseMapBuilder(-radius, -radius, radius * 2, radius * 2);
 
-        // 始点・目的地と、その間の未知の帯(x=1〜9, z=0)には触れない
+        // Don't touch the start, destination, or the unknown band between them (x=1-9, z=0)
         builder.putFloor(0, 0, CoarseMap.LAND, 64);
         builder.putFloor(10, 0, CoarseMap.LAND, 64);
 
-        // 迂回路（コの字、全部既知の陸）
+        // Detour (U-shaped, all known land)
         for (int z = 0; z <= 6; z++) {
             builder.putFloor(0, z, CoarseMap.LAND, 64);
             builder.putFloor(10, z, CoarseMap.LAND, 64);
@@ -126,7 +126,7 @@ class UnknownCellRoutingTest {
             builder.putFloor(x, 6, CoarseMap.LAND, 64);
         }
 
-        // 較正用の背景（経路から離れた帯）
+        // Background for calibration (a band away from the route)
         for (int x = -radius; x <= -11; x++) {
             for (int z = -radius; z < radius; z++) {
                 if (voidBackground) {
@@ -145,8 +145,8 @@ class UnknownCellRoutingTest {
     }
 
     /**
-     * 窓の外の推定は、Xaeroの地図に何も無い所でも値を持つ。0を返すと窓の縁で「分からない」として種から外れ、
-     * 地図に無い場所（テレポート直後・未踏の洞窟）では窓の縁に種が1つも無く、航法グラフのガイドが丸ごと空になる。
+     * The estimate outside the window has a value even where Xaero's map has nothing. Returning 0 drops window-edge cells as "unknown" from the seeds, and
+     * where the map has nothing (right after a teleport, unexplored caves) the window edge has no seeds at all and the nav graph's guide is entirely empty.
      */
     @Test
     void farEstimateValuesCellsMissingFromTheMap() {
@@ -156,6 +156,6 @@ class UnknownCellRoutingTest {
         double value = CoarseRouter.farEstimate(map, goal, false, CoarseRouter.BridgePolicy.BRIDGE)
                 .estimate(-15 * 16, -30, -15 * 16);
 
-        assertTrue(value > 0, "地図に無いセルの推定が空: " + value);
+        assertTrue(value > 0, "estimate for a cell missing from the map is empty: " + value);
     }
 }

@@ -21,11 +21,11 @@ import net.prason.xaeronav.client.NavCommandSink;
 import net.prason.xaeronav.client.XaeroNavClient;
 import net.prason.xaeronav.client.XaeroNavCommands;
 
-/** NeoForgeのゲームイベントを、ローダー非依存の処理へ繋ぐだけの層。 */
+/** A layer that only connects NeoForge game events to loader-independent handling. */
 public final class NeoForgeEvents {
 
     //? if >=1.21.6 {
-    /*// 段階ごとに別のイベントになった。PoseStackは単位行列で、視点の回転はmodelViewに積まれている
+    /*// Became a separate event per stage. The PoseStack is identity, and the view rotation is pushed onto modelView
     @SubscribeEvent
     public void onRenderLevelStage(RenderLevelStageEvent.AfterTranslucentBlocks event) {
         XaeroNavClient.PATH_RENDERER.render(event.getPoseStack(),

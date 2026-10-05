@@ -8,20 +8,20 @@ import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 空中経路のための粗いボクセル格子。1セルは{@code cellBlocks}ブロック角で、
- * <b>含むブロックが1つ残らず空虚なときだけ</b>飛行可とみなす。
+ * Coarse voxel grid for air routes. One cell is a cube of {@code cellBlocks} blocks, and it counts as
+ * flyable <b>only when every block it contains is empty</b>.
  *
- * <p>粗さそのものがクリアランスになっているのが要点。エリトラは秒速30マス級で飛ぶので、
- * 1ブロックの隙間を狙って通せる案内には意味がない。格子の粒度で「余裕を持って抜けられる空間」だけを
- * 経路の候補にしておけば、線の周りに自然と数ブロックの余白が残る。ユーザーが求めた「許容範囲を
- * 大きく」は、表示や逸脱判定だけでなくここでも表現されている。
+ * <p>The key point is that the coarseness itself acts as clearance. Elytra fly at around 30 blocks per second, so
+ * guidance that threads a 1-block gap is meaningless. By only offering "space you can pass with room to spare" at
+ * grid granularity as route candidates, a margin of a few blocks naturally remains around the line. The user's
+ * request for "a larger tolerance" is expressed here too, not just in the display and deviation checks.
  *
- * <p><b>事前構築はしない</b>。レンダー半径192・ネザーの全高を4ブロック角で覆うと約29万セル＝
- * 1900万回のブロック参照になり、事前に埋めるのは成立しない。A*が触ったセルだけを計算して
- * memoする（{@code ChunkView}がブロック状態ごとの判定を memo しているのと同じ手）。
+ * <p><b>No precomputation.</b> Covering a render radius of 192 and the full Nether height with 4-block cubes is about
+ * 290,000 cells = 19 million block lookups, so filling it in advance is not viable. Only cells A* touches are computed
+ * and memoized (the same approach as {@code ChunkView} memoizing per-block-state checks).
  *
- * <p><b>スレッド契約:</b> memoを可変フィールドに持つので、単一のワーカースレッドが占有すること
- * （下敷きの{@link CellSource}が元々同じ制約を持つ）。
+ * <p><b>Thread contract:</b> the memo lives in mutable fields, so a single worker thread must own this
+ * (the underlying {@link CellSource} already has the same constraint).
  */
 public final class AirGrid {
 
@@ -45,12 +45,12 @@ public final class AirGrid {
         return cellBlocks;
     }
 
-    /** ブロック座標を含むセルの座標。 */
+    /** Coordinates of the cell containing the block coordinate. */
     public int toCell(double blockCoordinate) {
         return Math.floorDiv((int) Math.floor(blockCoordinate), cellBlocks);
     }
 
-    /** セルの中心のブロック座標。 */
+    /** Block coordinates of the cell's center. */
     public double toBlockCenter(int cell) {
         return cell * (double) cellBlocks + cellBlocks / 2.0;
     }
@@ -60,12 +60,12 @@ public final class AirGrid {
     }
 
     /**
-     * そのセルを飛行に使ってよいか。
+     * Whether the cell may be used for flight.
      *
-     * <p>範囲外・未ロードチャンクは{@link CellData#ABSENT}＝{@code present}が偽なので、自動的に
-     * 飛行不可になる。{@code FlightLineRouter}は逆に未ロードを素通りさせているが、あちらは方角を
-     * 示すだけの線の話で、こちらは実際に辿らせる経路——<b>未知の中へ経路を引いてはいけない</b>。
-     * 読める範囲の外は点線が引き受ける。
+     * <p>Out-of-range and unloaded chunks are {@link CellData#ABSENT} = {@code present} is false, so they
+     * automatically become unflyable. {@code FlightLineRouter} lets unloaded areas pass, but that is a line that only
+     * shows the direction; this is a route actually followed. <b>Never draw a route into the unknown.</b>
+     * Beyond the readable range, the dotted line takes over.
      */
     public boolean flyable(int cellX, int cellY, int cellZ) {
         long key = BlockPos.asLong(cellX, cellY, cellZ);
@@ -95,10 +95,10 @@ public final class AirGrid {
         return true;
     }
 
-    /** 26近傍のうち飛行不可なセルの数。まだ数えていないことを表す番兵。 */
+    /** Number of unflyable cells among the 26 neighbors. Sentinel meaning not yet counted. */
     private static final byte NOT_COUNTED = -1;
 
-    /** 26近傍のうち飛行不可なセルの数（0〜26）。狭さの目安に使う。 */
+    /** Number of unflyable cells among the 26 neighbors (0 to 26). Used as a measure of tightness. */
     public int blockedNeighbours(int cellX, int cellY, int cellZ) {
         long key = BlockPos.asLong(cellX, cellY, cellZ);
         byte cached = blocked.get(key);
@@ -120,10 +120,11 @@ public final class AirGrid {
     }
 
     /**
-     * 2点を結ぶ直線が、飛行可なセルだけを通るか。平滑化が近道を採ってよいかの判定に使う。
+     * Whether the straight line between two points passes only through flyable cells. Used to decide whether smoothing
+     * may take a shortcut.
      *
-     * <p><b>ブロック解像度ではなく格子解像度で見る</b>のが要点。1本の光線をブロック単位で見ると、
-     * 壁にぴったり沿った線でも「当たっていない」ことになり、格子で確保したクリアランスが消える。
+     * <p>The key point is <b>checking at grid resolution, not block resolution</b>. Checking a single ray per block
+     * would count even a line hugging a wall as "not hitting", and the clearance the grid secured would vanish.
      */
     public boolean clearLine(Vec3 from, Vec3 to) {
         double scale = 1.0 / cellBlocks;
@@ -131,11 +132,11 @@ public final class AirGrid {
     }
 
     /**
-     * {@code around}を含むセルから始めて、飛行可なセルを外側へ{@code maxCellRadius}まで探す。
-     * 見つからなければ{@code null}。
+     * Searches outward from the cell containing {@code around} for a flyable cell, up to {@code maxCellRadius}.
+     * {@code null} if none is found.
      *
-     * <p>始点も目的地も、たいてい格子の目に乗っていない——プレイヤーは岩の角をかすめる位置に
-     * いるかもしれないし、目的地はそもそも着地する地面（＝飛行不可）であることの方が多い。
+     * <p>Neither the start nor the destination usually sits on a grid cell: the player may be grazing a rock corner,
+     * and the destination is more often than not the ground to land on (= unflyable).
      */
     public long nearestFlyable(Vec3 around, int maxCellRadius) {
         int centerX = toCell(around.x);
@@ -145,7 +146,7 @@ public final class AirGrid {
             for (int dx = -radius; dx <= radius; dx++) {
                 for (int dy = -radius; dy <= radius; dy++) {
                     for (int dz = -radius; dz <= radius; dz++) {
-                        // 殻の上だけを見る（内側は前の半径で済んでいる）
+                        // Only look at the shell (the inside was covered by the previous radius)
                         if (Math.max(Math.abs(dx), Math.max(Math.abs(dy), Math.abs(dz))) != radius) {
                             continue;
                         }
@@ -159,6 +160,6 @@ public final class AirGrid {
         return NONE;
     }
 
-    /** {@link #nearestFlyable}が何も見つけられなかったことを表す番兵。 */
+    /** Sentinel meaning {@link #nearestFlyable} found nothing. */
     public static final long NONE = Long.MIN_VALUE;
 }

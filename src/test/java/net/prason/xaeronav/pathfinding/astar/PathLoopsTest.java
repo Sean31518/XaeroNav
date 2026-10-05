@@ -21,7 +21,7 @@ class PathLoopsTest {
                 List.of(), List.of(), PathRisk.NONE, null);
     }
 
-    /** ブロックを置いて渡る手。畳むと足場ごと消えるので、この手を含む区間は畳めない。 */
+    /** A move that crosses by placing a block. Folding it would remove the footing too, so sections containing this move can't be folded. */
     private static PathStep bridgeAt(int x) {
         return new PathStep(new BlockPos(x, 64, 0), MovementType.TRAVERSE, 20.0,
                 List.of(), List.of(), PathRisk.NONE, new BlockPos(x, 63, 0));
@@ -42,13 +42,13 @@ class PathLoopsTest {
 
     @Test
     void dropsTheStepsBetweenTwoVisitsToTheSameCell() {
-        // 1→2→3→2→4 は、2で折り返しているので 1→2→4 と同じ場所を通る
+        // 1->2->3->2->4 turns back at 2, so it passes through the same places as 1->2->4
         List<PathStep> folded = PathLoops.fold(List.of(at(1), at(2), at(3), at(2), at(4))).steps();
         assertEquals(List.of(new BlockPos(1, 64, 0), new BlockPos(2, 64, 0), new BlockPos(4, 64, 0)),
                 positions(folded));
     }
 
-    /** 区間の境目を張り直せるように、消えたステップの添字は残った方を指す。 */
+    /** So section boundaries can be re-attached, indices of removed steps point at the surviving one. */
     @Test
     void mapsDroppedIndexesOntoTheSurvivingStep() {
         PathLoops.Folded folded = PathLoops.fold(List.of(at(1), at(2), at(3), at(2), at(4)));
@@ -63,7 +63,7 @@ class PathLoopsTest {
 
     @Test
     void foldsRepeatedlyWhenALoopHidesAnotherLoop() {
-        // 1→2→3→4→3→2→5。内側(3で折り返し)を畳むと外側(2で折り返し)が現れる
+        // 1->2->3->4->3->2->5. Folding the inner loop (turning back at 3) reveals the outer one (turning back at 2)
         List<PathStep> folded =
                 PathLoops.fold(List.of(at(1), at(2), at(3), at(4), at(3), at(2), at(5))).steps();
         assertEquals(List.of(new BlockPos(1, 64, 0), new BlockPos(2, 64, 0), new BlockPos(5, 64, 0)),
@@ -75,7 +75,7 @@ class PathLoopsTest {
         return new PathStep(new BlockPos(x, 64, z), MovementType.TRAVERSE, 4.0, List.of(), List.of(), PathRisk.NONE, null);
     }
 
-    /** 東へ伸びた経路の先で引き返し、10ブロック離れて西へ戻ってから南へ抜ける継ぎ足し（V字）。 */
+    /** An extension (V shape) that turns back at the end of a path extending east, goes 10 blocks back west, then exits south. */
     @Test
     void findsAReturnThatRunsBesideTheWayOut() {
         List<PathStep> route = new ArrayList<>();
@@ -112,7 +112,7 @@ class PathLoopsTest {
         assertNull(PathLoops.widestReturn(route, tail, 0, 16, 6, 20, 3));
     }
 
-    /** 歩き終えた所（{@code fromIndex}より前）へ戻る輪は切り落とせないので拾わない。 */
+    /** Loops returning to already-walked ground (before {@code fromIndex}) can't be cut off, so they aren't picked up. */
     @Test
     void ignoresAReturnToWhereThePlayerHasAlreadyWalked() {
         List<PathStep> route = new ArrayList<>();
@@ -130,7 +130,7 @@ class PathLoopsTest {
     void laterStepsDependOnABlockPlacedInTheCutSection() {
         List<PathStep> steps = List.of(at(1), bridgeAt(2), at(3), at(4),
                 new PathStep(new BlockPos(2, 65, 0), MovementType.ASCEND, 8.0, List.of(), List.of(), PathRisk.NONE, null));
-        // 2に置いたブロック(2,63,0)は後の手の足場ではない（後の手は(2,65,0)に立つので足場は(2,64,0)）
+        // The block placed at 2, (2,63,0), isn't footing for a later move (the later move stands at (2,65,0), so its footing is (2,64,0))
         assertFalse(PathLoops.laterStepsDependOn(steps, 1, 2));
         List<PathStep> standing = List.of(at(1), bridgeAt(2), at(3),
                 new PathStep(new BlockPos(2, 64, 0), MovementType.TRAVERSE, 4.0, List.of(), List.of(), PathRisk.NONE, null));

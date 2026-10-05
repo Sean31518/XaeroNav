@@ -7,24 +7,24 @@ import net.prason.xaeronav.pathfinding.astar.PathResult;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * Xaeroの世界地図・ミニマップ用に、経路を平坦な配列へ焼いたもの。
+ * The route baked into flat arrays for Xaero's world map and minimap.
  *
- * <p>地図側は経路を1ブロック四方の矩形の連なりとして描く。毎フレーム{@link PathStep}のリストを
- * 辿って色を判定し直す必要はないので、経路が変わったときにだけ組み直して両方の描画で共有する。
+ * <p>The map side draws the route as a chain of 1x1-block rectangles. There's no need to walk the {@link PathStep} list
+ * and redetermine colors every frame, so it's rebuilt only when the route changes and shared by both renderers.
  *
- * <p>地図はXZ平面への投影なので、Yだけが違う連続ステップ（階段・掘り下げ）は同じ矩形になる。
- * 連続する重複を落としても見た目は変わらない。
+ * <p>The map is a projection onto the XZ plane, so consecutive steps differing only in Y (stairs, digging down) become the same rectangle.
+ * Dropping consecutive duplicates doesn't change how it looks.
  */
 final class MapDots {
 
-    /** 世界地図とミニマップはどちらも描画スレッドから描くので、共有して構わない。 */
+    /** The world map and minimap both draw from the render thread, so sharing is fine. */
     private static final PathCache<MapDots> CACHE = new PathCache<>();
 
     final int[] x;
     final int[] z;
-    /** 点ごとのRGB（点数 × 3）。 */
+    /** RGB per point (point count x 3). */
     final float[] color;
-    /** 点ごとの元の{@link PathStep}の添字（昇順）。通り過ぎた点を飛ばすために要る。 */
+    /** Index of each point's original {@link PathStep} (ascending). Needed to skip points already passed. */
     private final int[] stepIndex;
     final int count;
 
@@ -37,10 +37,10 @@ final class MapDots {
     }
 
     /**
-     * {@code fromStep}以降のステップから作られた最初の点。
+     * The first point made from steps at or after {@code fromStep}.
      *
-     * <p>XZが同じ連続ステップは1点に潰れているので、ステップの添字と点の添字は一致しない。
-     * 点は昇順なので二分探索できる。
+     * <p>Consecutive steps with the same XZ are collapsed into one point, so step indices and point indices don't match.
+     * Points are in ascending order, so binary search works.
      */
     int firstDotFrom(int fromStep) {
         int low = 0;

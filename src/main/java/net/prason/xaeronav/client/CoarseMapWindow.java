@@ -6,30 +6,30 @@ import net.prason.xaeronav.util.MonotonicTime;
 import net.prason.xaeronav.xaero.XaeroMapReader;
 
 /**
- * 長距離ルートのためにXaeroの地図を読む範囲の決め方。歩行（{@link net.prason.xaeronav.pathfinding.coarse.CoarseMap}）と
- * 飛行（{@link net.prason.xaeronav.pathfinding.flight.CoarseAirMap}）で1セルあたりの状態数だけが違う。
+ * How the range of Xaero's map read for long-distance routes is decided. Walking ({@link net.prason.xaeronav.pathfinding.coarse.CoarseMap}) and
+ * flight ({@link net.prason.xaeronav.pathfinding.flight.CoarseAirMap}) differ only in the number of states per cell.
  *
- * <p>両者で別々に組んではいけない。診断コマンドが本番と1チャンクずれた範囲を読んでいて、目的地が
- * 地図の外に落ちるケースだけ報告が食い違っていたことがある。
+ * <p>Don't build them separately. The diagnostic command once read a range offset by one chunk from production, and reports disagreed
+ * only in cases where the destination fell outside the map.
  */
 final class CoarseMapWindow {
 
-    /** 始点・終点それぞれの周りに広げる範囲（チャンク）。 */
+    /** Range (chunks) to expand around each of the start and end. */
     private static final int PADDING_CHUNKS = 32;
 
-    /** 読み取り範囲の上限（チャンク四方）。無制限だと配列確保だけで固まる。 */
+    /** Cap on the read range (chunks square). Unlimited, it would hang just allocating the arrays. */
     private static final int MAX_SPAN_CHUNKS = 1024;
 
     /**
-     * 探索状態数の上限。{@link net.prason.xaeronav.pathfinding.coarse.CoarseRouter#findRoute}は
-     * {@code cells * 階層数}個の{@code double[]}/{@code int[]}/{@code boolean[]}を一括で確保し、
-     * しかも溶岩ポリシーの梯子で最大2回呼ばれる——チャンク四方の上限だけでは、層1が3D化して
-     * 1セルあたり複数層になったぶんそのまま倍になる。状態数で切ることで、細長い範囲（片軸だけ遠い
-     * 目的地）では従来どおりの到達距離を保ったまま、正方形の最悪ケースだけを2D時代と同じ確保量に戻す。
+     * Cap on the number of search states. {@link net.prason.xaeronav.pathfinding.coarse.CoarseRouter#findRoute}
+     * allocates {@code cells * levels} {@code double[]}/{@code int[]}/{@code boolean[]} in one go,
+     * and is called up to twice by the lava policy ladder; a cap on chunks square alone would double directly
+     * as layer 1 went 3D with multiple levels per cell. Capping by state count keeps the usual reach for elongated ranges (destinations far
+     * along only one axis), while bringing only the square worst case back to the same allocation as in the 2D era.
      *
-     * <p>{@link CoarseMap#MAX_FLOORS}を上げたぶんはここも上げる。据え置くと<b>床の枚数を増やした
-     * だけで長距離ルートの届く距離が縮む</b>——切っているのはセル数ではなく状態数なので、
-     * 1セルあたりの床が増えれば同じ上限で入るセル数が減る。
+     * <p>Raise this along with any raise of {@link CoarseMap#MAX_FLOORS}. Leaving it as is means <b>just increasing the number of floors
+     * shrinks how far long-distance routes reach</b>: what's capped isn't the cell count but the state count, so
+     * more floors per cell means fewer cells fit within the same cap.
      */
     private static final int MAX_STATES = 1536 * 1024;
 
@@ -37,32 +37,32 @@ final class CoarseMapWindow {
     }
 
     /**
-     * 読んだ地図と、この範囲で<b>ディスクにはあるのにまだメモリへ載っていない</b>リージョンの数。
+     * The map read, and the number of regions in this range that are <b>on disk but not yet loaded into memory</b>.
      *
-     * @param map             範囲が広すぎて読めなかったときは{@code null}
-     * @param pendingRegions  0より大きければ、少し待って読み直せば地図が増えるということ
-     * @param layerBreakdown  洞窟レイヤーごとの取り分（{@link XaeroMapReader.SurfaceRead}）
-     * @param readMillis      {@link XaeroMapReader#readSurfaceReporting}だけにかかった時間。
-     *                        範囲が広すぎて読まなかった回は0（実機のカクつきがメインスレッド側の
-     *                        地図読みに由来するかを継続的に見るためのもの）
+     * @param map             {@code null} if the range was too wide to read
+     * @param pendingRegions  if greater than 0, waiting a bit and rereading will add to the map
+     * @param layerBreakdown  share per cave layer ({@link XaeroMapReader.SurfaceRead})
+     * @param readMillis      time spent on {@link XaeroMapReader#readSurfaceReporting} alone.
+     *                        0 on rounds where the range was too wide to read (for continuously checking whether in-game stutter
+     *                        comes from map reading on the main thread)
      */
     record Window(CoarseMap map, int pendingRegions, String layerBreakdown, long readMillis) {
     }
 
     /**
-     * 2点を含む範囲の地図を読む。確保量が上限を超えるなら{@link Window#map()}が{@code null}——
-     * 呼び出し側は「長距離ルート無し」として扱うこと。
+     * Reads the map for the range containing the two points. If the allocation would exceed the cap, {@link Window#map()} is {@code null};
+     * the caller should treat that as "no long-distance route".
      *
-     * <p><b>読み込みも要求する。</b>{@link XaeroMapReader#readSurface}は<b>Xaeroが既にメモリへ
-     * 載せているリージョンしか読まない</b>ので、要求しないと遠くの地形は永久に
-     * {@link CoarseMap#NO_DATA}のまま——そして未知セルは{@code CoarseRouter}でほぼ最安なので、
-     * <b>まだ見えていない溶岩の海を直進するルートが引かれる</b>（実機で踏んだ）。
-     * 層2（{@code CorridorLegSolver#prepare}）は元から同じことをしている。
+     * <p><b>It also requests loading.</b> {@link XaeroMapReader#readSurface} <b>only reads regions Xaero has already loaded
+     * into memory</b>, so without requesting, distant terrain stays
+     * {@link CoarseMap#NO_DATA} forever, and since unknown cells are nearly the cheapest in {@code CoarseRouter},
+     * <b>a route heading straight through a lava sea not yet seen gets drawn</b> (hit in-game).
+     * Layer 2 ({@code CorridorLegSolver#prepare}) already did the same from the start.
      *
-     * <p><b>メインスレッド専用</b>（{@link XaeroMapReader#readSurface}がXaeroの書き込みスレッドと
-     * 同じ構造を触るため）。
+     * <p><b>Main thread only</b> ({@link XaeroMapReader#readSurface} touches the same structures as Xaero's
+     * writer thread).
      *
-     * @param statesPerCell 1セルあたりに確保される状態数（床・高度帯の最大数）
+     * @param statesPerCell number of states allocated per cell (the maximum number of floors/altitude bands)
      */
     static Window read(BlockPos from, BlockPos to, int statesPerCell) {
         int minChunkX = (Math.min(from.getX(), to.getX()) >> 4) - PADDING_CHUNKS;
@@ -79,8 +79,8 @@ final class CoarseMapWindow {
         int pending = XaeroMapReader
                 .surveyRegions(minChunkX, minChunkZ, chunksX, chunksZ, referenceY).pendingLoad();
         if (pending > 0) {
-            // 要求は非同期なのでこの回の読み取りには間に合わない。呼び出し側が
-            // pendingRegionsを見て引き直す（PathfindingState#cachedOrFreshRoute）
+            // The request is asynchronous, so it won't make it in time for this read. The caller
+            // looks at pendingRegions and replans (PathfindingState#cachedOrFreshRoute)
             XaeroMapReader.requestLoad(minChunkX, minChunkZ, chunksX, chunksZ, referenceY);
         }
         long startMillis = MonotonicTime.millis();

@@ -10,39 +10,39 @@ import net.prason.xaeronav.pathfinding.world.SurfaceCellSource;
 import net.prason.xaeronav.xaero.XaeroMapReader;
 
 /**
- * 長距離ルート層1のwaypoint線分1本を、層2（ブロック解像度のXaero地表データ）で解決する準備を行う。
- * {@code /xaeronav debug corridor}診断コマンドと{@link net.prason.xaeronav.client.PathfindingState}の
- * waypoint精緻化が共有するロジック。
+ * Prepares one waypoint segment of long-distance route layer 1 to be resolved with layer 2 (Xaero's block-resolution surface data).
+ * Logic shared by the {@code /xaeronav debug corridor} diagnostic command and {@link net.prason.xaeronav.client.PathfindingState}'s
+ * waypoint refinement.
  *
- * <p><b>スレッド契約:</b> {@link #prepare}は{@link XaeroMapReader}経由でXaeroの地図データを読むため
- * メインスレッド専用（{@link XaeroMapReader}のクラスJavadoc参照）。結果の{@link PreparedLeg#view()}は
- * 不変な{@link SurfaceCellSource}なので、それを使ったA*探索自体はワーカースレッドで行ってよい
- * （探索の実行は呼び出し側に委ねる——診断コマンド・ライブナビとも非同期実行したいため）。
+ * <p><b>Thread contract:</b> {@link #prepare} reads Xaero's map data via {@link XaeroMapReader}, so it's
+ * main-thread only (see the {@link XaeroMapReader} class Javadoc). The resulting {@link PreparedLeg#view()} is
+ * an immutable {@link SurfaceCellSource}, so the A* search using it may itself run on a worker thread
+ * (running the search is left to the caller, since both the diagnostic command and live navigation want to run it asynchronously).
  */
 public final class CorridorLegSolver {
 
-    /** 区間のバウンディングボックスに足す水平マージン（ブロック）。長距離ルート層2の設計値。 */
+    /** Horizontal margin (blocks) added to a leg's bounding box. A design value of long-distance route layer 2. */
     public static final int HORIZONTAL_MARGIN_BLOCKS = 48;
 
     /**
-     * 区間のバウンディングボックスに足す垂直マージン（ブロック）。{@link SurfaceCellSource#cell}は
-     * 実際にはY方向の範囲を見ない（列ごとの地表高さだけで通行可否が決まる）ので、ここは
-     * {@code bounds()}の体裁を整える以上の意味を持たない。
+     * Vertical margin (blocks) added to a leg's bounding box. {@link SurfaceCellSource#cell}
+     * doesn't actually look at the Y range (passability is decided only by each column's surface height), so this
+     * means nothing beyond making {@code bounds()} well-formed.
      */
     public static final int VERTICAL_MARGIN_BLOCKS = 64;
 
     /**
-     * 区間ごとの探索時間上限（ミリ秒）。層2は掘削・ドア・蜘蛛の巣を扱わずノード単価が軽いので、
-     * 上限を切り詰めても大抵の区間は十分な時間で解ける
-     * （waypointの多い長いルートで合計が数十秒に膨らむのを防ぐ）。
+     * Search time cap per leg (milliseconds). Layer 2 doesn't handle digging, doors or cobwebs, so nodes are cheap, and
+     * most legs solve in plenty of time even with a trimmed cap
+     * (prevents the total from ballooning to tens of seconds on long routes with many waypoints).
      */
     public static final long LEG_TIME_LIMIT_MILLIS = 300;
 
     /**
-     * 端点が溶岩列・未知列だったとき、代わりに立てる列を探す最大半径（ブロック）。
-     * ネザーの溶岩の海の縁で端点がそのまま溶岩に落ちることは珍しくなく、数ブロック隣に
-     * 陸があるだけで層2の廊下精緻化を丸ごと諦めるのは惜しい。広げすぎると廊下と無関係な
-     * 場所へ寄ってしまうので、waypoint間隔（24ブロック）より十分小さく保つ。
+     * Maximum radius (blocks) to search for a standable column instead when an endpoint is a lava or unknown column.
+     * At the edge of a Nether lava sea it's not unusual for an endpoint to land right in lava, and giving up layer 2's corridor
+     * refinement entirely when there's land just a few blocks away would be a shame. Widening too much drifts toward places
+     * unrelated to the corridor, so it's kept well below the waypoint spacing (24 blocks).
      */
     private static final int ENDPOINT_FALLBACK_RADIUS_BLOCKS = 8;
 
@@ -55,15 +55,15 @@ public final class CorridorLegSolver {
     }
 
     /**
-     * {@code from}から{@code to}への区間を層2で探索できる状態に準備する。両端どちらかで地表データが
-     * 無ければ{@link PreparedLeg#view()}が{@code null}になる（呼び出し側が読み込みを待つか、
-     * 生のwaypointへフォールバックする）。{@link PreparedLeg#pendingRegions()}はデータの有無に
-     * かかわらず常に埋まる——失敗の報告にも「あと何リージョン読めば解決しうるか」を出すため。
+     * Prepares the leg from {@code from} to {@code to} for searching with layer 2. If surface data is missing at either end,
+     * {@link PreparedLeg#view()} is {@code null} (the caller either waits for loading or
+     * falls back to the raw waypoints). {@link PreparedLeg#pendingRegions()} is always filled regardless of
+     * whether data exists, so that failure reports can also say "how many more regions need reading for this to possibly resolve".
      *
-     * <p>{@code readSurfaceDetailed}はcreate=falseで読むため、この区間のリージョンがXaeroの
-     * メモリにまだ無ければ黙ってNO_DATA扱いになる。訪問済みでも今メモリに無いだけのことは
-     * 珍しくないため、未読み込みリージョンがあれば{@link XaeroMapReader#requestLoad}で読み込みを
-     * 要求する（次回の呼び出しで解決する可能性を残す）。
+     * <p>{@code readSurfaceDetailed} reads with create=false, so if this leg's regions aren't in Xaero's
+     * memory yet they are silently treated as NO_DATA. Even visited regions are often just not in memory right now,
+     * so if there are unloaded regions, loading is requested via {@link XaeroMapReader#requestLoad}
+     * (leaving the possibility of resolving on the next call).
      */
     public static PreparedLeg prepare(BlockPos from, BlockPos to) {
         int minBlockX = Math.min(from.getX(), to.getX()) - HORIZONTAL_MARGIN_BLOCKS;
@@ -79,8 +79,8 @@ public final class CorridorLegSolver {
         int maxChunkZ = maxBlockZ >> 4;
         int chunksX = maxChunkX - minChunkX + 1;
         int chunksZ = maxChunkZ - minChunkZ + 1;
-        // 天井のある次元ではXaeroの地図がY帯ごとのレイヤーに分かれる。この区間が
-        // どのY帯の話なのかを渡さないと、読むレイヤーを選べない
+        // In dimensions with a ceiling, Xaero's map is split into layers per Y band. Without passing
+        // which Y band this leg is about, the layer to read can't be chosen
         int referenceY = (from.getY() + to.getY()) / 2;
         XaeroMapReader.RegionStats regionStats =
                 XaeroMapReader.surveyRegions(minChunkX, minChunkZ, chunksX, chunksZ, referenceY);
@@ -94,9 +94,9 @@ public final class CorridorLegSolver {
                 grid.resolveNearestStandable(from.getX(), from.getZ(), ENDPOINT_FALLBACK_RADIUS_BLOCKS);
         BlockPos resolvedTo = grid.resolveNearestStandable(to.getX(), to.getZ(), ENDPOINT_FALLBACK_RADIUS_BLOCKS);
         if (resolvedFrom == null || resolvedTo == null) {
-            // 廊下は解けないが、片方だけ解けているならその答えは捨てない。呼び出し側は
-            // 区間を諦めるとき生のwaypoint（層1のチャンク中心）へ落ちるので、寄せた終点を
-            // 渡せるなら渡す——中心が奈落・溶岩でも、その1つは実際に立てる座標になる
+            // The corridor can't be solved, but if one end was resolved, that answer isn't thrown away. When the caller
+            // gives up on the leg it falls back to the raw waypoint (layer 1's chunk center), so if a snapped endpoint
+            // can be passed, it is; even if the center is void or lava, that one is a coordinate that can actually be stood on
             return new PreparedLeg(null, resolvedFrom, resolvedTo, pendingRegions);
         }
 
@@ -108,12 +108,12 @@ public final class CorridorLegSolver {
     }
 
     /**
-     * {@link #prepare}の結果。{@code view}は不変なのでワーカースレッドから探索してよい。
+     * The result of {@link #prepare}. {@code view} is immutable, so it may be searched from a worker thread.
      *
-     * <p>{@code view}が{@code null}なら区間を層2では解けなかったことを表す。この場合でも
-     * {@code from}/{@code to}は<b>片方だけ解決できていれば埋まる</b>——呼び出し側が区間を
-     * 諦めて生のwaypointへ落ちるとき、寄せた座標があるならそちらを使えるようにするため。
-     * どちらも解決できなければ両方{@code null}。
+     * <p>If {@code view} is {@code null}, the leg couldn't be solved with layer 2. Even then,
+     * {@code from}/{@code to} <b>are filled if just one end could be resolved</b>, so that when the caller gives up
+     * on the leg and falls back to the raw waypoints, it can use the snapped coordinates if any.
+     * If neither could be resolved, both are {@code null}.
      */
     public record PreparedLeg(CellSource view, BlockPos from, BlockPos to, int pendingRegions) {
     }

@@ -5,19 +5,19 @@ import java.util.Objects;
 import org.jspecify.annotations.Nullable;
 
 /**
- * 「前回と同じ値なら黙る、違えば知らせる」を1つにまとめる。診断ログが同じ理由を毎tick
- * 出し続けないようにする、という同じ形のガードが{@code PathfindingState}に3箇所
- * （合流拒否・繋ぎ目解き直し見送り・立てない目標）並行して書かれていたので共通化する。
+ * Bundles "stay quiet if the value is the same as last time, report if it differs" into one. The same kind of guard, keeping diagnostic logs from
+ * emitting the same reason every tick, was written in parallel in 3 places in {@code PathfindingState}
+ * (merge refusal, skipped seam re-solve, unstandable goal), so it's factored out here.
  *
- * <p>volatileにしているのは、リセット（成功時）と更新（失敗理由の記録）が別の実行経路から
- * 呼ばれる既存コードの前提（元の{@code lastSeamRepairRefusal}フィールド）を保つため。
+ * <p>It's volatile to preserve the assumption of the existing code (the original {@code lastSeamRepairRefusal} field) that reset
+ * (on success) and update (recording the failure reason) are called from different execution paths.
  */
 public final class ChangeGate<T> {
 
     private volatile @Nullable T last;
     private volatile long lastAtMillis = Long.MIN_VALUE;
 
-    /** 前回と同じ値なら{@code false}（抑制）。違えば内部を更新して{@code true}を返す。 */
+    /** {@code false} (suppress) if the value is the same as last time. Otherwise updates internal state and returns {@code true}. */
     public boolean changed(T value) {
         if (Objects.equals(last, value)) {
             return false;
@@ -27,9 +27,9 @@ public final class ChangeGate<T> {
     }
 
     /**
-     * 値が変わったか、前回の通知から{@code minIntervalMillis}以上経っていれば{@code true}。
-     * 同じ状態が続いている間も一定間隔で知らせたい用途向け（{@link #changed(Object)}は
-     * 状態が変わらない限り無音のまま）。時刻は{@link MonotonicTime}を渡すこと。
+     * {@code true} if the value changed, or at least {@code minIntervalMillis} has passed since the last report.
+     * For uses that want periodic reports even while the same state persists ({@link #changed(Object)}
+     * stays silent as long as the state doesn't change). Pass time from {@link MonotonicTime}.
      */
     public boolean changed(T value, long nowMillis, long minIntervalMillis) {
         if (Objects.equals(last, value) && nowMillis - lastAtMillis < minIntervalMillis) {
@@ -40,12 +40,12 @@ public final class ChangeGate<T> {
         return true;
     }
 
-    /** 次の{@link #changed}を必ず通知扱いにする（「もう問題ない」状態に戻ったときに呼ぶ）。 */
+    /** Forces the next {@link #changed} to report (call when returning to a "no longer a problem" state). */
     public void reset() {
         last = null;
     }
 
-    /** 直近に通知した値。まだ何も通知していない、または{@link #reset}済みなら{@code null}。 */
+    /** The most recently reported value. {@code null} if nothing has been reported yet, or after {@link #reset}. */
     public @Nullable T current() {
         return last;
     }

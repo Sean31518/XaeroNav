@@ -10,80 +10,80 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * 経路全体を覆う<b>3次元</b>の粗い地形。{@link VoxelCostToGo}のためだけに存在する。
+ * Coarse <b>3D</b> terrain covering the whole route. It exists solely for {@link VoxelCostToGo}.
  *
- * <p>層1（{@link CoarseMap}）と役割は同じ「遠くの地形をざっくり知る」だが、あちらは1セルが
- * チャンク1本＝2.5次元で、天井のある次元では<b>何の情報も与えない</b>。実測（ユーザーの停止ルート
- * {@code (-328,64,696)→(-259,64,379)}）では、層1のcost-to-goを掛けた探索は始点から1歩も動けず、
- * ガイド無しで全世界が見えていても300万ノードで未到達だった。同じルートを、ここが作る3次元の
- * 格子から作ったガイドで解くと到達する。ネザーの縦に積まれたトンネルは、柱ごとに床を数枚持つ
- * 表現では表せない。
+ * <p>It plays the same role as layer 1 ({@link CoarseMap}), "roughly knowing distant terrain", but there one cell
+ * is one chunk column (2.5D), which <b>gives no information at all</b> in dimensions with a ceiling. Measured (a user's stuck route
+ * {@code (-328,64,696)→(-259,64,379)}): a search using layer 1's cost-to-go could not move a single step from the start,
+ * and without a guide it was still unreached at 3 million nodes even with the whole world visible. The same route is reached
+ * with a guide built from the 3D grid made here. The vertically stacked tunnels of the Nether can't be
+ * expressed by a representation that holds a few floors per column.
  *
- * <p><b>正確である必要はない。</b>床の位置だけを知り、それ以外を一律「空洞」と見なすモデルでも
- * 到達した。Xaeroの洞窟レイヤーが提供できるのはまさに「柱ごと・スライスごとの床Y」なので、
- * この粒度で足りることが設計の前提になっている。
+ * <p><b>It doesn't need to be accurate.</b> Even a model that knows only floor positions and treats everything else as "open"
+ * reached the goal. What Xaero's cave layers can provide is exactly "floor Y per column, per slice", so
+ * the design assumes this granularity is enough.
  *
- * <p>セルの種別は3つで、<b>既定は{@link #OPEN}＝「床は知らない」</b>。{@link #OPEN}を壁にすると、
- * 地図の無い領域にある迂回路ごと消えて、ガイドが「行けない」としか言わなくなる。値段の付け方は
- * {@link VoxelCostToGo}側で、実費のまま使う（縮める・比を落とすは測って外してある）。
+ * <p>There are 3 cell kinds, and <b>the default is {@link #OPEN}, meaning "floor unknown"</b>. Making {@link #OPEN} a wall
+ * erases detours through unmapped areas, and the guide can only say "unreachable". Pricing is done in
+ * {@link VoxelCostToGo}, using actual costs as-is (shrinking or lowering the ratio was measured and dropped).
  *
- * <p><b>この層の急所は{@link #boxFor}のY</b>。次元の全高で取ると、次元が中身より高い環境で
- * 岩盤天井より上の空きが格子の半分を占め、ガイドが「天井の上を橋で走る」道を描く。
+ * <p><b>The weak spot of this layer is the Y range of {@link #boxFor}</b>. Taking the full dimension height, in environments where the
+ * dimension is taller than its contents, the space above the bedrock ceiling fills half the grid and the guide draws a "bridge over the ceiling" route.
  *
- * <p>データ源は<b>Xaeroの洞窟レイヤーだけ</b>。読み込み済みチャンクの実データを重ねても
- * <b>実測では経路が1手も変わらなかった</b>（ユーザーの停止ルートで4.3万セルを壁に塗っても
- * 結果が同一）。そのために探索用の{@code CellSource}を数百万回読む価値は無い。
+ * <p>The data source is <b>only Xaero's cave layers</b>. Overlaying real data from loaded chunks
+ * <b>did not change the route by a single move in measurements</b> (painting 43,000 cells as walls on a user's stuck route gave
+ * an identical result). That isn't worth reading the search {@code CellSource} millions of times.
  *
- * <p>生成後は{@link #markFloor}で埋め、{@link VoxelCostToGo#build}へ渡したら以後変更しないこと
- * （ガイドはこの配列を読み続ける）。
+ * <p>After creation, fill it with {@link #markFloor}, and don't modify it after passing it to {@link VoxelCostToGo#build}
+ * (the guide keeps reading this array).
  */
 public final class VoxelTerrain {
 
-    // 値の大小がそのまま上書きの優先順位。1つのセルには複数の柱・複数のレイヤーが入るので、
-    // 書いた順で結果が変わってはいけない
-    /** 立てる床が無い（空洞・未知）。渡るには橋を架ける。 */
+    // The ordering of values is the overwrite priority. One cell receives multiple columns and layers, so
+    // the result must not depend on write order
+    /** No standable floor (open/unknown). Crossing requires a bridge. */
     public static final byte OPEN = 0;
 
-    /** 溶岩の面。立てないうえ、橋を架けられる長さも空中より短い。 */
+    /** Lava surface. Not standable, and the bridgeable length is shorter than over air. */
     public static final byte LAVA = 1;
 
-    /** 立てる床がある。走って通れる。 */
+    /** Has a standable floor. Can be run across. */
     public static final byte STANDABLE = 2;
 
-    /** 格子の一辺の既定（ブロック）。実測でこの粒度なら経路全体を覆っても1秒台で組める。 */
+    /** Default grid cell edge (blocks). Measured: at this granularity, covering the whole route builds in about a second. */
     public static final int DEFAULT_CELL_BLOCKS = 4;
 
     /**
-     * 格子の総数の上限。超えるぶんはセルを粗くして吸収する（{@link #cellBlocksFor}）。
+     * Upper limit on total grid cells. Any excess is absorbed by coarsening cells ({@link #cellBlocksFor}).
      *
-     * <p>目的地が遠いほど箱が広がるので、ここが無いと確保量も構築時間も距離の2乗で伸びる。
-     * 実測では50万セル（543ブロック四方・ネザー全高）で約1.2秒・約5MB。
+     * <p>The farther the destination, the larger the box, so without this both memory and build time grow with the square of distance.
+     * Measured: 500,000 cells (543 blocks square, full Nether height) took about 1.2 s and about 5 MB.
      */
     private static final int MAX_CELLS = 500_000;
 
-    /** 粗くしていく順。ここを使い切ってもなお超えるなら、その箱はそもそも扱わない。 */
+    /** Coarsening order. If it still exceeds the limit after exhausting these, the box isn't handled at all. */
     private static final int[] CELL_LADDER = {DEFAULT_CELL_BLOCKS, 6, 8, 12, 16, 24, 32};
 
     /**
-     * 始点・目的地の周りへ広げる幅（ブロック）。
+     * Margin (blocks) to extend around the start and destination.
      *
-     * <p>両端を結ぶ帯だけでは足りない——ネザーの正しい道は横へ大きく膨らむ。
+     * <p>A band connecting the two ends isn't enough: the correct route in the Nether bulges far sideways.
      *
-     * <p><b>ここが狭いと、箱の外を通る道は粗層にとって存在しない。</b>実機セーブの溶岩の海（約300ブロックのルート）では、
-     * 最適な道が<b>186ステップぶん箱の外</b>を通り、そのぶん見積もりが真値の1.41倍へ膨らんでいた。溶岩を渡る道の方は
-     * 箱に収まって0.73〜0.91倍に見えるので、<b>窓の外の推定がいちばん楽観的な回廊</b>＝溶岩側が選ばれ、
-     * 歩き通しが最適の1.26〜1.28倍になる（ふだんのネザーは1.00〜1.02倍）。
+     * <p><b>If this is narrow, routes passing outside the box don't exist for the coarse layer.</b> On a real save's lava sea (a route of about 300 blocks),
+     * the optimal route passed <b>186 steps outside the box</b>, inflating the estimate to 1.41x the true value. The route across lava
+     * fit in the box and looked like 0.73-0.91x, so <b>the corridor with the most optimistic out-of-window estimate</b> (the lava side) was chosen,
+     * and walking all the way became 1.26-1.28x the optimum (normally 1.00-1.02x in the Nether).
      *
-     * <p><b>一様な倍率では直せない</b>（{@code NavGraphGuide.VOXEL_FAR_SCALE}）。誤差の向きが回廊ごとに逆なので、
-     * 掛け算は両方を同じだけ動かすだけで順序を変えられない。ここを広げると較正が0.79〜0.81へ<b>揃い</b>、
-     * そこで初めて一様な倍率が本来の意味（縮みの補正）を持つ。
+     * <p><b>A uniform factor can't fix it</b> ({@code NavGraphGuide.VOXEL_FAR_SCALE}). The error direction is opposite per corridor,
+     * so multiplication moves both equally and can't change the ordering. Widening this <b>aligns</b> the calibration at 0.79-0.81,
+     * and only then does a uniform factor take on its intended meaning (correcting for shrinkage).
      *
-     * <p>値は実測。192・256・320はどれもネザー7本で同じ質（平均1.006・最悪1.024）になり、128だけが1.082/1.279。
-     * <b>最小の192ではなく256を採る</b>のは、測ったのが1つの溶岩の海の3本だけで、ぎりぎりの値は別の地形で
-     * 足りなくなるため。広げるほど地図の走査面積が増える（256で約2.6倍、{@code NetherVoxelGuide}はこれを
-     * メインスレッドで読む）ので、際限なく広げてもいけない。
+     * <p>Values are measured. 192, 256 and 320 all gave the same quality on 7 Nether routes (mean 1.006, worst 1.024); only 128 gave 1.082/1.279.
+     * <b>256 is used rather than the minimum 192</b> because only 3 routes over a single lava sea were measured, and a borderline value
+     * would fall short on other terrain. Widening increases the map scan area (about 2.6x at 256, and {@code NetherVoxelGuide} reads it
+     * on the main thread), so it must not be widened without limit.
      *
-     * <p>{@link #MAX_CELLS}の梯子が受けるので、広げてもセル数は増えない——代わりにセル辺が4から6へ粗くなる。
+     * <p>The {@link #MAX_CELLS} ladder absorbs it, so widening doesn't increase the cell count; instead the cell edge coarsens from 4 to 6.
      */
     public static final int MARGIN_BLOCKS = 256;
 
@@ -107,30 +107,30 @@ public final class VoxelTerrain {
     }
 
     /**
-     * 床の上下に残す余白（ブロック）。床そのものだけでは足りない——経路は床の上を通るし、
-     * 地図に無い床が少し上下にあることもある。
+     * Margin (blocks) to keep above and below floors. The floors alone aren't enough: the route passes above the floor,
+     * and there may be unmapped floors slightly above or below.
      */
     public static final int VERTICAL_MARGIN_BLOCKS = 24;
 
     /**
-     * 始点と目的地を覆う箱を作る。Yは<b>地図に床が実在する範囲</b>に余白を足したもので、
-     * <b>次元の全高ではない</b>。
+     * Build a box covering the start and destination. Y is <b>the range where floors actually exist on the map</b> plus margin,
+     * <b>not the full dimension height</b>.
      *
-     * <p><b>次元の全高を使ってはいけない。</b>天井のある次元で縦に積まれた通路を表すのが
-     * この層の目的なので「Yを絞ってはいけない」と考えたくなるが、絞る基準を<b>次元</b>に取るか
-     * <b>地図</b>に取るかは別の話。ネザーの高さが128より高い環境（実機ログから逆算した箱は
-     * <b>Y幅256</b>だった）では、岩盤天井より上の空きが格子の<b>半分</b>を占める。害は2つ:
+     * <p><b>Don't use the full dimension height.</b> Since the purpose of this layer is to represent vertically stacked passages in
+     * dimensions with a ceiling, it's tempting to think "Y must not be narrowed", but whether the narrowing is based on the <b>dimension</b>
+     * or the <b>map</b> is a separate matter. In environments where the Nether is taller than 128 (the box reverse-engineered from a real log
+     * was <b>256 high in Y</b>), the space above the bedrock ceiling fills <b>half</b> the grid. Two harms:
      *
      * <ul>
-     *   <li>その空きは全部「床の無いセル」なので、ガイドが<b>天井の上を橋で走る道</b>を
-     *       描く。実測（0..255の箱）では歩き通せなくなり、探索がy=95・経路から100ブロック
-     *       西へ引きずられた——実機ログの「繋ぎ目の大回り(x=-416)」と同じ形</li>
-     *   <li>{@link #MAX_CELLS}の枠を空きが食うので格子が粗くなる。実機は辺6まで粗くなっていた
-     *       （床のある範囲に絞れば同じ経路で辺4に収まる）</li>
+     *   <li>That space is all "cells with no floor", so the guide draws a <b>bridge route over the ceiling</b>.
+     *       Measured (a 0..255 box): walking all the way became impossible, and the search was dragged to y=95, 100 blocks
+     *       west of the route, the same shape as the "wide detour at the seam (x=-416)" in the real log</li>
+     *   <li>The space eats into the {@link #MAX_CELLS} budget, so the grid coarsens. In practice it had coarsened to edge 6
+     *       (narrowed to the range with floors, the same route fits in edge 4)</li>
      * </ul>
      *
-     * @param lowestFloorY  地図から読めたいちばん低い床のY
-     * @param highestFloorY 同じくいちばん高い床のY
+     * @param lowestFloorY  Y of the lowest floor readable from the map
+     * @param highestFloorY likewise, Y of the highest floor
      */
     public static SearchBounds boxFor(
             //? if >=1.17 {
@@ -140,8 +140,8 @@ public final class VoxelTerrain {
             *///?}
             BlockPos start, BlockPos goal,
             int lowestFloorY, int highestFloorY) {
-        // 始点と目的地は必ず箱の中に入れる。目的地が外だとガイドの起点が決まらず表が空になり、
-        // 始点が外だと見積もりが縁の値で頭打ちになる
+        // The start and destination must always be inside the box. If the destination is outside, the guide has no origin and the table is empty;
+        // if the start is outside, the estimate plateaus at the edge value
         int low = Math.min(lowestFloorY, Math.min(start.getY(), goal.getY()));
         int high = Math.max(highestFloorY, Math.max(start.getY(), goal.getY()));
         return new SearchBounds(
@@ -153,7 +153,7 @@ public final class VoxelTerrain {
                 Math.max(start.getZ(), goal.getZ()) + MARGIN_BLOCKS);
     }
 
-    /** この箱を{@link #MAX_CELLS}に収める最小のセル辺。収まらなければ0。 */
+    /** The smallest cell edge that fits this box in {@link #MAX_CELLS}. 0 if it doesn't fit. */
     public static int cellBlocksFor(SearchBounds box) {
         for (int candidate : CELL_LADDER) {
             long cells = (long) axisCells(box.minX(), box.maxX(), candidate)
@@ -167,10 +167,10 @@ public final class VoxelTerrain {
     }
 
     /**
-     * 箱に合わせてセル辺を決めた格子。箱が広すぎて扱えなければ{@code null}。
+     * A grid whose cell edge is chosen to fit the box. {@code null} if the box is too large to handle.
      *
-     * @param lavaPassable 溶岩に足場を置いて渡ってよいか（{@code CellSource#lavaBridgingEnabled}）。
-     *                     渡れない設定なら{@link #LAVA}の値段が跳ね上がる（{@link VoxelCostToGo}）
+     * @param lavaPassable whether lava may be crossed by placing footing ({@code CellSource#lavaBridgingEnabled}).
+     *                     If not, the price of {@link #LAVA} jumps ({@link VoxelCostToGo})
      */
     public static VoxelTerrain of(SearchBounds box, boolean lavaPassable) {
         int cellBlocks = cellBlocksFor(box);
@@ -189,16 +189,16 @@ public final class VoxelTerrain {
     }
 
     /**
-     * Xaeroの地図が1本の柱について記録している床を1つ写す。<b>ブロック解像度・レイヤーごとに
-     * 呼ぶこと</b>——チャンク平均の床（層1の{@link CoarseMap}）に落として渡すと、ネザーでは
-     * 通路がほとんど埋まらず、ガイドは「知らない場所をまっすぐ橋で渡る方が安い」と答える
-     * （実測: チャンク平均だと歩ける床が全セルの6%にしかならず、探索が天井へ吸い寄せられた）。
+     * Copy one floor that Xaero's map records for one column. <b>Call this per block resolution and per
+     * layer</b>: flattening to a chunk-average floor (layer 1's {@link CoarseMap}) leaves passages in the Nether
+     * mostly unfilled, and the guide answers "bridging straight across unknown places is cheaper"
+     * (measured: with chunk averages only 6% of all cells were walkable floor, and the search was pulled toward the ceiling).
      *
-     * <p>床の<b>上</b>のセルに印を付ける。{@code floorTopY}はXaeroの{@code MapBlock#getHeight}
-     * と同じ「いちばん上の固体ブロックのY」で、立つのはその1つ上。
+     * <p>Marks the cell <b>above</b> the floor. {@code floorTopY} is "the Y of the topmost solid block", the same as Xaero's
+     * {@code MapBlock#getHeight}, and you stand one above it.
      *
-     * @param lava 溶岩の面。立てないので{@link #LAVA}。橋を架けて渡る設定でも印は付ける——
-     *             溶岩の海と「地図が無いだけの場所」を同じ値段にすると、迂回すべき向きが消える
+     * @param lava lava surface. Not standable, so {@link #LAVA}. Marked even when bridging across is enabled:
+     *             giving a lava sea the same price as "a place that's merely unmapped" loses the direction to detour
      */
     public void markFloor(int x, int z, int floorTopY, boolean lava) {
         int standY = floorTopY + 1;
@@ -213,7 +213,7 @@ public final class VoxelTerrain {
         }
     }
 
-    /** {@link #markFloor}で箱の中へ写せた床の数（診断用）。0なら地図から何も取れていない。 */
+    /** Number of floors copied into the box by {@link #markFloor} (diagnostic). 0 means nothing was obtained from the map. */
     public int floorMarks() {
         return floorMarks;
     }
@@ -226,7 +226,7 @@ public final class VoxelTerrain {
         return cellBlocks;
     }
 
-    /** 溶岩に足場を置いて渡ってよいか（{@code CellSource#lavaBridgingEnabled}）。 */
+    /** Whether lava may be crossed by placing footing ({@code CellSource#lavaBridgingEnabled}). */
     boolean lavaPassable() {
         return lavaPassable;
     }
@@ -251,7 +251,7 @@ public final class VoxelTerrain {
         return kind[index];
     }
 
-    /** 種別ごとのセル数（診断用）。床の割合がそのままこの層の効きを表す。 */
+    /** Cell count per kind (diagnostic). The floor ratio directly reflects how effective this layer is. */
     public String breakdown() {
         int lava = 0;
         int standable = 0;
@@ -262,10 +262,10 @@ public final class VoxelTerrain {
                 standable++;
             }
         }
-        return "床=" + standable + ", 溶岩=" + lava + ", 空洞=" + (kind.length - lava - standable);
+        return "floor=" + standable + ", lava=" + lava + ", open=" + (kind.length - lava - standable);
     }
 
-    /** ブロック座標が箱の中にあるか。 */
+    /** Whether block coordinates are inside the box. */
     public boolean contains(int x, int y, int z) {
         return box.contains(x, y, z);
     }
@@ -274,7 +274,7 @@ public final class VoxelTerrain {
         return index(cellIndex(x, box.minX()), cellIndex(y, box.minY()), cellIndex(z, box.minZ()));
     }
 
-    /** 箱の外の座標は、いちばん近い縁のセルへ丸める。 */
+    /** Coordinates outside the box are clamped to the nearest edge cell. */
     int clampedIndexOfBlock(int x, int y, int z) {
         return index(clamp(cellIndex(clampBlock(x, box.minX(), box.maxX()), box.minX()), nx),
                 clamp(cellIndex(clampBlock(y, box.minY(), box.maxY()), box.minY()), ny),

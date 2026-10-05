@@ -22,18 +22,18 @@ import net.prason.xaeronav.config.XaeroNavConfig;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * キーバインド。既定はすべて未割り当てにしてある — 他のMODと取り合いになる操作ではないので、
- * 使いたい人が空いているキーへ自分で割り当てる方が事故が少ない。
+ * Key bindings. All are unbound by default: these aren't actions that compete with other mods,
+ * so it's less error-prone for whoever wants them to bind them to a free key themselves.
  *
- * <p>「見ているブロックへ経路探索」は、Xaeroを入れていない環境で唯一まともな目的地の指定手段になる
- * （それ以外は{@code /xaeronav goto <座標>}で座標を打ち込むしかない）。
+ * <p>"Pathfind to the block you're looking at" is the only reasonable way to specify a destination without Xaero
+ * (otherwise the only option is typing coordinates with {@code /xaeronav goto <coords>}).
  */
 public final class XaeroNavKeys {
 
     //? if >=1.21.9 {
-    /*// カテゴリの表示名は`key.category.<名前空間>.<パス>`の翻訳キーから引かれる
+    /*// The category display name is looked up from the translation key `key.category.<namespace>.<path>`
     //? if neoforge {
-    // NeoForgeはバニラのCategory.registerを非推奨にしていて、RegisterKeyMappingsEvent#registerCategoryで登録する
+    // NeoForge deprecates vanilla's Category.register; register through RegisterKeyMappingsEvent#registerCategory
     public static final KeyMapping.Category CATEGORY =
             new KeyMapping.Category(ResourceLocation.fromNamespaceAndPath(XaeroNav.MOD_ID, "main"));
     //?} else {
@@ -50,11 +50,11 @@ public final class XaeroNavKeys {
     public static final KeyMapping OPEN_CONFIG_SCREEN = unbound("key.xaeronav.open_config_screen");
 
     /**
-     * Xaeroの世界地図画面（{@code GuiMap}）が開いている間だけ効く、カーソル位置への経路探索キー。
-     * Xaero自身の地図内ショートカット（B=ウェイポイント作成 等）と同じ、Controls画面から設定する
-     * 通常のKeyMappingだが、{@link #handleInput}（通常プレイ中に毎tick消費するループ）では扱わない
-     * ——地図画面はMinecraftのキーイベントを自分で先取りするため、判定は
-     * {@code mixin.xaero.GuiMapKeyMixin}がGuiMap#keyPressedへの注入から直接{@code matches}で行う。
+     * Pathfind-to-cursor key that only works while Xaero's world map screen ({@code GuiMap}) is open.
+     * It's a normal KeyMapping set from the Controls screen, like Xaero's own in-map shortcuts (B = create waypoint, etc.),
+     * but it isn't handled in {@link #handleInput} (the loop consumed every tick during normal play):
+     * the map screen intercepts Minecraft's key events itself, so the check is done directly with {@code matches}
+     * by {@code mixin.xaero.GuiMapKeyMixin} via an injection into GuiMap#keyPressed.
      */
     public static final KeyMapping GOTO_MAP_CURSOR = unbound("key.xaeronav.goto_map_cursor");
 
@@ -65,7 +65,7 @@ public final class XaeroNavKeys {
         return new KeyMapping(name, InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_UNKNOWN, CATEGORY);
     }
 
-    /** ローダーごとの登録口（NeoForgeは{@code RegisterKeyMappingsEvent}、Fabricは{@code KeyBindingHelper}）へ流す。 */
+    /** Passes them to each loader's registration point ({@code RegisterKeyMappingsEvent} on NeoForge, {@code KeyBindingHelper} on Fabric). */
     public static void register(Consumer<KeyMapping> sink) {
         sink.accept(GOTO_LOOKING_AT);
         sink.accept(CLEAR);
@@ -75,15 +75,15 @@ public final class XaeroNavKeys {
     }
 
     /**
-     * 押されたぶんだけ処理する。{@code consumeClick}はキューを1つ取り出すので、
-     * 「押しっぱなしで毎tick発火」にはならない。
+     * Processes as many presses as occurred. {@code consumeClick} takes one from the queue, so
+     * holding the key doesn't fire every tick.
      */
     static void handleInput() {
         Minecraft mc = Minecraft.getInstance();
 
-        // 設定画面を開くだけの操作はプレイヤー/ワールドの状態を必要としないので、下のガードより前に
-        // 消費する。ガードの後ろに置くと、タイトル画面など未ロード中に押した分がキューに残ったまま
-        // ワールドへ入った瞬間に（何も押していないのに）画面が開く、という事故になる
+        // Opening the settings screen doesn't need player/world state, so consume it before the guard below.
+        // If placed after the guard, presses made while nothing is loaded (e.g. on the title screen) stay in the queue
+        // and the screen opens the moment you enter a world (without pressing anything)
         while (OPEN_CONFIG_SCREEN.consumeClick()) {
             ClientCompat.setScreen(mc, new XaeroNavConfigScreen(ClientCompat.screen(mc)));
         }
@@ -109,7 +109,7 @@ public final class XaeroNavKeys {
         }
     }
 
-    /** ブロック操作用のリーチ距離（4.5〜5マス程度）ではなく、描画距離相当まで狙えるようにする */
+    /** Allows targeting up to roughly the render distance, not the block-interaction reach (about 4.5-5 blocks) */
     private static final double LOOK_PICK_DISTANCE = 512.0;
 
     private static void gotoLookingAt(Minecraft mc) {
@@ -118,17 +118,17 @@ public final class XaeroNavKeys {
             GameCompat.tell(mc.player, TextCompat.translatable("hud.xaeronav.no_block_in_view"), true);
             return;
         }
-        // 狙ったブロックの中ではなく、その上に立ちたい。地面を見て指定するのが普通の使い方なので、
-        // 1マス上を渡す（実際に立てるかどうかはStanceFinderが寄せ直す）
+        // We want to stand on top of the targeted block, not inside it. The usual use is to point at the ground,
+        // so pass one block above (StanceFinder resnaps to where you can actually stand)
         BlockPos resolved = PathfindingState.INSTANCE.setGoal(blockHit.getBlockPos().above());
         if (resolved != null) {
             GameCompat.tell(mc.player, TextCompat.translatable("commands.xaeronav.goal_walk",
                     resolved.toShortString()), true);
         }
-        XaeroNav.LOGGER.debug("XaeroNav: 見ているブロックへ経路探索 {}", blockHit.getBlockPos());
+        XaeroNav.LOGGER.debug("XaeroNav: pathfinding to the block being looked at {}", blockHit.getBlockPos());
     }
 
-    /** タイトル/ロード画面で押されたworld依存キーを、次の参加時へ持ち越さない。 */
+    /** Don't carry world-dependent key presses made on the title/loading screen over to the next join. */
     private static void drainWorldKeys() {
         while (GOTO_LOOKING_AT.consumeClick()) {
             // drain

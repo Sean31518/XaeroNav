@@ -1,11 +1,12 @@
 package net.prason.xaeronav.pathfinding.astar;
 
 /**
- * 1回の探索の打ち切り条件と、ヒューリスティックの重み。
+ * Cutoff conditions for a single search, and the heuristic weight.
  *
- * <p>展開数の上限は「届かなかったときに打ち切る天井」で、経路が見つかればそこで探索は終わる。
- * 上げても届く経路の計算時間は変わらず、下げると届くはずの経路が手前で切れる。
- * 重みを上げると同じ展開数で到達距離が伸びるが、遠回りな経路が混じりうる。
+ * <p>The expansion limit is a "ceiling to give up at when the goal is not reached"; once a path is found the
+ * search ends there. Raising it does not change the time for paths that are reachable, and lowering it cuts off
+ * paths that should have been reachable. Raising the weight extends the reach for the same number of expansions,
+ * but roundabout paths may slip in.
  */
 public record SearchLimits(int maxExpandedNodes, long timeLimitMillis, double heuristicWeight) {
 

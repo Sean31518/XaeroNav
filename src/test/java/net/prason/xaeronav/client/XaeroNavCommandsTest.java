@@ -15,10 +15,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 
 /**
- * コマンドツリーの構文境界だけを見る。{@code goto}/{@code version}/{@code hooks}等の実行
- * ({@code execute}まで進める)は{@code PathfindingState.INSTANCE}や{@code ModList}等の実
- * Minecraft/loader状態に触れるため対象外——{@code parse}だけならそれらに触れずに構文だけ検証できる
- * （xaeronav.common.gradle.ktsの「テストはレジストリを起動しなくても動く範囲に留める」方針に沿う）。
+ * Checks only the command tree's syntax boundaries. Executing {@code goto}/{@code version}/{@code hooks}
+ * etc. (going as far as {@code execute}) is out of scope because it touches real Minecraft/loader state
+ * such as {@code PathfindingState.INSTANCE} and {@code ModList}; {@code parse} alone validates just the
+ * syntax without touching them (in line with xaeronav.common.gradle.kts's policy of "keeping tests to
+ * what works without bootstrapping the registries").
  */
 class XaeroNavCommandsTest {
 
@@ -56,9 +57,9 @@ class XaeroNavCommandsTest {
     void mapdataRejectsARadiusBeyondTheUpperBound() {
         CommandDispatcher<Object> dispatcher = newDispatcher();
         Object source = new Object();
-        // IntegerArgumentTypeの範囲チェックはparseの構文解析自体では効かず、実行(execute)して
-        // 初めてCommandSyntaxExceptionになる。mapdataの実処理（Xaero地図読み取り）には
-        // 到達しない——この境界チェックはコマンドの中身より前で必ず弾かれるため安全に実行できる。
+        // IntegerArgumentType's range check doesn't apply during parse itself; it only becomes a
+        // CommandSyntaxException on execute. mapdata's actual work (reading the Xaero map) is never
+        // reached: this boundary check always rejects before the command body, so it's safe to execute.
         assertThrows(CommandSyntaxException.class,
                 () -> dispatcher.execute("xaeronav debug mapdata 129", source));
     }

@@ -21,21 +21,21 @@ import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * ユーザーが1週間詰まっていた実ルートの番人。<b>この線が引けないことがネザーの主症状</b>
- * （「線が途切れて同じ場所で止まる」）だったので、ここが落ちたら3D粗層が壊れている。
+ * Guards a real route a user was stuck on for a week. <b>Not being able to draw this line was the main Nether
+ * symptom</b> ("the line breaks off and stops at the same place"), so if this fails, the 3D coarse layer is broken.
  *
- * <p>設定はユーザーの2026-09-08の保存に寄せてある（落下許容0・溶岩橋30）。
- * 診断で確かめた現行実装の姿:
+ * <p>Settings follow the user's save from 2026-09-08 (fall tolerance 0, lava bridge 30).
+ * What diagnostics confirmed about the current implementation:
  *
  * <pre>
- * 層1の2.5Dガイド        0ステップ（始点から1歩も動けない）
- * ガイド無し・全世界が見える  300万ノードで未到達
- * 3D粗層                 到達
+ * Layer 1's 2.5D guide           0 steps (can't move a single step from the start)
+ * No guide, whole world visible  not reached after 3 million nodes
+ * 3D coarse layer                reached
  * </pre>
  *
- * <p>疎な地図（訪問済みチャンクを25〜42%まで落とす）でも到達すること——これが
- * {@code VoxelCostToGo}の目的地アンカー堅牢化が効いているかの唯一の検査。堅牢化前は
- * 起点を床に限っていたため、到達がseed次第のコインフリップになっていた。
+ * <p>It must also be reached on a sparse map (visited chunks cut down to 25-42%). This is the only check that
+ * the destination-anchor hardening in {@code VoxelCostToGo} is working. Before the hardening, the starting points
+ * were limited to floors, so reaching it was a coin flip depending on the seed.
  */
 @Tag("slow")
 class NetherVoxelReachTest {
@@ -43,7 +43,7 @@ class NetherVoxelReachTest {
     private static final BlockPos START = new BlockPos(-328, 64, 696);
     private static final BlockPos GOAL = new BlockPos(-259, 64, 379);
 
-    /** {@code PathfindingState}の既定の描画距離相当。実機ログと同じ窓。 */
+    /** Equivalent to {@code PathfindingState}'s default render distance. The same window as the real-game logs. */
     private static final int WINDOW = 240;
 
     private static FakeCells terrain() throws Exception {
@@ -70,33 +70,33 @@ class NetherVoxelReachTest {
         PathResult withFlatGuide = new AStarPathfinder(windowed,
                 new SearchLimits(800_000, 60_000, 1.5), flat).search(START, GOAL, () -> false);
         assertTrue(withFlatGuide.steps().isEmpty(),
-                "層1の2.5Dガイドが動くようになったなら、この番人の前提を測り直すこと: "
-                        + withFlatGuide.termination() + " " + withFlatGuide.steps().size() + "手");
+                "if layer 1's 2.5D guide now works, re-measure this guard's premise: "
+                        + withFlatGuide.termination() + " " + withFlatGuide.steps().size() + " steps");
     }
 
     @Test
     void walksTheStallRouteWithTheVoxelLayer() throws Exception {
         FakeCells cells = terrain();
         record Variant(String name, double keep, long seed) { }
-        // 42%・25%は、Xaeroの欠損リージョンの悲観的な近似（実データは歩いた回廊が連続で埋まる）
+        // 42% and 25% are a pessimistic approximation of Xaero's missing regions (in real data the walked corridor is filled contiguously)
         Variant[] variants = {
-            new Variant("全チャンク訪問済み", 1.0, 0L),
+            new Variant("all chunks visited", 1.0, 0L),
             new Variant("42% seed1", 0.42, 1L),
             new Variant("42% seed2", 0.42, 2L),
             new Variant("25% seed1", 0.25, 1L),
         };
         for (Variant variant : variants) {
             VoxelCostToGo guide = guide(cells, variant.keep(), variant.seed());
-            assertNotNull(guide, "3D粗層が組めなかった: " + variant.name());
+            assertNotNull(guide, "couldn't build the 3D coarse layer: " + variant.name());
             long began = System.currentTimeMillis();
             ProgressiveWalk.Trace trace = ProgressiveWalk.trace(cells, START, GOAL, WINDOW,
                     ProgressiveWalk.Mode.REPAIR, ProgressiveWalk.Aim.GOAL, guide);
-            System.out.printf(Locale.ROOT, "%-18s -> %s cost=%.0f 手=%d (%d秒)%n", variant.name(),
-                    trace.stopped().isEmpty() ? "到達" : "未到達: " + trace.stopped(),
+            System.out.printf(Locale.ROOT, "%-18s -> %s cost=%.0f steps=%d (%ds)%n", variant.name(),
+                    trace.stopped().isEmpty() ? "reached" : "not reached: " + trace.stopped(),
                     ProgressiveWalk.cost(trace.steps()), trace.steps().size(),
                     (System.currentTimeMillis() - began) / 1000);
             assertTrue(!trace.steps().isEmpty(),
-                    variant.name() + "の地図で歩き通せなくなった: " + trace.stopped());
+                    variant.name() + ": can no longer walk all the way on this map: " + trace.stopped());
         }
     }
 }

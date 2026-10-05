@@ -7,39 +7,40 @@ import net.prason.xaeronav.xaero.XaeroPresence;
 import net.prason.xaeronav.xaero.XaeroWaypoints;
 
 /**
- * 目的地をXaeroのミニマップのウェイポイントとして出す。出せた間は{@link MapPathOverlay}の自前のピンを
- * 引っ込める——同じ場所に2つ印が重なるだけなので。
+ * Shows the destination as a waypoint on Xaero's minimap. While that works, {@link MapPathOverlay}'s own pin is
+ * hidden, since it would just stack two markers on the same spot.
  *
- * <p>このクラスは{@code xaero.*}を参照しない。参照は{@link XaeroWaypoints}に閉じ込め、ここは
- * 「導入されているか」「いつ置くか」「壊れていたら諦める」だけを見る。
+ * <p>This class doesn't reference {@code xaero.*}. References are confined to {@link XaeroWaypoints}; this class
+ * only looks at "is it installed", "when to place it", and "give up if it's broken".
  *
- * <p><b>{@link LinkageError}を捕まえるのが要点。</b>地図描画のmixinはrequired=falseで、注入先が
- * 変わった版では黙って無効になるが、こちらはXaeroのクラスを直接呼ぶ。Xaeroが型や引数を変えた版では
- * 呼んだ瞬間に{@link NoSuchMethodError}等が飛び、放っておけばゲームごと落ちる。連携が1つ消えるのと
- * ゲームが落ちるのとでは被害が違うので、ここだけは捕まえて機能を下ろす（一度失敗したら以後呼ばない）。
+ * <p><b>Catching {@link LinkageError} is the key point.</b> The map rendering mixins are required=false and silently
+ * disable themselves on versions where the injection target changed, but this calls Xaero's classes directly. On a
+ * Xaero version that changed types or arguments, a {@link NoSuchMethodError} or similar is thrown the moment it's
+ * called, and left alone it takes the whole game down. Losing one integration and crashing the game are very
+ * different levels of damage, so only here is it caught and the feature turned off (after one failure, it's never called again).
  */
 final class GoalWaypoint {
 
-    /** Xaeroの版が合わずに呼び出しが失敗したか。一度失敗したら以後は触らない。 */
+    /** Whether a call failed because the Xaero version didn't match. After one failure, it's never touched again. */
     private static boolean unavailable;
 
-    /** いまウェイポイントを置いてある目的地。置いていなければ{@code null}。 */
+    /** The destination a waypoint is currently placed for. {@code null} if none is placed. */
     private static volatile BlockPos placedAt;
 
     private GoalWaypoint() {
     }
 
-    /** Xaeroのウェイポイントで目的地を示せているか。自前のピンを出すかどうかの判断に使う。 */
+    /** Whether the destination is being shown by a Xaero waypoint. Used to decide whether to show our own pin. */
     static boolean placed() {
         return placedAt != null;
     }
 
     /**
-     * 今の目的地に合わせて置き直す。目的地が変わっていなければ何もしない。
+     * Re-places the waypoint to match the current destination. Does nothing if the destination hasn't changed.
      *
-     * <p>毎tick呼ぶこと。設定を切り替えた・ワールドに入り直した場合もここで追いつく——
-     * 置く場所（{@link PathfindingState#setGoal}）だけで面倒を見ると、設定を切った後も
-     * 目的地に着くまでウェイポイントが残る。
+     * <p>Call every tick. Toggled settings and re-entering the world are also caught up here; if only the place that
+     * sets it ({@link PathfindingState#setGoal}) took care of this, the waypoint would remain until the destination
+     * is reached even after the setting is turned off.
      */
     static void sync(BlockPos goal) {
         BlockPos wanted = goal != null && XaeroNavConfig.INSTANCE.goalMarkerEnabled()
@@ -60,8 +61,8 @@ final class GoalWaypoint {
         } catch (LinkageError incompatible) {
             unavailable = true;
             placedAt = null;
-            XaeroNav.LOGGER.warn("XaeroNav: Xaeroのウェイポイントに目的地を置けないため、この連携を無効にします"
-                    + "（Xaeroの版が対応範囲の外にある可能性があります）", incompatible);
+            XaeroNav.LOGGER.warn("XaeroNav: Can't place the destination as a Xaero waypoint, disabling this integration"
+                    + " (the Xaero version may be outside the supported range)", incompatible);
         }
     }
 }

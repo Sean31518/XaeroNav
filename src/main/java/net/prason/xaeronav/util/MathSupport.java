@@ -1,9 +1,9 @@
 package net.prason.xaeronav.util;
 
 /**
- * {@link Math#clamp}相当。JDK21で追加されたオーバーロードなので、Java 17ノード（1.20.1）向けに
- * 自前で持つ。ローダー/バージョンを問わず同じ結果になるので、{@code pathfinding/}からでも
- * ゲート無しで呼べる。
+ * Equivalent of {@link Math#clamp}. That overload was added in JDK 21, so it's provided here for Java 17 nodes
+ * (1.20.1). It gives the same result regardless of loader/version, so it can be called from {@code pathfinding/}
+ * without gating.
  */
 public final class MathSupport {
 

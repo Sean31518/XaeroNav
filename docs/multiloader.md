@@ -1,30 +1,30 @@
-# 対応ターゲット（MC バージョン × ローダー）の作り
+# How the supported targets (MC version × loader) are built
 
-XaeroNav は 1 つのソースツリーから、対応するローダーとバージョンのぶんだけ jar を作ります。
-その仕組みと、増やすときに触る場所をまとめます。
+XaeroNav builds one jar per supported loader and version from a single source tree.
+This document covers how that works and where to make changes when adding targets.
 
-設計上の不変条件は [ADR-003: Loader, Xaero hook, and distribution contracts](architecture/003-platform-integration.md)
-を参照してください。この文書は、各ノードを追加・保守する具体的な手順を扱います。
+For the design invariants, see [ADR-003: Loader, Xaero hook, and distribution contracts](architecture/003-platform-integration.md).
+This document covers the concrete steps for adding and maintaining each node.
 
-## いまのターゲット
+## Current targets
 
-| ノード | Minecraft | ローダー |
+| Node | Minecraft | Loader |
 |---|---|---|
 | `26.3-fabric` | 26.3 | Fabric Loader 0.19.0+ / Fabric API 0.161.0+ |
 | `26.3-forge` | 26.3 | Forge 66.0.9+ |
 | `26.2-fabric` | 26.2 | Fabric Loader 0.19.0+ / Fabric API 0.161.0+ |
 | `26.2-forge` | 26.2 | Forge 65.1.3+ |
 | `26.2-neoforge` | 26.2 | NeoForge 26.2.0.88+ |
-| `26.1.2-fabric` | 26.1.2（26.1・26.1.1でも） | Fabric Loader 0.19.0+ / Fabric API 0.155.3+ |
+| `26.1.2-fabric` | 26.1.2 (also 26.1, 26.1.1) | Fabric Loader 0.19.0+ / Fabric API 0.155.3+ |
 | `26.1.2-forge` | 26.1.2 | Forge 64.1.3+ |
 | `26.1.2-neoforge` | 26.1.2 | NeoForge 26.1.2.112+ |
 | `1.21.11-fabric` | 1.21.11 | Fabric Loader 0.17.3+ / Fabric API 0.141.6+ |
 | `1.21.11-forge` | 1.21.11 | Forge 61.2.1+ |
 | `1.21.11-neoforge` | 1.21.11 | NeoForge 21.11.45+ |
-| `1.21.10-fabric` | 1.21.10（1.21.9でも） | Fabric Loader 0.17.0+ / Fabric API 0.138.4+ |
+| `1.21.10-fabric` | 1.21.10 (also 1.21.9) | Fabric Loader 0.17.0+ / Fabric API 0.138.4+ |
 | `1.21.10-forge` | 1.21.10 | Forge 60.1.15+ |
 | `1.21.10-neoforge` | 1.21.10 | NeoForge 21.10.64+ |
-| `1.21.8-fabric` | 1.21.8（1.21.6・1.21.7でも） | Fabric Loader 0.16.13+ / Fabric API 0.136.1+ |
+| `1.21.8-fabric` | 1.21.8 (also 1.21.6, 1.21.7) | Fabric Loader 0.16.13+ / Fabric API 0.136.1+ |
 | `1.21.8-forge` | 1.21.8 | Forge 58.1.22+ |
 | `1.21.8-neoforge` | 1.21.8 | NeoForge 21.8.54+ |
 | `1.21.5-fabric` | 1.21.5 | Fabric Loader 0.16.10+ / Fabric API 0.128.2+ |
@@ -36,364 +36,367 @@ XaeroNav は 1 つのソースツリーから、対応するローダーとバ�
 | `1.21.3-fabric` | 1.21.3 | Fabric Loader 0.15.11+ / Fabric API 0.114.1+ |
 | `1.21.3-forge` | 1.21.3 | Forge 53.1.2+ |
 | `1.21.3-neoforge` | 1.21.3 | NeoForge 21.3+ |
-| `1.21.1-neoforge` | 1.21.1（1.21でも） | NeoForge 21.0+ |
-| `1.21.1-fabric` | 1.21.1（1.21でも） | Fabric Loader 0.15.11+ / Fabric API 0.102.0+ |
+| `1.21.1-neoforge` | 1.21.1 (also 1.21) | NeoForge 21.0+ |
+| `1.21.1-fabric` | 1.21.1 (also 1.21) | Fabric Loader 0.15.11+ / Fabric API 0.102.0+ |
 | `1.21.1-forge` | 1.21.1 | Forge 52.1.2+ |
-| `1.20.6-fabric` | 1.20.6（1.20.5でも） | Fabric Loader 0.15.11+ / Fabric API 0.97.8+ |
+| `1.20.6-fabric` | 1.20.6 (also 1.20.5) | Fabric Loader 0.15.11+ / Fabric API 0.97.8+ |
 | `1.20.6-forge` | 1.20.6 | Forge 50.2.1+ |
 | `1.20.6-neoforge` | 1.20.6 | NeoForge 20.6+ |
 | `1.20.4-neoforge` | 1.20.4 | NeoForge 20.4+ |
-| `1.20.4-fabric` | 1.20.4（1.20.3でも） | Fabric Loader 0.15.11+ / Fabric API 0.91.1+ |
+| `1.20.4-fabric` | 1.20.4 (also 1.20.3) | Fabric Loader 0.15.11+ / Fabric API 0.91.1+ |
 | `1.20.4-forge` | 1.20.4 | Forge 49.1.10+ |
 | `1.20.2-fabric` | 1.20.2 | Fabric Loader 0.15.11+ / Fabric API 0.91.6+ |
 | `1.20.2-forge` | 1.20.2 | Forge 48+ |
-| `1.20.1-fabric` | 1.20.1（1.20でも） | Fabric Loader 0.15.11+ / Fabric API |
-| `1.20.1-forge` | 1.20.1（1.20でも） | Forge 46+ |
+| `1.20.1-fabric` | 1.20.1 (also 1.20) | Fabric Loader 0.15.11+ / Fabric API |
+| `1.20.1-forge` | 1.20.1 (also 1.20) | Forge 46+ |
 | `1.19.2-fabric` | 1.19.2 | Fabric Loader 0.15.11+ / Fabric API 0.77.0+ |
 | `1.19.2-forge` | 1.19.2 | Forge 43+ |
 | `1.18.2-fabric` | 1.18.2 | Fabric Loader 0.15.11+ / Fabric API 0.77.0+ |
 | `1.18.2-forge` | 1.18.2 | Forge 40+ |
-| `1.16.5-fabric` | 1.16.5 | Fabric Loader 0.15.11+ / Fabric API 0.42.0+（Java 8） |
-| `1.16.5-forge` | 1.16.5 | Forge 36.2.39+（Java 8） |
+| `1.16.5-fabric` | 1.16.5 | Fabric Loader 0.15.11+ / Fabric API 0.42.0+ (Java 8) |
+| `1.16.5-forge` | 1.16.5 | Forge 36.2.39+ (Java 8) |
 
-**1.20.1にNeoForgeノードは無い**（意図的）。その時点のNeoForgeはForgeとjarレベルで互換
-（NeoForge自身も1.20.1ではForgeの使用を推奨）で、Xaeroも"neoforge"向けの1.20.1ビルドを
-配っていない（1.20.4からしか無い）。1.20.1でNeoForgeを使うユーザーは`1.20.1-forge`のjarを使う。
+**There is no NeoForge node for 1.20.1** (intentionally). NeoForge at that point was jar-level compatible
+with Forge (NeoForge itself recommended using Forge on 1.20.1), and Xaero doesn't ship a 1.20.1 build
+for "neoforge" either (only from 1.20.4 on). Users running NeoForge on 1.20.1 use the `1.20.1-forge` jar.
 
-ノード名は `<MC バージョン>-<ローダー>`。切り分けには [Stonecutter](https://stonecutter.kikugie.dev/)
-を使っています（Architectury は入れていません）。
+Node names are `<MC version>-<loader>`. The split is done with [Stonecutter](https://stonecutter.kikugie.dev/)
+(Architectury is not used).
 
-## ファイルの役割
+## File roles
 
-| ファイル | 中身 |
+| File | Contents |
 |---|---|
-| `settings.gradle.kts` | ノードの一覧。**ノードを増やすのはここの 1 行** |
-| `stonecutter.properties.toml` | ノードごとの依存バージョン。**ノードを増やすとここにテーブルが 1 つ増える** |
-| `stonecutter.gradle.kts` | 全ノード共通の入口（`buildAll` / `collectJars` / `printNodes`）と spotless |
-| `build.neoforge.gradle.kts` / `build.fabric.gradle.kts` / `build.forge.gradle.kts` | ローダーごとのビルド。ローダーが増えたときだけ増える |
-| `buildSrc/src/main/kotlin/xaeronav.common.gradle.kts` | 全ノード共通のビルド設定（Java toolchain・テスト・jar 名・Fletching Tableによるmixin登録）。Java版はMCバージョンで分岐（1.20.5未満は17・以降は21） |
-| `src/main/java/net/prason/xaeronav/platform/` | ローダーごとの起動処理とイベント配線 |
-| `src/main/resources/xaeronav.accesswidener` | Fabric専用。Mojang公式マッピングの一部ネストクラス（`RenderType.CompositeState`等）は自クラスの宣言とInnerClasses属性の宣言が食い違っており、外部から参照するには開放が要る（NeoForge/Forgeの`accesstransformer.cfg`のFabric版） |
-| `build.forge-legacy.gradle.kts` | 1.18.2・1.19.2・1.20.1のForgeノード。1.21.1-forgeとは違うツールチェーン（`net.neoforged.moddev.legacyforge`、ForgeGradleではない） |
-| `build.forge-116.gradle.kts` | 1.16.5のForgeノード専用。Architectury Loom（公式マッピングで1.16.5のForgeを扱えるのはこれだけ） |
-| `buildSrc/src/main/kotlin/ForgeCoremodNames.kt` | 1.16.5-forgeの開発実行用。XaeroのcoremodにあるSRG名を開発環境の名前へ書き換える |
+| `settings.gradle.kts` | The node list. **Adding a node is one line here** |
+| `stonecutter.properties.toml` | Per-node dependency versions. **Adding a node adds one table here** |
+| `stonecutter.gradle.kts` | Entry points shared by all nodes (`buildAll` / `collectJars` / `printNodes`) and spotless |
+| `build.neoforge.gradle.kts` / `build.fabric.gradle.kts` / `build.forge.gradle.kts` | Per-loader builds. Only grows when a loader is added |
+| `buildSrc/src/main/kotlin/xaeronav.common.gradle.kts` | Build settings shared by all nodes (Java toolchain, tests, jar name, mixin registration via Fletching Table). The Java version branches on the MC version (17 below 1.20.5, 21 from then on) |
+| `src/main/java/net/prason/xaeronav/platform/` | Per-loader startup and event wiring |
+| `src/main/resources/xaeronav.accesswidener` | Fabric only. Some nested classes in Mojang's official mappings (`RenderType.CompositeState` etc.) declare different access in their own class file than in the InnerClasses attribute, so referencing them from outside requires widening (the Fabric counterpart of NeoForge/Forge's `accesstransformer.cfg`) |
+| `build.forge-legacy.gradle.kts` | Forge nodes for 1.18.2, 1.19.2 and 1.20.1. A different toolchain from 1.21.1-forge (`net.neoforged.moddev.legacyforge`, not ForgeGradle) |
+| `build.forge-116.gradle.kts` | Dedicated to the 1.16.5 Forge node. Architectury Loom (the only option that handles 1.16.5 Forge with official mappings) |
+| `buildSrc/src/main/kotlin/ForgeCoremodNames.kt` | For 1.16.5-forge dev runs. Rewrites the SRG names in Xaero's coremods to the dev-environment names |
 
-`gradle.properties` にあるのは MOD 自身のメタデータ（id・名前・バージョン）だけです。
-Minecraft / ローダー / Xaero の版は `stonecutter.properties.toml` が唯一の情報源で、
-`neoforge.mods.toml` / `fabric.mod.json` / `mods.toml`（Forge）へもそこから流し込まれます。
+`gradle.properties` only holds the mod's own metadata (id, name, version).
+`stonecutter.properties.toml` is the single source of truth for the Minecraft / loader / Xaero versions,
+and they flow from there into `neoforge.mods.toml` / `fabric.mod.json` / `mods.toml` (Forge).
 
-Xaero だけは版を2つ持ちます。`deps.xaero_worldmap` / `deps.xaero_minimap` はコンパイルと開発クライアントに使う版、
-`deps.xaero_worldmap_min` / `deps.xaero_minimap_min` は MOD 定義へ書く「動く下限」です。NeoForge / Forge は任意の依存でも
-下限を守らせ、古い Xaero が入っているとゲームを起動させません。コンパイル用の版を最新へ上げても、下限は動かしません。
-下限を下げるときは、その版でビルドし、Xaero への参照（`javap` で見たメソッド・フィールドの型と refmap）が
-今の版でのビルドと一致することを確かめます。
+Xaero alone has two versions. `deps.xaero_worldmap` / `deps.xaero_minimap` are the versions used for compilation and the dev client;
+`deps.xaero_worldmap_min` / `deps.xaero_minimap_min` are the "works from" lower bounds written into the mod metadata. NeoForge / Forge
+enforce lower bounds even on optional dependencies and refuse to launch the game with an older Xaero installed. Bumping the
+compile version to the latest does not move the lower bound.
+When lowering the lower bound, build against that version and confirm that the references to Xaero (method and field types as
+seen with `javap`, and the refmap) match a build against the current version.
 
-## Mixin一覧の生成
+## Generating the mixin list
 
-[Fletching Table](https://stonecutter.kikugie.dev/wiki/fletching-table) のJava annotation processorが
-各ノードのコンパイル時に`@Mixin`クラスを検出し、`xaeronav-xaero.mixins.json`の`client`一覧へ
-自動登録します。このJSONは生成元のテンプレートでもあり、`required`・`minVersion`・`package`・
-`refmap`・`injectors`など、クラス一覧以外の設定は引き続きここで管理します。テンプレートの
-`client`は空のままにし、クラス名を手で追加しないでください。追加・改名・削除はJava側の
-`@Mixin`から生成結果へ反映されます。
+The Java annotation processor of [Fletching Table](https://stonecutter.kikugie.dev/wiki/fletching-table)
+detects `@Mixin` classes when each node compiles and registers them automatically in the `client` list of
+`xaeronav-xaero.mixins.json`. This JSON is also the template for the generated file; everything other than
+the class list, such as `required`, `minVersion`, `package`, `refmap` and `injectors`, is still managed here.
+Leave the template's `client` empty and don't add class names by hand. Additions, renames and removals are
+reflected in the generated output from the `@Mixin` annotations on the Java side.
 
-生成は`processResources`より前に行われるため、`${mixin_compatibility_level}`の版別展開も維持されます。
-Forge固有のrefmap生成やMANIFESTの`MixinConfigs`登録はFletching Tableの対象外なので、
-`build.forge.gradle.kts` / `build.forge-legacy.gradle.kts`側の設定を削除しないでください。
+Generation runs before `processResources`, so the per-version expansion of `${mixin_compatibility_level}` is preserved.
+Forge-specific refmap generation and `MixinConfigs` registration in the MANIFEST are outside Fletching Table's scope,
+so don't remove the settings in `build.forge.gradle.kts` / `build.forge-legacy.gradle.kts`.
 
-## ノードを増やす
+## Adding a node
 
-1. `settings.gradle.kts` の `match(...)` に 1 行足す（例: `match("1.21.5", "neoforge", "fabric")`）
-2. `stonecutter.properties.toml` に `[<ローダー>."<MC バージョン>"]` のテーブルを足す
-   （依存バージョンは実在するものを実際に確認してから書く。推測で書かない）
-3. `./gradlew build` で全ノードのコンパイルを通す
+1. Add one line to `match(...)` in `settings.gradle.kts` (e.g. `match("1.21.5", "neoforge", "fabric")`)
+2. Add a `[<loader>."<MC version>"]` table to `stonecutter.properties.toml`
+   (verify that each dependency version actually exists before writing it down; don't guess)
+3. Run `./gradlew build` to compile all nodes
 
-**同じMCバージョンへローダーを1つ足すだけなら、ここまでで済む**（1.21.1-forge追加のとき）。
-**新しいMCバージョンを足す場合はさらに要る**（1.20.1-fabric追加で判明。詳細は下の「版差が出る場所」）:
+**If you're only adding one more loader to an existing MC version, that's all** (as when 1.21.1-forge was added).
+**Adding a new MC version needs more** (found when adding 1.20.1-fabric; see "Where versions differ" below for details):
 
-- `buildSrc/.../xaeronav.common.gradle.kts`のJava toolchain分岐に新しい境界が要らないか
-  （MC 1.20.5未満はJava 17、以降はJava 21——2バージョン以上増えると分岐の書き方自体を見直す）
-- `pack.mcmeta`の形式（`buildSrc`の`packFormatFor`。未登録の版はビルドが止まる。クライアントjarの`version.json`の`pack_version`から足す）
-- `xaeronav-xaero.mixins.json`の`compatibilityLevel`（同上、`mixinCompatibilityLevel`変数）
-- `fabric.mod.json`の`java`依存（Fabricのみ、`java_version`変数）
+- Whether the Java toolchain branch in `buildSrc/.../xaeronav.common.gradle.kts` needs a new boundary
+  (Java 17 below MC 1.20.5, Java 21 from then on; if it grows by two or more versions, rethink how the branch is written)
+- The `pack.mcmeta` format (`packFormatFor` in `buildSrc`. The build stops for unregistered versions. Add it from `pack_version` in the client jar's `version.json`)
+- `compatibilityLevel` in `xaeronav-xaero.mixins.json` (same as above, the `mixinCompatibilityLevel` variable)
+- The `java` dependency in `fabric.mod.json` (Fabric only, the `java_version` variable)
 
-**Forgeのノードはmixin configの登録経路が違う。** mods.tomlの`[[mixins]]`を読むのはNeoForgeだけで、
-Forgeは版に関わらずMixin本体がjarのMANIFESTの`MixinConfigs`しか見ない。欠けるとXaero連携が本番で
-黙って1本も当たらない（`required=false`なので落ちもしない）。ビルド後は
-`unzip -p <jar> META-INF/MANIFEST.MF`で`MixinConfigs`を確かめる。
+**Forge nodes register the mixin config through a different path.** Only NeoForge reads `[[mixins]]` from mods.toml;
+on Forge, regardless of version, Mixin itself only looks at `MixinConfigs` in the jar's MANIFEST. If it's missing, the
+Xaero integration silently applies nothing in production (and doesn't crash either, since `required=false`). After building,
+check `MixinConfigs` with `unzip -p <jar> META-INF/MANIFEST.MF`.
 
-- 配布jar: `jar`タスクの`manifest.attributes("MixinConfigs" to ...)`（jarJarの出力にも引き継がれる）
-- 開発実行: MODをクラスディレクトリから読むのでMANIFESTが無い。ForgeGradleは`args("--mixin.config", ...)`、
-  ModDevGradle legacyforgeは`mixin { config(...) }`で渡す
-- 本番がSRG名で動く1.20.x以前のForgeはrefmapも要る（`mixin { add(sourceSets["main"], ...) }`）。
-  公式マッピングで動く1.21.1-forgeには要らない
+- Distribution jar: `manifest.attributes("MixinConfigs" to ...)` on the `jar` task (carried over into the jarJar output)
+- Dev runs: the mod is loaded from class directories, so there is no MANIFEST. ForgeGradle passes it via `args("--mixin.config", ...)`,
+  ModDevGradle legacyforge via `mixin { config(...) }`
+- Forge 1.20.x and earlier, which run on SRG names in production, also need a refmap (`mixin { add(sourceSets["main"], ...) }`).
+  1.21.1-forge, which runs on official mappings, doesn't
 
-CI は `printNodes` からノード一覧を作るので、ワークフローの書き換えは要りません
-（`runtime`ジョブをPRで正典ノードだけに絞る判定はファイルパスベースなので、`stonecutter.properties.toml`・
-`settings.gradle.kts`・`mixin/`のいずれかを触るPRなら自動で全ノードに広がります）。
+CI builds the node list from `printNodes`, so the workflows don't need to be edited
+(the decision to narrow the `runtime` job to the canonical node on PRs is based on file paths, so a PR that touches any of
+`stonecutter.properties.toml`, `settings.gradle.kts` or `mixin/` automatically expands to all nodes).
 
-## 版差が出る場所
+## Where versions differ
 
-`1.20.1-fabric` を足したときに実際に踏んだ版差（1.20.1 ⇔ 1.21.1）。1.21.5 の
-`RenderPipeline` / `GpuBuffer` 全面リワークより手前でも、これだけの差がある。
+The version differences actually hit when adding `1.20.1-fabric` (1.20.1 ⇔ 1.21.1). Even before the full
+`RenderPipeline` / `GpuBuffer` rework in 1.21.5, there are this many differences.
 
-- **GUI画面の基底クラス**（`client/gui/XaeroNavConfigScreen`）。1.21.1の`OptionsSubScreen`は
-  `net.minecraft.client.gui.screens.options`パッケージ・`addOptions()`フックを持つが、1.20.1の
-  同名クラスは`net.minecraft.client.gui.screens`直下にあり、`addOptions()`が無く`init()`を
-  自分で書く必要がある（`OptionsList`の生成・Doneボタンの配置まで自前）
-- **頂点バッファAPI**（`client/PathRenderer`の`vertex`/`line`）。1.21.1は`addVertex(pose,x,y,z)`
-  を起点にした新API（endVertex不要）、1.20.1は`vertex(x,y,z)`起点で`color`/`normal`を
-  チェーンし最後に`endVertex()`で確定する旧API
-- **`RenderType.CompositeState` / `RenderStateShard.LineStateShard`のアクセス**
-  （`client/NavRenderTypes`）。両バージョンとも自クラスファイルの宣言は`public`だが、
-  外側のクラス（`RenderType`/`RenderStateShard`）が持つInnerClasses属性上の宣言は`protected`——
-  javacは後者を見て解決するため、ゲートではなくアクセス開放が要る。NeoForge/Forgeは
-  `accesstransformer.cfg`で開放しているのと同じ話が、Fabricでは`xaeronav.accesswidener`
-  （`accessible class ...`）になる
-- `mixin/xaero/` が触る Xaero 側の内部（`CustomRenderTypes` / `MapRenderHelper` / `GuiMap#render` の
-  `endBatch()` の ordinal）。ここは **Minecraft ではなく Xaero の更新で動きます**
+- **GUI screen base class** (`client/gui/XaeroNavConfigScreen`). 1.21.1's `OptionsSubScreen` lives in the
+  `net.minecraft.client.gui.screens.options` package and has an `addOptions()` hook, but the 1.20.1 class of the
+  same name sits directly under `net.minecraft.client.gui.screens`, has no `addOptions()`, and requires writing
+  `init()` yourself (including creating the `OptionsList` and placing the Done button)
+- **Vertex buffer API** (`vertex`/`line` in `client/PathRenderer`). 1.21.1 has the new API starting from
+  `addVertex(pose,x,y,z)` (no endVertex needed); 1.20.1 has the old API that starts from `vertex(x,y,z)`, chains
+  `color`/`normal`, and finalizes with `endVertex()`
+- **Access to `RenderType.CompositeState` / `RenderStateShard.LineStateShard`**
+  (`client/NavRenderTypes`). In both versions the declaration in the class's own file is `public`, but the declaration
+  in the InnerClasses attribute of the outer class (`RenderType`/`RenderStateShard`) is `protected`;
+  javac resolves against the latter, so this needs access widening rather than a gate. What NeoForge/Forge
+  widen in `accesstransformer.cfg` becomes `xaeronav.accesswidener` on Fabric
+  (`accessible class ...`)
+- The Xaero internals touched by `mixin/xaero/` (`CustomRenderTypes` / `MapRenderHelper` / the ordinal of
+  `endBatch()` in `GuiMap#render`). These **change with Xaero updates, not Minecraft updates**
 
-### JDK自体のバージョン差はゲートしない
+### Don't gate on JDK version differences
 
-1.20.1はJava 17必須（1.21.1はJava 21）。`Math.clamp`・`List#getLast()`等のJDK21で追加された
-標準ライブラリAPIは、`//?`で分岐せず**自前の実装に置き換えて両バージョンで同じコードを使う**
-（`util/MathSupport`、テストコードの`list.get(list.size() - 1)`など）。バージョンゲートは
-Minecraft自体のAPI差にだけ使う。
+1.20.1 requires Java 17 (1.21.1 uses Java 21). Standard library APIs added in JDK 21, such as `Math.clamp` and
+`List#getLast()`, are not branched with `//?`; instead **they are replaced with our own implementation so both versions
+share the same code** (`util/MathSupport`, `list.get(list.size() - 1)` in test code, etc.). Version gates are only for
+API differences in Minecraft itself.
 
-## 1.18.2・1.19.2
+## 1.18.2 and 1.19.2
 
-`>=1.17`のゲートは、実際には「1.16.5より後」ではなく個々のAPIの導入版で分かれる。1.18.2・1.19.2を足すときに
-境界を実際の版へ振り直した（1.16.5と1.20.1の側の真偽は変えていない）。
+`>=1.17` gates actually split on the version where each individual API was introduced, not on "after 1.16.5". When adding
+1.18.2 and 1.19.2, the boundaries were moved to the real versions (without changing what evaluates true on the 1.16.5 and 1.20.1 sides).
 
-| 境界 | ゲートしているもの |
+| Boundary | What it gates |
 |---|---|
-| 1.19 | `Component.translatable/literal`（`TextCompat`）、Forge 41+の`RegisterKeyMappingsEvent`・`ConfigScreenHandler`・`RegisterGuiOverlaysEvent`・`ClientPlayerNetworkEvent.LoggingIn/Out`・`EnchantmentHelper.getTagEnchantmentLevel`、Fabric APIのクライアントコマンドv2 |
-| 1.19.3 | `OptionInstance`（設定画面はそれ以前は1.16.5と同じ独自の`Screen`）、`BuiltInRegistries`、`org.joml`、`SoundEvents`のHolder化 |
+| 1.19 | `Component.translatable/literal` (`TextCompat`), Forge 41+'s `RegisterKeyMappingsEvent`, `ConfigScreenHandler`, `RegisterGuiOverlaysEvent`, `ClientPlayerNetworkEvent.LoggingIn/Out`, `EnchantmentHelper.getTagEnchantmentLevel`, Fabric API client commands v2 |
+| 1.19.3 | `OptionInstance` (before that, the config screen is the same custom `Screen` as 1.16.5), `BuiltInRegistries`, `org.joml`, `SoundEvents` becoming Holders |
 | 1.19.4 | `BlockPos.containing` |
-| 1.20 | `GuiGraphics`、`RenderType.debugQuads`・`RenderType.create`の公開、`BlockState.canBeReplaced()`、`DoorBlock.type()`、`CommandSourceStack.sendSuccess(Supplier, boolean)`、`BlockPosArgument.getBlockPos`、Xaeroの`endBatch()`のordinal |
+| 1.20 | `GuiGraphics`, `RenderType.debugQuads` and `RenderType.create` becoming public, `BlockState.canBeReplaced()`, `DoorBlock.type()`, `CommandSourceStack.sendSuccess(Supplier, boolean)`, `BlockPosArgument.getBlockPos`, the ordinal of Xaero's `endBatch()` |
 
-- **Xaeroの`endBatch()`のordinalは1.18.2・1.19.2で1**（1.20+は0）。`GuiMap#render`と`renderChunksToFBO`の先頭に前フレームの取り残しを
-  flushする呼び出しがもう1回ある（1.16.5と同じ）。Xaeroのjarのバイトコードを1.18.2・1.19.2・1.20.1で並べて確かめた。
-  ordinal 0のままだと例外にならず別のバッファへ描いてしまい、経路が地図に出ない。
-- **`RenderType.create`（7引数）は1.20より前ではprivate**。全ノード共通の`xaeronav.accesswidener`へ足すと、メソッドの形が違う
-  1.16.5・1.21.xでAWの適用が失敗するので、1.18・1.19のFabricノードだけ`build.fabric.gradle.kts`が開放を足したAWを生成して
-  jarへ入れる（ForgeはATが`RenderType *`を開放済み）。`RenderStateShard`の定数も、1.20より前のFabric APIは開放していないので
-  `NavRenderTypes`の内部クラス（`RenderStateShard`のサブクラス）から読む。
-- 1.18.2にはFabric APIのクライアントコマンドv2が無く（v1の`ClientCommandManager.DISPATCHER`）、Forge 40には
-  `RegisterKeyMappingsEvent`・`ConfigScreenHandler`・`RegisterGuiOverlaysEvent`・`ClientPlayerNetworkEvent.LoggingIn`が無い
-  （`ClientRegistry`・`ConfigGuiHandler`・`RenderGameOverlayEvent.Post`・`LoggedInEvent`を使う）。
-- `DiggableBlocks`は、1.19で入った洞窟の置換タグ（`*_carver_replaceables`）・`#sculk_replaceable`・`SCULK`・`MANGROVE_ROOTS`が
-  1.18.2に無いので、石・土・砂・テラコッタ・ナイリウム等のタグと明示したブロックで同じ範囲を近似している。
+- **The ordinal of Xaero's `endBatch()` is 1 on 1.18.2 and 1.19.2** (0 on 1.20+). At the start of `GuiMap#render` and
+  `renderChunksToFBO` there is one extra call that flushes leftovers from the previous frame (same as 1.16.5). Verified by
+  comparing the bytecode of Xaero's jars for 1.18.2, 1.19.2 and 1.20.1. With ordinal 0 there is no exception, but it draws into
+  a different buffer and the route doesn't show on the map.
+- **`RenderType.create` (7 arguments) is private before 1.20**. Adding it to the shared `xaeronav.accesswidener` would make the
+  AW fail to apply on 1.16.5 and 1.21.x, where the method has a different shape, so for the 1.18 and 1.19 Fabric nodes only,
+  `build.fabric.gradle.kts` generates an AW with the extra widening and puts it in the jar (on Forge the AT already widens
+  `RenderType *`). The `RenderStateShard` constants aren't widened by Fabric API before 1.20 either, so they are read from an
+  inner class of `NavRenderTypes` (a subclass of `RenderStateShard`).
+- 1.18.2 has no Fabric API client commands v2 (v1's `ClientCommandManager.DISPATCHER`), and Forge 40 lacks
+  `RegisterKeyMappingsEvent`, `ConfigScreenHandler`, `RegisterGuiOverlaysEvent` and `ClientPlayerNetworkEvent.LoggingIn`
+  (`ClientRegistry`, `ConfigGuiHandler`, `RenderGameOverlayEvent.Post` and `LoggedInEvent` are used instead).
+- 1.18.2 lacks the cave replacement tags added in 1.19 (`*_carver_replaceables`), `#sculk_replaceable`, `SCULK` and
+  `MANGROVE_ROOTS`, so `DiggableBlocks` approximates the same set with tags for stone, dirt, sand, terracotta, nylium etc. plus explicitly listed blocks.
 
 ## 1.20.4
 
-Fabric・Forge・NeoForgeの3ローダーを持つ。1.20.1とゲーム側のAPIは近いが、ビルドとローダーAPIには次の差がある。
+Has all three loaders: Fabric, Forge and NeoForge. The game-side API is close to 1.20.1, but the build and loader APIs differ as follows.
 
-- `OptionsList`のコンストラクタは1.20.3から行高の引数を取らない。設定画面はこの境界で分岐する
-- Forge 49.1.10からclient tickは`ClientTickEvent.Post`。それより前（1.20.2のForge 48を含む）は`phase == END`で判定する
-- Forge 1.20.4はFG7でビルドするが、本番はまだSRG名で動く。MixinExtrasをjar-in-jarした後のjarを
-  Renamer GradleでSRGへ変換し、その出力だけを配布する。Xaeroの`GuiMap#keyPressed`もSRG実名を注入先にする
-  - 変換タスク（`renameJarJar`）のmapはRenamerの既定（`renamer.mappings`）に任せる。手で足すと2ファイルになって拒否される
-  - 注入先の文字列をSRGへ引くrefmapは、annotation processorにmixinextras-commonも載せないと`@WrapOperation`分が空になる。
-    名前もmixin configの`"refmap"`に揃える（`xaeronav.refmap.json`）。`verifyDistribution`が中身まで見る
-  - 開発実行では、Xaero同梱refmapのSRG名をnamedへ読み替えるファイルをMixin 0.8.5が読める`srg`形式で渡す
-    （Renamerが渡す`tsrg`は黙って無視される）
-- NeoForge 20.4は21.xより古いAPIを使う。config登録は`ModLoadingContext`、設定画面は
-  `ConfigScreenHandler.ConfigScreenFactory`、client tickは旧`TickEvent`、`ModConfigSpec#defineListAllowEmpty`は3引数
-- NeoForge 20.4のFMLはMOD定義を`META-INF/mods.toml`からしか読まない（`neoforge.mods.toml`は20.5から）。
-  jarには`mods.toml`の名前で入れる。名前を間違えるとMODごと読み込まれない（mixinの`[[mixins]]`は20.4でも効く）
-- `pack.mcmeta`のresource pack formatは22
+- From 1.20.3, the `OptionsList` constructor no longer takes a row-height argument. The config screen branches on this boundary
+- From Forge 49.1.10, client tick is `ClientTickEvent.Post`. Before that (including Forge 48 on 1.20.2) it checks `phase == END`
+- Forge 1.20.4 builds with FG7, but production still runs on SRG names. The jar, after MixinExtras is jar-in-jarred, is
+  converted to SRG with Renamer Gradle and only that output is distributed. Xaero's `GuiMap#keyPressed` is also targeted by its SRG name
+  - The map for the conversion task (`renameJarJar`) is left to Renamer's default (`renamer.mappings`). Adding one by hand results in two files and is rejected
+  - The refmap that resolves injection-target strings to SRG ends up empty for `@WrapOperation` unless mixinextras-common is also on the
+    annotation processor path. Its name also matches `"refmap"` in the mixin config (`xaeronav.refmap.json`). `verifyDistribution` checks its contents
+  - For dev runs, a file that maps the SRG names in Xaero's bundled refmap to named is passed in the `srg` format that Mixin 0.8.5 can read
+    (the `tsrg` that Renamer passes is silently ignored)
+- NeoForge 20.4 uses an older API than 21.x. Config registration is `ModLoadingContext`, the config screen is
+  `ConfigScreenHandler.ConfigScreenFactory`, client tick is the old `TickEvent`, and `ModConfigSpec#defineListAllowEmpty` takes 3 arguments
+- NeoForge 20.4's FML only reads the mod definition from `META-INF/mods.toml` (`neoforge.mods.toml` is from 20.5).
+  It goes into the jar under the name `mods.toml`. With the wrong name the whole mod isn't loaded (mixin `[[mixins]]` still works on 20.4)
+- The resource pack format in `pack.mcmeta` is 22
 
 ## 1.21.4
 
-Fabric・Forge・NeoForgeの3ローダーを持つ。1.21.1と1.21.5の間にあたり、`>=1.21.5`でゲートしていたAPIの一部は実際には
-1.21.2で変わっていたので、境界を1.21.2へ振り直した（1.21.1・1.21.5・1.21.11の真偽は変えていない）。
+Has all three loaders: Fabric, Forge and NeoForge. It sits between 1.21.1 and 1.21.5, and some of the APIs gated on `>=1.21.5`
+actually changed in 1.21.2, so those boundaries were moved to 1.21.2 (without changing what evaluates true on 1.21.1, 1.21.5 and 1.21.11).
 
-| 境界 | ゲートしているもの |
+| Boundary | What it gates |
 |---|---|
-| 1.21.2 | `LevelHeightAccessor`の高さ（`getMinY`・`getMaxY`・`getMinSectionY`）、`RegistryAccess#lookupOrThrow`とHolderの取り方（エンチャントの効率）、`Registry#getValue`（`Registry#get`はOptionalを返す）、Fabricの`CommandSourceStack`の組み立て（`LocalPlayer#createCommandSourceStack`が無くなった）、Forgeのワールド描画の入口 |
-| 1.21.5 | 描画の`RenderPipeline`、Forgeの`LevelRenderer`のラムダの引数 |
+| 1.21.2 | `LevelHeightAccessor` heights (`getMinY`, `getMaxY`, `getMinSectionY`), `RegistryAccess#lookupOrThrow` and how Holders are obtained (efficiency enchantment), `Registry#getValue` (`Registry#get` returns an Optional), how Fabric's `CommandSourceStack` is built (`LocalPlayer#createCommandSourceStack` was removed), Forge's world-rendering entry point |
+| 1.21.5 | `RenderPipeline` for rendering, the lambda arguments of Forge's `LevelRenderer` |
 
-- **Forge 54には`RenderLevelStageEvent`が無い**。1.21.2で描画がフレームグラフになったため。1.21.5と同じく`ForgeLevelRendererMixin`が
-  `LevelRenderer`のメインパスのラムダの末尾へ注入する。ラムダ（`lambda$addMainPass$1`）の引数は1.21.4と1.21.5で違うので、
-  シグネチャを版で分けている。1.21.4ではmodelViewをRenderSystem側が描画時に掛けるので、渡す`PoseStack`は単位行列のまま
-  （1.21.5はmodelViewを積んで渡す）。積むと二重に回って線が画面外へ出る。NeoForge 21.4には`RenderLevelStageEvent`がある。
-- 描画は1.21.1と同じ`RenderSystem`の経路（`RenderPipeline`は1.21.5から）。
-- NeoForge 21.4のFMLは`META-INF/neoforge.mods.toml`を読む（`mods.toml`限定なのは20.4だけ）。
-- `pack.mcmeta`のresource pack formatは46。
-- Xaero（World Map・Minimap）は3ローダーとも1.21.4専用のjarがある。`GuiMap#render`・`MinimapFBORenderer#renderChunksToFBO`の
-  `endBatch()`のordinalと`@Local`の変数名は1.21.1と同じ（バイトコードで確認）。
+- **Forge 54 has no `RenderLevelStageEvent`**, because rendering became a frame graph in 1.21.2. As on 1.21.5, `ForgeLevelRendererMixin`
+  injects at the end of the main-pass lambda in `LevelRenderer`. The lambda's (`lambda$addMainPass$1`) arguments differ between 1.21.4 and 1.21.5,
+  so the signature is split by version. On 1.21.4 RenderSystem applies modelView at draw time, so the `PoseStack` passed in stays identity
+  (1.21.5 passes it with modelView pushed). Pushing it would rotate twice and send the lines off screen. NeoForge 21.4 does have `RenderLevelStageEvent`.
+- Rendering uses the same `RenderSystem` path as 1.21.1 (`RenderPipeline` starts at 1.21.5).
+- NeoForge 21.4's FML reads `META-INF/neoforge.mods.toml` (only 20.4 is limited to `mods.toml`).
+- The resource pack format in `pack.mcmeta` is 46.
+- Xaero (World Map, Minimap) has dedicated 1.21.4 jars for all three loaders. The `endBatch()` ordinals in `GuiMap#render` and
+  `MinimapFBORenderer#renderChunksToFBO` and the `@Local` variable names are the same as 1.21.1 (verified in bytecode).
 
-## 1つのjarを複数のMinecraftバージョンで使う
+## Using one jar across multiple Minecraft versions
 
-修正版の関係にある版は、ノードを増やさず既存のjarの対応範囲を下へ広げている。
+Versions that are patch releases of one another don't get extra nodes; instead the existing jar's supported range is extended downward.
 
-| jar | 下側の版 |
+| jar | Lower versions |
 |---|---|
-| `26.1.2-fabric` | 26.1・26.1.1 |
+| `26.1.2-fabric` | 26.1, 26.1.1 |
 | `1.21.10-fabric` | 1.21.9 |
-| `1.21.8-fabric` | 1.21.6・1.21.7 |
-| `1.21.1-neoforge`・`1.21.1-fabric` | 1.21 |
+| `1.21.8-fabric` | 1.21.6, 1.21.7 |
+| `1.21.1-neoforge`, `1.21.1-fabric` | 1.21 |
 | `1.20.6-fabric` | 1.20.5 |
 | `1.20.4-fabric` | 1.20.3 |
-| `1.20.1-fabric`・`1.20.1-forge` | 1.20 |
+| `1.20.1-fabric`, `1.20.1-forge` | 1.20 |
 
-対応表は`minecraftCompatFor`（`buildSrc/src/main/kotlin/XaeroNavBuild.kt`）で、値は下側の版を古い順に並べたもの。
-これがMOD定義のMinecraft範囲（`minecraft_range_fabric` / `minecraft_range_maven`）と、
-Modrinth・CurseForgeへ付ける対応バージョンの両方を決める。
+The mapping lives in `minecraftCompatFor` (`buildSrc/src/main/kotlin/XaeroNavBuild.kt`); its values are the lower versions in ascending order.
+It determines both the Minecraft range in the mod metadata (`minecraft_range_fabric` / `minecraft_range_maven`) and
+the supported versions attached on Modrinth and CurseForge.
 
-- **下側の版のXaeroは古い系統でよい。** Xaeroは版によって更新を止めている（1.21.6・1.21.7・1.21.9はWorld Map 1.39.x・
-  Minimap 25.2.x、1.21と1.20.3はMinimap 25.3.2まで）が、XaeroNavの注入先（`GuiMap`のフィールド・`render`・`keyPressed`・
-  `getRightClickOptions`・`endBatch()`の呼び出し数・`@Local`の変数名・`renderChunksToFBO`）は現行版と同じだった。
-  古いXaeroとの違いで実害があったのは`RightClickOption#getDisplayName()`の戻り値（古い版は`String`）だけで、
-  `RightClickOptionAccessor`が全版で`String`の`name`フィールドを読む。
-- **付けられないもの:** その版にXaeroが無い（1.21.2）、ローダーに安定版が無い（NeoForgeの1.20.3・1.20.5・
-  1.21.6・1.21.7・26.1・26.1.1）、そのローダーの版にXaeroNavが使うAPIが無い（Forge 51の1.21・Forge 49.0.xの1.20.3・
-  Forge 57の1.21.7はHUDか描画かtickの差し込み口が無い）、Xaeroのjarがそのローダーの版を拒む（Forge 1.21.6・26.1・26.1.1）。
-- ローダー側の下限（`neoforge_range` / `forge_loader_range` / `fabric_api_range`）は、下側の版で動く版まで下げる。
-  `fabric_api_range`は開発に使う`fabric_api`とは別のキー。下げた版でコンパイルが通ることを、ノードの`deps.minecraft`と
-  `deps.fabric_api`を一時的に下側の版へ差し替えて確かめる。
-- 1.21.9向けのFabric APIには`WorldRenderEvents`が無いので、`1.21.10-fabric`だけは`FabricLevelRendererMixin`が
-  Fabric APIの`END_MAIN`と同じ位置（`LevelRenderer#method_62214`の最後の`endBatch()`）で描く。
-- Forge 46（1.20.0）にはForge 47にある次の2つが無く、`<1.21`のノードは46に揃えてある。
-  - `@Mod`クラスのコンストラクタへの`FMLJavaModLoadingContext`の注入（引数なしで`get()`を使う）
-  - `ForgeConfigSpec.Builder#defineListAllowEmpty(String, List, Predicate)`（`List<String>`と`Supplier`を取る版を使う）
-- NeoForge 21.0.xは`@EventBusSubscriber`の購読先のバスを自動で選ばないので、MODバスのイベントは
-  `modEventBus.addListener`で登録する。
-- 実機での確認は`tools/compat_check.py`。配布jarと、その版のXaero・Fabric APIを入れたPrism Launcherの
-  インスタンスを作り、`--auto`でmc-runtime-testとruntime hook probeを入れて順に起動する。
+- **Xaero for the lower versions can be from an older line.** Xaero stopped updating some versions (1.21.6, 1.21.7 and 1.21.9 stay at World Map 1.39.x /
+  Minimap 25.2.x; 1.21 and 1.20.3 go up to Minimap 25.3.2), but XaeroNav's injection targets (`GuiMap` fields, `render`, `keyPressed`,
+  `getRightClickOptions`, the number of `endBatch()` calls, `@Local` variable names, `renderChunksToFBO`) were the same as the current version.
+  The only difference from older Xaero that actually mattered was the return type of `RightClickOption#getDisplayName()` (`String` in older versions);
+  `RightClickOptionAccessor` reads the `String` field `name` on all versions.
+- **What can't be added:** versions with no Xaero (1.21.2), versions with no stable loader release (NeoForge 1.20.3, 1.20.5,
+  1.21.6, 1.21.7, 26.1, 26.1.1), loader versions missing an API XaeroNav uses (Forge 51 on 1.21, Forge 49.0.x on 1.20.3 and
+  Forge 57 on 1.21.7 lack a hook for the HUD, rendering or tick), and loader versions Xaero's jar rejects (Forge 1.21.6, 26.1, 26.1.1).
+- The loader-side lower bounds (`neoforge_range` / `forge_loader_range` / `fabric_api_range`) are lowered to the version that works on the lower Minecraft version.
+  `fabric_api_range` is a separate key from the `fabric_api` used for development. Confirm that compilation passes on the lowered version by temporarily
+  swapping the node's `deps.minecraft` and `deps.fabric_api` to the lower version.
+- Fabric API for 1.21.9 has no `WorldRenderEvents`, so for `1.21.10-fabric` only, `FabricLevelRendererMixin` draws
+  at the same spot as Fabric API's `END_MAIN` (the last `endBatch()` in `LevelRenderer#method_62214`).
+- Forge 46 (1.20.0) lacks the following two things that Forge 47 has, so `<1.21` nodes are aligned to 46.
+  - Injection of `FMLJavaModLoadingContext` into the `@Mod` class constructor (use `get()` with no arguments)
+  - `ForgeConfigSpec.Builder#defineListAllowEmpty(String, List, Predicate)` (use the overload taking `List<String>` and `Supplier`)
+- NeoForge 21.0.x doesn't automatically pick the bus that an `@EventBusSubscriber` subscribes to, so mod-bus events are
+  registered with `modEventBus.addListener`.
+- In-game verification is `tools/compat_check.py`. It creates Prism Launcher instances with the distribution jar plus that version's
+  Xaero and Fabric API, and with `--auto` adds mc-runtime-test and the runtime hook probe and launches them in turn.
 
-## 1.20.2・1.20.6・1.21.3
+## 1.20.2, 1.20.6 and 1.21.3
 
-- **Xaeroの取得元。** 1.20.2・1.20.6のXaeroはXaeroのMavenに無くModrinthにしか無い。`deps.xaero_worldmap`などを
-  `modrinth:<Modrinthの版名>`と書くとModrinthのMavenから取り、その頃のXaeroはxaerolibを使わないので`deps.xaerolib = "none"`にする。
-  1.21.3のXaeroはXaeroのMavenにある（xaerolib 1.0.45）。
-- **1.20.5の境界。** 1.20.5で次が変わった: `BlockState#isPathfindable`の引数、効率エンチャントの名前（`EFFICIENCY`）、
-  `VertexConsumer#normal`が`Pose`を取る、`OptionsSubScreen`がヘッダーとフッターのレイアウトを持つ、NeoForgeの
-  `IConfigScreenFactory`・`ClientTickEvent`・`ModContainer#registerConfig`、ForgeのRenderLevelStageEventが`Matrix4f`を持つ。
-  1.20.5〜1.20.6は`getTagEnchantmentLevel`がどのローダーにも無いので、効率はデータコンポーネント（`DataComponents.ENCHANTMENTS`）から読む。
-- **Java。** 1.20.5以降はJava 21。ただしForge 50（1.20.6）のMixin 0.8.5は`JAVA_18`までしか知らないので、1.20.5・1.20.6の
-  mixin configの`compatibilityLevel`は`JAVA_17`にしている。
-- **Forgeの下限。** HUDを差し込む`AddGuiOverlayLayersEvent`が入った版を下限にしている（50.2.1・52.1.2・53.1.2・54.1.5・55.0.24）。
-  Forge 48（1.20.2）の`ConfigScreenFactory`は`(Minecraft, Screen)`を取る形しか無い。
-- **Forge 1.21.3の描画。** 1.21.4と同じく`RenderLevelStageEvent`が無く、`ForgeLevelRendererMixin`が注入する。
-  `lambda$addMainPass$1`の引数は1.21.4と同じ。
-- `pack.mcmeta`のresource pack formatは1.20.2が18、1.20.6が32、1.21.3が42。
+- **Where Xaero comes from.** Xaero for 1.20.2 and 1.20.6 isn't on Xaero's Maven, only on Modrinth. Writing `deps.xaero_worldmap` etc. as
+  `modrinth:<Modrinth version name>` pulls it from Modrinth's Maven; Xaero of that era doesn't use xaerolib, so set `deps.xaerolib = "none"`.
+  Xaero for 1.21.3 is on Xaero's Maven (xaerolib 1.0.45).
+- **The 1.20.5 boundary.** 1.20.5 changed the following: the arguments of `BlockState#isPathfindable`, the name of the efficiency enchantment (`EFFICIENCY`),
+  `VertexConsumer#normal` taking a `Pose`, `OptionsSubScreen` having a header and footer layout, NeoForge's
+  `IConfigScreenFactory`, `ClientTickEvent` and `ModContainer#registerConfig`, and Forge's RenderLevelStageEvent carrying a `Matrix4f`.
+  On 1.20.5-1.20.6 no loader has `getTagEnchantmentLevel`, so efficiency is read from the data component (`DataComponents.ENCHANTMENTS`).
+- **Java.** 1.20.5 and later use Java 21. However, Mixin 0.8.5 in Forge 50 (1.20.6) only knows up to `JAVA_18`, so for 1.20.5 and 1.20.6
+  the mixin config's `compatibilityLevel` is `JAVA_17`.
+- **Forge lower bounds.** The lower bound is the version that introduced `AddGuiOverlayLayersEvent`, which the HUD hooks into (50.2.1, 52.1.2, 53.1.2, 54.1.5, 55.0.24).
+  Forge 48's (1.20.2) `ConfigScreenFactory` only comes in the form taking `(Minecraft, Screen)`.
+- **Forge 1.21.3 rendering.** As on 1.21.4, there is no `RenderLevelStageEvent` and `ForgeLevelRendererMixin` injects instead.
+  The arguments of `lambda$addMainPass$1` are the same as 1.21.4.
+- The resource pack format in `pack.mcmeta` is 18 for 1.20.2, 32 for 1.20.6 and 42 for 1.21.3.
 
-## 26.1・26.2・26.3
+## 26.1, 26.2 and 26.3
 
-難読化されていない世代（Java 25）。ビルドの土台から変わる。NeoForge 26.3は安定版が出ていない（betaのみ）ので足していない。
+The unobfuscated generation (Java 25). Things change right down to the build foundation. NeoForge 26.3 has no stable release yet (beta only), so it isn't added.
 
-- Java 25で動く（`javaVersionFor`）。Mixinの`compatibilityLevel`はForgeが`JAVA_25`を知らないので21で頭打ちにする。
-  パック形式は公式クライアントの`version.json`の値（26.1.2はresource 84 / data 101、26.2は88 / 107、26.3は97 / 121）。
-- Fabricは`build.fabric-26.gradle.kts`（リマップしない`net.fabricmc.fabric-loom`）。マッピング・`mod*`依存・`remapJar`が無い。
-  キー登録は`KeyMappingHelper`、世界の描画は`LevelRenderEvents.END_MAIN`（`poseStack()`）。
-- ForgeはForgeGradle 7.0.40以降が要る（それ以前はATツールが26.xのクライアントjarで落ちる）。ATは26.xでは当てない
-  （開放していたRenderStateShard・RenderTypeの構造が無い）。XaeroのMaven上のjarは`META-INF/jarjar/metadata.json`だけを持ち
-  入れ子のxaerolibが無いので、開発実行へ載せるものは`stripXaeroJarJar`でmetadataを外す。
-  `ModList`はstatic（26.1）。`PassDefinition#extracts`の第3引数は`LevelRenderState`（26.3）。
-- NeoForgeはModDevGradle 2.0.148以降が要る（2.0.146では26.2のMinecraftの再コンパイルが落ちる）。
-- 26.1: `GuiGraphics`は`GuiGraphicsExtractor`、`drawCenteredString`は`centeredText`、`Screen#render`は`extractRenderState`
-  （XaeroのGuiMapへの注入先も）、深度の設定は`DepthStencilState`、`ChunkPos.asLong`は`pack`、`displayClientMessage`は
-  `sendOverlayMessage`・`sendSystemMessage`。`LevelRenderState`は`renderer.state.level`へ移った。
-- 26.2: `MultiBufferSource`が無くなり、`NavBuffers`が`StagedVertexBuffer`の上に`getBuffer`→`endBatch`の流れを作る。
-  `Minecraft#screen`・`#setScreen`は`gui`の下へ、`Options#hideGui`は`Hud#isHidden`、`GameRenderer#getMainCamera`は
-  `mainCamera`（`ClientCompat`）。石炭・ラピス・レッドストーン・ダイヤ・エメラルドの鉱石タグの定数が消えた（タグ自体は残る）。
-- 26.3: GPUの抽象が`com.mojang.renderpearl`へ移り、GLFWの代わりにSDLが入った（キー定数は`InputConstants`）。
-  `PreparedRenderType#drawFromBuffer`はレンダーパスを受け取るので、`NavBuffers`が自分で開く。
-  洞窟が置換タグではなく`#uncarvable`（bedrockだけ）を使うようになったので、`DiggableBlocks`の自然地形は
-  石・土・草・泥・苔・砂・テラコッタ・ナイリウムのタグと明示したブロックで近似している。
-- 手元の確認: `-Pxaeronav.quickPlay=<ワールド名>`でタイトル画面を飛ばして既存のワールドへ入れる
-  （`options.txt`が無いと最初のアクセシビリティ画面で止まる）。
+- Runs on Java 25 (`javaVersionFor`). Mixin's `compatibilityLevel` is capped at 21 because Forge doesn't know `JAVA_25`.
+  Pack formats are the values from the official client's `version.json` (26.1.2 is resource 84 / data 101, 26.2 is 88 / 107, 26.3 is 97 / 121).
+- Fabric uses `build.fabric-26.gradle.kts` (the non-remapping `net.fabricmc.fabric-loom`). There are no mappings, `mod*` dependencies or `remapJar`.
+  Key registration is `KeyMappingHelper`, world rendering is `LevelRenderEvents.END_MAIN` (`poseStack()`).
+- Forge needs ForgeGradle 7.0.40 or later (earlier versions' AT tool crashes on the 26.x client jar). The AT isn't applied on 26.x
+  (the RenderStateShard and RenderType structures it widened are gone). Xaero's jars on its Maven only carry `META-INF/jarjar/metadata.json`
+  without the nested xaerolib, so anything put on the dev run has its metadata stripped by `stripXaeroJarJar`.
+  `ModList` is static (26.1). The third argument of `PassDefinition#extracts` is `LevelRenderState` (26.3).
+- NeoForge needs ModDevGradle 2.0.148 or later (2.0.146 fails recompiling Minecraft 26.2).
+- 26.1: `GuiGraphics` is `GuiGraphicsExtractor`, `drawCenteredString` is `centeredText`, `Screen#render` is `extractRenderState`
+  (also the injection target in Xaero's GuiMap), depth settings are `DepthStencilState`, `ChunkPos.asLong` is `pack`, and `displayClientMessage` is
+  `sendOverlayMessage` / `sendSystemMessage`. `LevelRenderState` moved to `renderer.state.level`.
+- 26.2: `MultiBufferSource` is gone, and `NavBuffers` builds a `getBuffer` → `endBatch` flow on top of `StagedVertexBuffer`.
+  `Minecraft#screen` and `#setScreen` moved under `gui`, `Options#hideGui` is `Hud#isHidden`, and `GameRenderer#getMainCamera` is
+  `mainCamera` (`ClientCompat`). The ore tag constants for coal, lapis, redstone, diamond and emerald were removed (the tags themselves remain).
+- 26.3: the GPU abstraction moved to `com.mojang.renderpearl`, and SDL replaced GLFW (key constants are in `InputConstants`).
+  `PreparedRenderType#drawFromBuffer` takes a render pass, so `NavBuffers` opens one itself.
+  Caves now use `#uncarvable` (bedrock only) instead of replacement tags, so the natural terrain in `DiggableBlocks` is approximated
+  with tags for stone, dirt, grass, mud, moss, sand, terracotta and nylium plus explicitly listed blocks.
+- Local testing: `-Pxaeronav.quickPlay=<world name>` skips the title screen and enters an existing world
+  (without `options.txt` it stops at the initial accessibility screen).
 
-## 1.21.8・1.21.10
+## 1.21.8 and 1.21.10
 
-- 3ローダーとも専用ノードを持ち、Java 21で動く。パック形式は公式クライアントの`version.json`で確認した
-  1.21.8のresource 64、1.21.10のresource 69 / data 88を使う。Forge・NeoForgeの1.21.10はdata 88で宣言する。
-- ForgeのEventBus 7は1.21.6から。`ForgeMod`・`ForgeClientSetup`を使い、`AddFramePassEvent`で経路の描画を登録する。
-  1.21.8のキー・HUD登録はmod bus、1.21.10は各イベントの`BUS`へ登録する。
-  `PassDefinition#executes`は1.21.8では引数なし、1.21.10では`LevelRenderState`を取る。
-  `ForgeLevelRendererMixin`は公式の描画パスAPIが無い1.21.4・1.21.5にだけ残す。
-- NeoForgeの`RenderLevelStageEvent`が段階別のサブクラスになるのは1.21.6から。
-  1.21.10ではイベントからcameraを取れないため、Minecraftのmain cameraを使う。
-- 1.21.9からキー入力は`KeyEvent`、キーバインドのカテゴリは`KeyMapping.Category`。
-  Xaeroの世界地図のキー注入とruntime probeも同じ境界で分岐する。
-- Fabricの1.21.10では`rendering.v1.world.WorldRenderEvents.END_MAIN`と`HudElementRegistry`を使う。
-  1.21.8は従来の`WorldRenderEvents.AFTER_TRANSLUCENT`を使う。
-- 1.21.8・1.21.10の線はmain targetへ描く。Forgeの追加パスはFabulous!の合成後なので、
-  バニラの`RenderType.lines()`が使うitem_entity targetへ描くと画面に合成されない。
-- Xaeroの下限は実際にビルドで使うWorld Map 1.46.0 / Minimap 26.5.0に合わせる。
-  中間のMinecraft版へjarの対応範囲を広げる場合は、別途起動とフックの実行を確認する。
+- All three loaders have dedicated nodes and run on Java 21. Pack formats use the values checked in the official client's `version.json`:
+  resource 64 for 1.21.8, and resource 69 / data 88 for 1.21.10. Forge and NeoForge on 1.21.10 declare data 88.
+- Forge's EventBus 7 starts at 1.21.6. It uses `ForgeMod` and `ForgeClientSetup`, and registers route rendering with `AddFramePassEvent`.
+  On 1.21.8 key and HUD registration go on the mod bus; on 1.21.10 they register on each event's `BUS`.
+  `PassDefinition#executes` takes no arguments on 1.21.8 and a `LevelRenderState` on 1.21.10.
+  `ForgeLevelRendererMixin` is kept only for 1.21.4 and 1.21.5, which have no official render pass API.
+- NeoForge's `RenderLevelStageEvent` becomes per-stage subclasses from 1.21.6.
+  On 1.21.10 the camera can't be obtained from the event, so Minecraft's main camera is used.
+- From 1.21.9 key input is `KeyEvent` and keybinding categories are `KeyMapping.Category`.
+  The world map key injection into Xaero and the runtime probe branch on the same boundary.
+- Fabric on 1.21.10 uses `rendering.v1.world.WorldRenderEvents.END_MAIN` and `HudElementRegistry`.
+  1.21.8 uses the existing `WorldRenderEvents.AFTER_TRANSLUCENT`.
+- On 1.21.8 and 1.21.10 lines are drawn to the main target. Forge's extra pass runs after Fabulous! compositing, so
+  drawing to the item_entity target used by vanilla `RenderType.lines()` never gets composited onto the screen.
+- Xaero lower bounds match the World Map 1.46.0 / Minimap 26.5.0 actually used in the build.
+  When extending a jar's supported range to an intermediate Minecraft version, separately verify that it launches and that the hooks run.
 
 ## 1.21.11
 
-1.21.1との差が大きいのは描画・Forge/NeoForgeのイベント・入力まわり。
+The biggest differences from 1.21.1 are in rendering, Forge/NeoForge events and input.
 
-- **名前だけ変わったクラスはStonecutterの置換で吸収する**（`stonecutter.gradle.kts`の`replacements`）。
-  `ResourceLocation`→`Identifier`、`Boat`のパッケージ移動。置換は双方向なので、置換後の名前をソースに直接書かない
-- **深度テストはRenderPipelineが持つ**。地形越しに見せるレイヤーは、標準のパイプラインから深度テストだけを外した
-  自前のパイプラインで作る（`client/NavRenderTypes`）。線は頂点ごとに線幅を持つ（`setLineWidth`）
-- **線はmainターゲットへ描く**（バニラの`RenderTypes.lines()`はitem_entity）。Forgeの追加パスはFabulous!の合成より後に
-  走るので、item_entityへ描いても画面へ合成されない
-- **ワールドへの描画の入口**: Fabricは`WorldRenderEvents.END_MAIN`（`rendering.v1.world`パッケージ）。Forge 61には
-  `RenderLevelStageEvent`が無く、`AddFramePassEvent`で描画パスを足す。NeoForgeは`RenderLevelStageEvent`が段階ごとの
-  イベントに分かれ、`AfterTranslucentBlocks`を使う。どれもmodelViewに視点が積まれているので、`PathRenderer`へは単位行列を渡す
-- **Forge 61はEventBus 7**。イベントがそれぞれ`BUS`を持ち、注釈での購読とは形が違うので、入口を
-  `platform/forge/ForgeMod`・`ForgeClientSetup`に分けている（`ForgeEntry`・`ForgeEvents`は1.21.1以前用）
-- **高さは`getMinY`/`getMaxY`で、上端を含む**。`util/GameCompat`は旧来どおり「上端を含まない」値で返す。
-  ネザーの判定（旧`ultraWarm`）は環境属性`WATER_EVAPORATES`。バイオームで変わる属性なので位置を渡して読む
-  （`getDimensionValue`はNeoForgeの開発実行で例外になる）
-- **キー設定のカテゴリ**は`KeyMapping.Category`。表示名は`key.category.xaeronav.main`。NeoForgeではバニラの
-  `Category.register`が非推奨で、`RegisterKeyMappingsEvent#registerCategory`で登録する
-- **Xaeroの描画先**が`xaero.lib.client.graphics.XaeroBufferProvider`に変わった。mixinの注入先はその`endBatch()`
-- **`pack.mcmeta`**は`min_format`/`max_format`で書く。Forge・NeoForgeは同じファイルをデータパックとしても検証するので、
-  Forge自身と同じくデータの形式（94）で宣言する（`packFormatFields`）
-- 1.21.11のFabricにアクセスワイドナーは要らない（開放していたクラスごと無くなった）
+- **Classes that were only renamed are absorbed by Stonecutter replacements** (`replacements` in `stonecutter.gradle.kts`).
+  `ResourceLocation` → `Identifier`, and the package move of `Boat`. Replacements are bidirectional, so don't write the replaced name directly in source
+- **Depth testing is owned by the RenderPipeline**. Layers shown through terrain are built from custom pipelines that drop only the depth test
+  from the standard pipelines (`client/NavRenderTypes`). Lines carry their width per vertex (`setLineWidth`)
+- **Lines are drawn to the main target** (vanilla `RenderTypes.lines()` uses item_entity). Forge's extra pass runs after Fabulous! compositing,
+  so drawing to item_entity never gets composited onto the screen
+- **Entry points for world rendering**: Fabric uses `WorldRenderEvents.END_MAIN` (the `rendering.v1.world` package). Forge 61 has no
+  `RenderLevelStageEvent`, and adds a render pass with `AddFramePassEvent`. NeoForge splits `RenderLevelStageEvent` into per-stage
+  events and uses `AfterTranslucentBlocks`. All of them already have the view pushed onto modelView, so `PathRenderer` gets an identity matrix
+- **Forge 61 uses EventBus 7**. Each event has its own `BUS`, which differs from annotation-based subscription, so the entry points are
+  split into `platform/forge/ForgeMod` and `ForgeClientSetup` (`ForgeEntry` and `ForgeEvents` are for 1.21.1 and earlier)
+- **Heights come from `getMinY`/`getMaxY`, and the top is inclusive**. `util/GameCompat` keeps returning the traditional "top-exclusive" value.
+  The Nether check (formerly `ultraWarm`) is the environment attribute `WATER_EVAPORATES`. It's an attribute that varies by biome, so it is read with a position
+  (`getDimensionValue` throws in NeoForge dev runs)
+- **Keybinding categories** are `KeyMapping.Category`. The display name is `key.category.xaeronav.main`. On NeoForge, vanilla's
+  `Category.register` is deprecated, so the category is registered with `RegisterKeyMappingsEvent#registerCategory`
+- **Xaero's render target** changed to `xaero.lib.client.graphics.XaeroBufferProvider`. The mixin injects into its `endBatch()`
+- **`pack.mcmeta`** is written with `min_format`/`max_format`. Forge and NeoForge also validate the same file as a data pack,
+  so it declares the data format (94), the same as Forge itself (`packFormatFields`)
+- Fabric on 1.21.11 needs no access widener (the classes it widened are gone entirely)
 
-## 1.16.5（Java 8）
+## 1.16.5 (Java 8)
 
-ソースは他のノードと同じくJava 21の構文で書き、Java 21でコンパイルしてから
-[JvmDowngrader](https://github.com/unimined/JvmDowngrader)でJava 8のクラスファイルへ変換する。
-配布jarは変換後のもの（`java8Jar`、分類子なし）で、変換前は`-java21`の分類子付きで残る。
+As with the other nodes, the source is written in Java 21 syntax and compiled with Java 21, then
+converted to Java 8 class files with [JvmDowngrader](https://github.com/unimined/JvmDowngrader).
+The distribution jar is the converted one (`java8Jar`, no classifier); the pre-conversion jar is kept with the `-java21` classifier.
 
-- **mixin configの`compatibilityLevel`は配布jarの中だけ`JAVA_8`へ書き換える**（`registerJava8Jar`）。
-  開発実行はJava 21のままのクラスを読むので、開発側の値はJava 11以降の機能（NESTING）を許す値にしておく必要がある。
-  `verifyDistribution`が、どのjarにも利用者のJavaで読めないクラスや`compatibilityLevel`が無いことを検査する
-- **Forge 1.16.5はMixinExtrasを同梱せず、jar-in-jarも無い**。`mixinextras-common`を
-  `net.prason.xaeronav.shadow.mixinextras`へ移して配布jarへ入れ、mixin configのplugin
-  （`mixin/MixinExtrasBootstrapPlugin`）で起動する。pluginの行は1.16.5-forgeの`processResources`だけが足す
-- **本番のForge 1.16.5はSRG名で動く**。refmapはArchitectury LoomのMixin APで作る（`useLegacyMixinAp`）
-- **Xaeroの1.16.5 Forge版はcoremod（JavaScript）の中にSRG名を直書きしている**。本番では問題ないが、
-  Mojang名で動く開発環境では`NoClassDefFoundError: ToggleableKeyBinding`で起動しない。
-  `fixXaeroCoremods`（`runClient`の前に走る）がLoomの変換済みjarの中のcoremodを開発環境の名前へ書き換える
-- 1.16.5のXaero 1.46.0/26.5.0は`GuiMap#render`・`MinimapFBORenderer#renderChunksToFBO`の先頭付近で
-  別のバッファを1回余分に`endBatch()`する。mixinの注入先のordinalが1つずれる（`//? if <1.17`）
-- 1.16.5が既定で使うLWJGLは新しいmacOSでウィンドウを作れないので、開発実行だけLWJGL 3.3.3へ上げている。
-  配布jarと利用者の環境には関係しない
+- **The mixin config's `compatibilityLevel` is rewritten to `JAVA_8` only inside the distribution jar** (`registerJava8Jar`).
+  Dev runs load the classes still in Java 21 form, so the dev-side value must allow Java 11+ features (NESTING).
+  `verifyDistribution` checks that no jar contains classes or a `compatibilityLevel` that the user's Java can't read
+- **Forge 1.16.5 doesn't bundle MixinExtras and has no jar-in-jar**. `mixinextras-common` is relocated to
+  `net.prason.xaeronav.shadow.mixinextras`, put into the distribution jar, and bootstrapped via a mixin config plugin
+  (`mixin/MixinExtrasBootstrapPlugin`). Only 1.16.5-forge's `processResources` adds the plugin line
+- **Production Forge 1.16.5 runs on SRG names**. The refmap is generated by Architectury Loom's Mixin AP (`useLegacyMixinAp`)
+- **Xaero's 1.16.5 Forge build hard-codes SRG names inside its coremods (JavaScript)**. That's fine in production, but
+  in the dev environment, which runs on Mojang names, it fails to launch with `NoClassDefFoundError: ToggleableKeyBinding`.
+  `fixXaeroCoremods` (which runs before `runClient`) rewrites the coremods inside Loom's remapped jar to the dev-environment names
+- Xaero 1.46.0/26.5.0 for 1.16.5 calls `endBatch()` one extra time on a different buffer near the start of `GuiMap#render` and
+  `MinimapFBORenderer#renderChunksToFBO`. The ordinal of the mixin injection target shifts by one (`//? if <1.17`)
+- The LWJGL that 1.16.5 uses by default can't create windows on recent macOS, so dev runs alone are bumped to LWJGL 3.3.3.
+  This doesn't affect the distribution jar or users' environments
 
-## 守る決まり
+## Rules to follow
 
-### `pathfinding/` に `//?` を書かない（例外は vanilla API のシグネチャ差だけ）
+### Don't write `//?` in `pathfinding/` (the only exception is vanilla API signature differences)
 
-経路探索のテストは正典ノード（`stonecutter.properties.toml` の `canonical_test_node`）でしか
-走りません。`pathfinding/` に版分岐が入ると、正典ノードのテストが他ノードのバグを見逃します。
-版分岐が要るなら、その差を吸収する層を `client/` か `platform/` 側に作ってください。
+Pathfinding tests only run on the canonical node (`canonical_test_node` in `stonecutter.properties.toml`).
+If version branches get into `pathfinding/`, the canonical node's tests will miss bugs on other nodes.
+If you need a version branch, build a layer on the `client/` or `platform/` side that absorbs the difference.
 
-**唯一の例外**: vanilla APIの**呼び出し方（シグネチャ）そのものが版で違う**が、**意味は変わらない**
-場合。1.20.1対応で2箇所だけ実例が出た——
-`pathfinding/world/CellData.java`の`BlockStateBase#isPathfindable`（1.20.1は
-`(BlockGetter, BlockPos, PathComputationType)`という旧シグネチャを取る。levelを見ない判定なので
-空のプローブ値を渡せば同じ)と、`pathfinding/world/ChunkView.java`のエンチャント効率レベル取得
-（1.20.1はレジストリ経由の`Holder<Enchantment>`ではなく`Enchantments`直下の静的フィールドを
-直接渡す旧モデル）。**ロジックが分岐するわけではない**ので、正典ノードのテストが検証している
-中身は変わらない。判断に迷ったら、まずJDK差と同じくポータブルな書き方で両バージョンとも
-同じコードにできないかを先に検討すること（`Inventory#contains(Predicate)`が1.20.1に無い件は
-手書きループに置き換えてゲート無しで解決した——`ChunkView.hasItem`）。
+**The only exception**: when **how a vanilla API is called (its signature) differs by version** but **the meaning
+doesn't change**. Supporting 1.20.1 produced exactly two real cases:
+`BlockStateBase#isPathfindable` in `pathfinding/world/CellData.java` (1.20.1 takes the old signature
+`(BlockGetter, BlockPos, PathComputationType)`; the check doesn't look at the level, so passing an
+empty probe value gives the same result), and fetching the efficiency enchantment level in `pathfinding/world/ChunkView.java`
+(1.20.1 uses the old model that passes static fields directly from `Enchantments` rather than a
+registry-backed `Holder<Enchantment>`). **The logic itself doesn't branch**, so what the canonical node's tests verify
+is unchanged. When in doubt, first consider whether a portable approach, as with JDK differences, can let both versions
+share the same code (the missing `Inventory#contains(Predicate)` on 1.20.1 was solved without a gate by
+replacing it with a hand-written loop: `ChunkView.hasItem`).
 
-### ローダー固有の import はゲートの内側に書く
+### Put loader-specific imports inside the gate
 
-spotless の `removeUnusedImports` は、いま無効な分岐でしか使われない import を消します。
-無効な分岐は Stonecutter がコメントにするので、ゲートの内側に書いてあれば触られません。
+spotless's `removeUnusedImports` deletes imports that are only used in currently inactive branches.
+Stonecutter turns inactive branches into comments, so imports written inside the gate are left alone.
 
 ```java
 //? neoforge {
@@ -403,32 +406,32 @@ import net.neoforged.fml.ModList;
 *///?}
 ```
 
-ファイルまるごとローダー固有なら、`package` 行の後ろから末尾までを 1 つのゲートで囲みます
-（`platform/fabric/FabricEntry.java` がその形）。
+If an entire file is loader-specific, wrap everything from after the `package` line to the end in a single gate
+(`platform/fabric/FabricEntry.java` takes that form).
 
-### コミット前に有効ノードを戻す
+### Restore the active node before committing
 
-Stonecutter は有効なノードに合わせて `src/` を書き換えます。別のノードを有効にしたまま
-差分を取ると、全ファイルが動いて見えます。
+Stonecutter rewrites `src/` to match the active node. If you take a diff with a different node
+still active, every file will appear changed.
 
 ```bash
 ./gradlew "Reset active project"
 ```
 
-## CI が見ているもの
+## What CI checks
 
-- `build`ジョブ（ノードごとのmatrix、`:<node>:build`）— コンパイル・正典ノードでのテスト・spotless
-- `runtime`ジョブ（ノードごとに実際にクライアントを起動してワールドへ入る、`headlesshq/mc-runtime-test`）。
-  通常のPRでは正典ノードだけに絞り、mainへのpush・週次スケジュール・ノード定義やmixinを触ったPRでは
-  全ノードへ広がる（ノードが増えてもruntimeジョブの総数が線形に膨らまないようにするため）
-- 起動ログに XaeroNav の mixin 適用失敗が無いこと
-- `server`ジョブ（Forgeノードの配布jarを専用サーバーへ入れても起動を妨げないこと）
+- The `build` job (a per-node matrix, `:<node>:build`): compilation, tests on the canonical node, spotless
+- The `runtime` job (actually launches the client per node and enters a world, `headlesshq/mc-runtime-test`).
+  Normal PRs narrow it to the canonical node only; pushes to main, the weekly schedule, and PRs touching node definitions or mixins
+  expand it to all nodes (so the total number of runtime jobs doesn't grow linearly as nodes are added)
+- No XaeroNav mixin application failures in the startup log
+- The `server` job (the distribution jar of Forge nodes must not prevent a dedicated server from starting)
 
-`runtime`と`server`は利用者と同じJava（`printNodes`の`java`。1.16.5は8、1.20.1は17、それ以外は21）で
-Minecraftを動かす。Gradle自体はどのノードでもJava 21で動く。
+`runtime` and `server` run Minecraft on the same Java as users (`java` from `printNodes`: 8 for 1.16.5, 17 for 1.20.1, 21 otherwise).
+Gradle itself runs on Java 21 for every node.
 
-3 つ目が要るのは、`xaeronav-xaero.mixins.json` が `required=false` だからです。注入先が変わっても
-例外は出ず、ユーザーには「地図に線が出ない」としか見えません。ログにだけ出るので、CI が読みます。
+The third item is needed because `xaeronav-xaero.mixins.json` is `required=false`. Even if an injection target changes,
+no exception is thrown; users just see "no line on the map". It only shows up in the log, so CI reads it.
 
-実行中の状態は `/xaeronav debug hooks` で確認できます。世界地図を開いている間に描画の注入点を
-一度も通らなかった場合は、HUD にも警告が出ます。
+The runtime state can be checked with `/xaeronav debug hooks`. If a rendering injection point is never hit
+while the world map is open, a warning also appears on the HUD.

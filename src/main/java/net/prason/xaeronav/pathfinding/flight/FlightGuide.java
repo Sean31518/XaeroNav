@@ -1,9 +1,9 @@
 package net.prason.xaeronav.pathfinding.flight;
 
 /**
- * 空中経路の探索に足す、目的地までの残りコストの見積もり（tick）。直線の下限より大きいときだけ効く。
- * 分からない所は{@link Double#NaN}（直線の下限で見積もる）、目的地へ繋がらないと分かっている所は
- * {@link Double#POSITIVE_INFINITY}を返す。
+ * Estimate (ticks) of the remaining cost to the destination added to the air path search. Takes effect only when larger than the straight-line lower bound.
+ * Returns {@link Double#NaN} where unknown (estimated with the straight-line lower bound), and {@link Double#POSITIVE_INFINITY}
+ * where known not to connect to the destination.
  */
 @FunctionalInterface
 public interface FlightGuide {

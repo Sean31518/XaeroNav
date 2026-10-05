@@ -4,30 +4,30 @@ plugins {
     id("me.modmuss50.mod-publish-plugin") version "2.2.0"
 }
 
-// spotlessの整形器（google-java-format）を落としてくるためだけのリポジトリ。
-// ノードのビルドが使う依存はそれぞれのbuild.<ローダー>.gradle.ktsが持つ。
+// A repository only for downloading the formatter spotless uses (google-java-format).
+// Dependencies used by node builds live in each build.<loader>.gradle.kts.
 repositories {
     mavenCentral()
 }
 
-// 有効なノードをファイルに残す。ノードを切り替えるとStonecutterはsrc/を書き換えるので、
-// 「いまどのノードのソースが置かれているか」がgitの外に必要になる。
+// Record the active node in a file. Switching nodes makes Stonecutter rewrite src/, so
+// "which node's sources are currently in place" needs to be known outside git.
 stonecutter.active(file(".sc_active_version"))
 
 stonecutter.parameters {
-    // ノード名 `1.21.1-neoforge` の末尾がそのままローダー名。これで各ソースの
-    // `//? if neoforge {` / `//? if fabric {` / `//? if forge {` が切り替わる。
+    // The suffix of a node name like `1.21.1-neoforge` is the loader name as-is. This switches each source's
+    // `//? if neoforge {` / `//? if fabric {` / `//? if forge {`.
     constants.match(current.project.substringAfterLast('-'), "neoforge", "fabric", "forge")
 
-    // 名前だけが変わったクラスは、使う箇所ごとに`//?`で分けず、ソース全体の置換で吸収する。
-    // 置換は双方向（ノードを戻すと元の名前へ戻る）なので、置換後の名前をソースに直接書かないこと
+    // Classes that only changed name are absorbed by replacements over the whole source, not split with `//?` at each use.
+    // Replacements are bidirectional (switching the node back restores the original name), so never write the replaced name directly in source
     replacements {
         string(eval(current.version, ">=1.21.11")) {
             replace("ResourceLocation", "Identifier")
         }
-        // 26.1でGuiGraphicsはGuiGraphicsExtractorへ改名された。"getGuiGraphics"（NeoForgeのイベントのメソッド名）は
-        // 変わらないので、型の名前を書く2か所の形だけを置き換える
-        // 26.3でGPU抽象がcom.mojang.renderpearlへ移り、GLFWの代わりにSDLが入った（キー定数はInputConstantsにある）
+        // In 26.1 GuiGraphics was renamed to GuiGraphicsExtractor. "getGuiGraphics" (the NeoForge event's method name) is
+        // unchanged, so only the two spots that spell out the type name are replaced
+        // In 26.3 the GPU abstraction moved to com.mojang.renderpearl and SDL replaced GLFW (key constants are in InputConstants)
         string(eval(current.version, ">=26.3")) {
             replace("com.mojang.blaze3d.pipeline.RenderPipeline;", "com.mojang.renderpearl.api.pipeline.RenderPipeline;")
         }
@@ -46,7 +46,7 @@ stonecutter.parameters {
         string(eval(current.version, ">=26.3")) {
             replace("InputConstants.Type.KEYSYM", "InputConstants.Type.KEYBOARD")
         }
-        // 26.2でMultiBufferSourceが無くなり、同じ流れをNavBuffersが受け持つ
+        // In 26.2 MultiBufferSource was removed, and NavBuffers takes over the same flow
         string(eval(current.version, ">=26.2")) {
             replace("import net.minecraft.client.renderer.MultiBufferSource;", "import net.prason.xaeronav.client.NavBuffers;")
         }
@@ -75,24 +75,24 @@ stonecutter.parameters {
 val allNodes = (gradle.extensions.extraProperties["xaeronav.allNodes"] as List<String>)
     .map { it.substringBefore('|') to it.substringAfter('|') }
 
-// -Pxaeronav.onlyNodesで絞ったときは、そのノードのjarだけを集めて検査する。
-// 正典ノードはStonecutterの都合で常に構成されるが、指定していなければ集めない（ノードごとに並列ビルドするため）
+// When narrowed with -Pxaeronav.onlyNodes, collect and check only that node's jar.
+// The canonical node is always configured due to Stonecutter, but it isn't collected unless specified (nodes are built in parallel)
 val distributionNodes = providers.gradleProperty("xaeronav.onlyNodes").orNull
     ?.split(',')?.map(String::trim)?.filter(String::isNotEmpty)?.toSet()
     .let { only -> stonecutter.versions.filter { only == null || it.project in only } }
 
-// 公開は1ジョブにつき1サイト・1ノード。失敗したジョブだけを再実行でき、
-// 既に成功した別ノードを重複投稿しない。通常ビルドでは公開先を登録しない。
-// ノードは構成済みのものではなく全ノードの一覧から引く。公開ノードを構成しなければ、
-// そのノードのMinecraftを用意せずにjarだけを投稿できる
+// Publishing is one site and one node per job. Only failed jobs need re-running,
+// and other nodes that already succeeded aren't posted twice. Normal builds register no publish target.
+// The node is looked up from the list of all nodes, not the configured ones. Without configuring the published node,
+// its jar can be posted without setting up that node's Minecraft
 val publishTarget = providers.gradleProperty("publish_target").orNull
 val publishNode = providers.gradleProperty("publish_node").orNull
 if (publishTarget != null || publishNode != null) {
     check(publishTarget in setOf("modrinth", "curseforge") && publishNode != null) {
-        "公開には -Ppublish_target=modrinth|curseforge と -Ppublish_node=<ノード> の両方が必要です"
+        "Publishing requires both -Ppublish_target=modrinth|curseforge and -Ppublish_node=<node>"
     }
     val minecraft = allNodes.singleOrNull { it.first == publishNode }?.second
-        ?: error("不明な公開ノード: $publishNode")
+        ?: error("Unknown publish node: $publishNode")
     val loader = publishNode!!.substringAfterLast('-')
     val releaseVersion = modProperty("mod_version")
     val releaseFile = layout.buildDirectory.file(
@@ -102,7 +102,7 @@ if (publishTarget != null || publishNode != null) {
 
     publishMods {
         file.set(releaseFile)
-        // 同じプロジェクトに複数ファイルを投稿するため、サイト上のversion番号はノードごとに一意にする。
+        // Several files are posted to the same project, so the version number on the site is made unique per node.
         version.set("$releaseVersion-$loader-$minecraft")
         displayName.set("XaeroNav $releaseVersion - $loader $minecraft")
         changelog.set(providers.fileContents(
@@ -131,22 +131,22 @@ if (publishTarget != null || publishNode != null) {
     }
 }
 
-// 全ノードをまとめて回すための入口。ノードを増やしてもCIの記述は変わらない。
+// Entry point for running all nodes together. Adding nodes doesn't change the CI configuration.
 tasks.register("buildAll") {
     group = "build"
-    description = "すべてのノード（MCバージョン×ローダー）をビルドする"
+    description = "Builds all nodes (MC version x loader)"
     dependsOn(stonecutter.tasks.named("build"))
 }
 
-// Copyではなくsync。Copyだと前のビルドのjarが残り、バージョンやコミットハッシュの違う
-// 古い成果物がそのままリリースに添付されうる（release.ymlはbuild/libs/*.jarを丸ごと拾う）
+// sync, not Copy. With Copy, jars from previous builds remain, and stale artifacts with a different version or commit hash
+// could get attached to the release as-is (release.yml picks up build/libs/*.jar wholesale)
 tasks.register<Sync>("collectJars") {
     group = "build"
-    description = "配布jar（-Pxaeronav.onlyNodes指定時はそのノードだけ）をルートのbuild/libsへ集める"
+    description = "Collects the distribution jars (only that node's with -Pxaeronav.onlyNodes) into the root build/libs"
     distributionNodes.forEach { dependsOn(":${it.project}:assemble") }
-    // ノード側のbuild/libsにも過去のビルドのjarが残る（jarタスクは古い出力を消さない）。
-    // 今回のバージョンのものだけを拾う——バージョンにはgitの短縮ハッシュが付くので、
-    // これで「このビルドが作ったjar」だけに絞れる
+    // Jars from past builds also remain in each node's build/libs (the jar task doesn't delete old outputs).
+    // Pick only this version's: the version carries git's short hash, so
+    // this narrows it down to "jars this build produced"
     distributionNodes.forEach { node ->
         val loader = node.project.substringAfterLast('-')
         from(layout.projectDirectory.dir("versions/${node.project}/build/libs")) {
@@ -156,11 +156,11 @@ tasks.register<Sync>("collectJars") {
     into(layout.buildDirectory.dir("libs"))
 }
 
-// Release前に集約した成果物の契約を見る。全ノード分のファイルがあるだけでなく、各ローダーのmetadataと
-// Xaero mixin configが正しいjarへ入っていることまで、公開前に機械的に検査する。
+// Check the contract of the collected artifacts before release. Beyond having files for every node, mechanically verify before publishing
+// that each loader's metadata and the Xaero mixin config are in the right jars.
 tasks.register("verifyDistribution") {
     group = "verification"
-    description = "collectJarsが集めた配布jarの個数・名前・loader metadata・Mixin設定を検査する"
+    description = "Checks the count, names, loader metadata and Mixin config of the distribution jars collected by collectJars"
     dependsOn(tasks.named("collectJars"))
     doLast {
         val expected = distributionNodes.associate { node ->
@@ -179,12 +179,12 @@ tasks.register("verifyDistribution") {
         val actual = directory.listFiles { file -> file.extension == "jar" }
             ?.associateBy { it.name } ?: emptyMap()
         check(actual.keys == expected.keys) {
-            "配布jarが想定と一致しません expected=${expected.keys.sorted()} actual=${actual.keys.sorted()}"
+            "Distribution jars don't match the expected set expected=${expected.keys.sorted()} actual=${actual.keys.sorted()}"
         }
         expected.forEach { (name, loader) ->
             java.util.jar.JarFile(actual.getValue(name)).use { jar ->
-                // 利用者のJavaで読めないクラスが1つでも入っていれば起動しない（Java 8へ変換する1.16.5で特に）。
-                // クラスファイルのmajor versionはJava 8が52で、以降1ずつ増える
+                // A single class unreadable by the user's Java prevents startup (especially on 1.16.5, which is converted to Java 8).
+                // The class file major version for Java 8 is 52, increasing by 1 per version after that
                 val maxMajor = 44 + javaVersions.getValue(name)
                 jar.entries().asSequence()
                     .filter { it.name.endsWith(".class") && !it.name.startsWith("META-INF/versions/") }
@@ -193,74 +193,74 @@ tasks.register("verifyDistribution") {
                             val header = input.readNBytes(8)
                             ((header[6].toInt() and 0xff) shl 8) or (header[7].toInt() and 0xff)
                         }
-                        check(major <= maxMajor) { "$name: ${entry.name}がJava ${javaVersions.getValue(name)}で読めない（major $major）" }
+                        check(major <= maxMajor) { "$name: ${entry.name} can't be read by Java ${javaVersions.getValue(name)} (major $major)" }
                     }
                 val mixinConfig = jar.getInputStream(jar.getEntry("xaeronav-xaero.mixins.json")).use { String(it.readBytes()) }
                 check(Regex("\"JAVA_(\\d+)\"").find(mixinConfig)!!.groupValues[1].toInt() <= javaVersions.getValue(name)) {
-                    "$name: mixin configのcompatibilityLevelが利用者のJavaより新しい"
+                    "$name: the mixin config's compatibilityLevel is newer than the user's Java"
                 }
-                check(jar.getEntry("xaeronav-xaero.mixins.json") != null) { "$name: mixin configがありません" }
+                check(jar.getEntry("xaeronav-xaero.mixins.json") != null) { "$name: mixin config is missing" }
                 val entryNames = jar.entries().asSequence().map { it.name }.toSet()
                 when (loader) {
                     "fabric" -> {
-                        check(jar.getEntry("fabric.mod.json") != null) { "$name: fabric.mod.jsonがありません" }
+                        check(jar.getEntry("fabric.mod.json") != null) { "$name: fabric.mod.json is missing" }
                         check(jar.getEntry("META-INF/mods.toml") == null
                                 && jar.getEntry("META-INF/neoforge.mods.toml") == null) {
-                            "$name: 他loaderのmetadataが混入しています"
+                            "$name: metadata from another loader is mixed in"
                         }
-                        // FabricはLoomのinclude()でMETA-INF/jars/へネストしたjarのまま同梱する
-                        // （@Local/@WrapOperation等mixinextrasのmixinが依存、本体には含まれない）
+                        // Fabric bundles it as a nested jar in META-INF/jars/ via Loom's include()
+                        // (mixinextras mixins like @Local/@WrapOperation depend on it; it isn't part of the main jar)
                         check(entryNames.any { it.startsWith("META-INF/jars/mixinextras-fabric-") }) {
-                            "$name: mixinextrasが同梱されていません"
+                            "$name: mixinextras is not bundled"
                         }
                     }
                     "forge" -> {
-                        check(jar.getEntry("META-INF/mods.toml") != null) { "$name: mods.tomlがありません" }
+                        check(jar.getEntry("META-INF/mods.toml") != null) { "$name: mods.toml is missing" }
                         check(jar.manifest.mainAttributes.getValue("MixinConfigs")
-                                == "xaeronav-xaero.mixins.json") { "$name: MixinConfigs manifestが不正です" }
-                        // 本番がSRG名のForge（1.20.4以前）は、refmapが無い・空だとGuiMap等への注入が1本も当たらない
-                        // （config自体がrequired=falseなのでログにしか出ない）
+                                == "xaeronav-xaero.mixins.json") { "$name: invalid MixinConfigs manifest" }
+                        // On Forge running SRG names in production (1.20.4 and earlier), a missing or empty refmap means not a single injection into GuiMap etc. applies
+                        // (the config itself is required=false, so it only shows in the log)
                         if (isBefore1205.getValue(name)) {
                             val refmap = jar.getEntry("xaeronav.refmap.json")
-                            check(refmap != null) { "$name: xaeronav.refmap.jsonがありません" }
+                            check(refmap != null) { "$name: xaeronav.refmap.json is missing" }
                             check(jar.getInputStream(refmap).use { String(it.readBytes()) }.contains("GuiMapMixin")) {
-                                "$name: xaeronav.refmap.jsonにGuiMapMixinの注入先がありません"
+                                "$name: xaeronav.refmap.json has no injection target for GuiMapMixin"
                             }
                         }
-                        // ForgeはFG7のjarJar（またはlegacyforgeの同名機構）でMETA-INF/jarjar/へ
-                        // ネストしたjarのまま同梱する（Forge本体はmixinextrasを同梱していない）。
-                        // jar-in-jarの無い1.16.5は自分のパッケージへ移して直接入れる
+                        // Forge bundles it as a nested jar in META-INF/jarjar/ via FG7's jarJar (or legacyforge's mechanism of the same name)
+                        // (Forge itself doesn't bundle mixinextras).
+                        // 1.16.5, which has no jar-in-jar, relocates it into our own package and includes it directly
                         check(entryNames.any {
                             it.startsWith("META-INF/jarjar/mixinextras-forge-")
                                 || it.startsWith("net/prason/xaeronav/shadow/mixinextras/")
                         }) {
-                            "$name: mixinextrasが同梱されていません"
+                            "$name: mixinextras is not bundled"
                         }
                     }
                     "neoforge" -> {
-                        // NeoForge 20.4のFMLはMETA-INF/mods.tomlしか読まない。名前を間違えるとMODごと読み込まれない
+                        // NeoForge 20.4's FML only reads META-INF/mods.toml. Get the name wrong and the whole mod isn't loaded
                         val metadata = if (isBefore1205.getValue(name)) "META-INF/mods.toml" else "META-INF/neoforge.mods.toml"
-                        check(jar.getEntry(metadata) != null) { "$name: ${metadata.substringAfterLast('/')}がありません" }
+                        check(jar.getEntry(metadata) != null) { "$name: ${metadata.substringAfterLast('/')} is missing" }
                         val metadataText = jar.getInputStream(jar.getEntry(metadata)).use { String(it.readBytes()) }
-                        check(metadataText.contains("[[mixins]]")) { "$name: ${metadata.substringAfterLast('/')}にmixin configの登録がありません" }
+                        check(metadataText.contains("[[mixins]]")) { "$name: ${metadata.substringAfterLast('/')} doesn't register the mixin config" }
                     }
-                    // NeoForge本体はmixinextrasを同梱済みなので、ここでの同梱検査は不要
+                    // NeoForge itself already bundles mixinextras, so no bundling check is needed here
                 }
             }
         }
     }
 }
 
-// 整形の取り締まりはルートで1度だけ行う。ソースツリーは全ノードで共有しているので、
-// ノードごとに走らせても同じファイルを何度も見るだけになる（spotlessは
-// プロジェクトディレクトリの外にあるファイルを対象にできないので、置ける場所もここだけ）。
+// Formatting is enforced only once, at the root. The source tree is shared by all nodes,
+// so running it per node would just look at the same files over and over (spotless
+// can't target files outside the project directory, so this is the only place it can go anyway).
 //
-// 見る項目は「直しても議論の余地がない」ものに限る（未使用importの残骸、行末の余分な空白、
-// ファイル末尾の改行漏れ）。既存の書式を丸ごと書き換える整形器は入れない——差分が全ファイルに
-// 及んで意味のあるレビューができなくなる方が、崩れた書式がたまに残るより害が大きい。
+// Only checks things where "fixing is beyond debate" (leftover unused imports, trailing whitespace,
+// missing final newline). No formatter that rewrites existing formatting wholesale: having the diff touch every file
+// and make meaningful review impossible does more harm than occasionally leaving broken formatting.
 //
-// 注意: 無効な分岐（Stonecutterがコメント化した側）でしか使われないimportは、
-// removeUnusedImportsに消される。ローダー固有のimportは必ずその分岐のゲート内側に書くこと。
+// Note: imports used only in inactive branches (the side Stonecutter commented out) get removed
+// by removeUnusedImports. Always put loader-specific imports inside that branch's gate.
 spotless {
     java {
         target("src/*/java/**/*.java")
@@ -271,24 +271,24 @@ spotless {
     }
 }
 
-// CIがノードごとのジョブ（起動スモークテスト）を組むための一覧。ノードを足しても
-// ワークフロー側を書き換えずに済むよう、ノードの定義はsettings.gradle.ktsの1箇所だけにする。
+// A list for CI to build per-node jobs (startup smoke tests). So adding nodes doesn't
+// require editing the workflow, nodes are defined in a single place, settings.gradle.kts.
 tasks.register("printNodes") {
     group = "help"
-    description = "全ノードを JSON 配列で出す（CIのmatrix用）"
+    description = "Prints all nodes as a JSON array (for the CI matrix)"
     val nodes = allNodes
     val fabricApi = fabricApiVersions(file("stonecutter.properties.toml").readText())
     doLast {
         println(nodes.joinToString(",", "[", "]") { (project, version) ->
             val loader = project.substringAfterLast('-')
-            // javaは利用者の実行環境（起動確認に使うJVM）。ビルドは常にJava 21のGradleで行う
+            // java is the user's runtime (the JVM used for the startup check). Builds always run on Gradle with Java 21
             """{"node":"$project","minecraft":"$version","loader":"$loader","java":"${javaVersionFor(version)}",""" +
                 """"fabric_api":"${fabricApi["$loader.$version"] ?: "none"}"}"""
         })
     }
 }
 
-/** `[<ローダー>."<MCバージョン>"]`ごとの`deps.fabric_api`。CIがfabric-apiの配布jarを選ぶのに使う。 */
+/** `deps.fabric_api` per `[<loader>."<MC version>"]`. Used by CI to pick the fabric-api distribution jar. */
 fun fabricApiVersions(toml: String): Map<String, String> {
     val result = HashMap<String, String>()
     var table: String? = null

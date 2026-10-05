@@ -11,39 +11,39 @@ import net.minecraft.world.phys.Vec3;
 import net.prason.xaeronav.pathfinding.cost.FlightCosts;
 
 /**
- * 読める範囲の縁（{@link FlightHorizon}）から出る出口の見積もりを、<b>読める範囲の内側を通らない</b>
- * 回り道で測り直す。
+ * Re-measures the estimates for exits leaving the edge of the readable range ({@link FlightHorizon}) along detours
+ * that <b>don't pass through the inside of the readable range</b>.
  *
- * <p>粗い地図の残りコストの場（{@link CoarseFlightField}）はチャンク解像度なので、1チャンクより薄い壁を
- * 見落とす。それをそのまま出口の見積もりに使うと、「出口から目的地へまっすぐ戻れる」と見積もった出口が
- * 選ばれる——戻り道が通る内側は、細かい格子で塞がっていると既に分かっているのに。ネザーで目的地の
- * 手前の壁を前に、目的地の周りを反対側の縁から縁へ回り続け、最適の3〜6倍の線が出ていた。
+ * <p>The coarse map's remaining-cost field ({@link CoarseFlightField}) is at chunk resolution, so it misses walls thinner than
+ * a chunk. Using it directly for exit estimates picks an exit estimated as "can go straight back from the exit to the goal",
+ * even though the inside that the way back passes through is already known to be blocked on the fine grid. In the Nether,
+ * facing a wall just before the goal, it kept circling the goal from edge to edge on the opposite side, producing lines 3-6x the optimum.
  *
- * <p>そこで出口の見積もりは、内側にすっぽり収まるチャンクを外した場で測る。目的地が内側にあるときは、
- * 目的地を含む空間を細かい格子で塗り広げ、それが縁へ触れた所を場の起点にする（外を回って戻ってくる
- * 入口）。塗った空間がプレイヤーまで届けば内側だけで繋がっているので、出口は使わない。縁にも
- * プレイヤーにも届かなければ、目的地はこの格子の粗さでは閉じた小部屋の中にある——出口を許すと届かない
- * 目的地の周りを回り続けるので、これも出口を使わず、空から寄れる所まで引く（{@code FlightRouter#approach}）。
- * 寄れる所を探すだけなので予算は{@link #ENCLOSED_MAX_EXPANDED_NODES}に絞る（満額だと届かないことを
- * 確かめるのに毎回2秒焼く）。
+ * <p>So exit estimates are measured on a field that excludes chunks fully inside. When the goal is inside,
+ * the space containing the goal is flood-filled on the fine grid, and where it touches the edge becomes the field's seed (the entrance
+ * for going around outside and coming back). If the filled space reaches the player, it's connected through the inside alone, so no exit is used. If it reaches
+ * neither the edge nor the player, the goal is inside a closed small room at this grid's coarseness. Allowing exits would keep circling
+ * an unreachable goal, so again no exit is used, and the route is drawn to as close as can be approached from the air ({@code FlightRouter#approach}).
+ * Since it only looks for an approachable spot, the budget is capped at {@link #ENCLOSED_MAX_EXPANDED_NODES} (with the full budget it burns
+ * 2 seconds every time just to confirm it can't reach).
  */
 final class HorizonGuide {
 
     /**
-     * 目的地から塗り広げるセル数の上限。開けた所では読める範囲の大半を塗ることになるので頭打ちにする
-     * （{@link AirGrid}が事前構築をしない理由と同じ）。上限まで塗れる空間はたいてい縁にも触れている。
+     * Max number of cells flood-filled from the goal. In open areas it would fill most of the readable range, so it's capped
+     * (same reason {@link AirGrid} doesn't prebuild). A space that can be filled up to the cap usually touches the edge too.
      */
     private static final int MAX_FLOOD_CELLS = 40_000;
 
-    /** 目的地が閉じた小部屋の中にあるときの展開数の上限。 */
+    /** Expansion cap when the goal is inside a closed small room. */
     static final int ENCLOSED_MAX_EXPANDED_NODES = 15_000;
 
     private static final int[][] AXES = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 
     /**
-     * 探索に渡す出口と見積もり。
+     * Exits and estimates passed to the search.
      *
-     * @param enclosed 目的地が閉じた小部屋の中にある（{@link #ENCLOSED_MAX_EXPANDED_NODES}で探す）
+     * @param enclosed the goal is inside a closed small room (search with {@link #ENCLOSED_MAX_EXPANDED_NODES})
      */
     record Plan(FlightHorizon horizon, FlightGuide guide, boolean enclosed) {
     }
@@ -75,7 +75,7 @@ final class HorizonGuide {
                 : inside.estimate(x, y, z), false);
     }
 
-    /** チャンクの四隅がどれも縁の内側にあるか。 */
+    /** Whether all four corners of the chunk are inside the edge. */
     private static boolean chunkInside(FlightHorizon horizon, int chunkX, int chunkZ) {
         for (int corner = 0; corner < 4; corner++) {
             double x = (chunkX + (corner & 1)) * 16.0;
@@ -96,7 +96,7 @@ final class HorizonGuide {
     }
 
     /**
-     * @param entrances 塗った空間に隣り合う、縁の外の飛べるセルの中心
+     * @param entrances centers of flyable cells outside the edge, adjacent to the filled space
      */
     private static long distanceSq(long key, int x, int y, int z) {
         long dx = BlockPos.getX(key) - x;
@@ -109,12 +109,12 @@ final class HorizonGuide {
     }
 
     /**
-     * 目的地の領域（{@link FlightPathfinder}がゴールとみなすセル）から、縁の内側を6近傍で塗り広げる。
-     * 26近傍の斜めの移動は跨ぐ箱が全て飛べるときだけなので、6近傍で繋がる範囲と同じになる。
+     * Flood-fills the inside of the edge with 6-neighborhood from the goal region (the cells {@link FlightPathfinder} treats as the goal).
+     * Diagonal moves in the 26-neighborhood are allowed only when every box they straddle is flyable, so the result equals the 6-connected range.
      *
-     * <p>塗る順は<b>プレイヤーに近いセルから</b>。繋がっているときはプレイヤーへまっすぐ届いて早く
-     * 終わる（幅優先では読める範囲の大半を塗ってから届いていた）。繋がっていないときは
-     * どの順でも同じ空間を塗り切るので、縁への入口も変わらない。
+     * <p>Fill order is <b>cells closest to the player first</b>. When connected, it reaches the player directly and finishes
+     * early (breadth-first used to fill most of the readable range before reaching it). When not connected,
+     * any order fills the same space, so the entrances to the edge don't change either.
      */
     private static Flood flood(AirGrid grid, Vec3 start, Vec3 goal, FlightHorizon horizon) {
         long startCell = grid.nearestFlyable(start, FlightPathfinder.SNAP_CELL_RADIUS);

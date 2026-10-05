@@ -4,8 +4,8 @@ import net.prason.xaeronav.config.XaeroNavConfig;
 import net.prason.xaeronav.pathfinding.cost.DiggableBlocks;
 
 /**
- * ローダーのイベントから呼ばれる側の実体。ローダー固有のエントリポイントは、
- * 自分のイベントをここに置いた3つへ繋ぐだけにする。
+ * The implementation called from loader events. Loader-specific entry points only
+ * wire their own events to the three methods here.
  */
 public final class XaeroNavClient {
 
@@ -17,8 +17,8 @@ public final class XaeroNavClient {
     }
 
     /**
-     * 掘削可否のブロックリストだけはIDからBlockへの解決結果を保持するので、設定ファイルの
-     * 読み込み・再読み込みに自分で追随する必要がある（他の設定値は参照のたびに読むので何もしなくてよい）。
+     * Only the dig-allow/deny block lists keep the result of resolving IDs to Blocks, so they must track
+     * config file loads and reloads themselves (other config values are read on every access, so nothing is needed).
      */
     public static void reloadBlockLists() {
         DiggableBlocks.reloadFromConfig(XaeroNavConfig.INSTANCE.additionalDiggableBlocks(),

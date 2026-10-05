@@ -19,7 +19,7 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
-/** 目的地の寄せ直し（-53,49,716 → -53,68,716）の直後に経路が出るまでの内訳を、実機の保存地形で測る。 */
+/** Measures, on the real-game saved terrain, the breakdown of time until a route appears right after resnapping the destination (-53,49,716 -> -53,68,716). */
 @Tag("bench")
 class ResnapBenchTest {
 
@@ -67,13 +67,13 @@ class ResnapBenchTest {
             PathResult fallback = executor.submit(view, player, goal, voxelLimits, true, 0, Carryover.NONE, voxel).join();
             long fallbackMillis = System.currentTimeMillis() - began;
             System.out.printf(Locale.ROOT,
-                    "プレイヤー%s 岩の中の目的地で組み立て%dms（構築%dms ガイド%dms セクション%d） 寄せ直し後のガイド%dms 航法グラフで探索%dms(%d手) 3D粗層で探索%dms(%d手)%n",
+                    "player %s build with destination inside rock %dms (construction %dms guide %dms sections %d) guide after resnap %dms search with nav graph %dms(%d moves) search with 3D coarse layer %dms(%d moves)%n",
                     player.toShortString(), coldMillis, cold.buildMillis(), cold.field().buildMillis(), cold.sectionsBuilt(),
                     warmMillis, guidedMillis, guided.steps().size(), fallbackMillis, fallback.steps().size());
         }
     }
 
-    /** 実機（2026-09-23 20:50）で継ぎ足しが北東へ遠ざかった地点から、ガイドの値の出どころを辿る。 */
+    /** From the spot where, in the real game (2026-09-23 20:50), extending drifted away to the northeast, trace where the guide's values come from. */
     @Test
     void whyNorthEast() throws IOException {
         FakeCells cells = NetherTrapBenchTest.cells();
@@ -94,17 +94,17 @@ class ResnapBenchTest {
             for (int i = 0; i < 3; i++) {
                 BlockPos p = i == 0 ? player : StanceFinder.resolveStart(cells, c[i]);
                 WindowField.Descent d = field.descend(p.getX(), p.getY(), p.getZ());
-                System.out.printf(Locale.ROOT, "窓の中心%s 点%s 値=%.0f 出どころ=%s%n", player.toShortString(),
+                System.out.printf(Locale.ROOT, "window center %s point %s value=%.0f source=%s%n", player.toShortString(),
                         p.toShortString(), field.estimate(p.getX(), p.getY(), p.getZ()),
-                        d == null ? "-" : "%s 窓の中%.0f+外%.0f 3D粗層の素の値%.0f 縁から目的地まで直線%.0f".formatted(
+                        d == null ? "-" : "%s inside window %.0f+outside %.0f raw 3D coarse layer value %.0f straight line from edge to destination %.0f".formatted(
                                 d.exit().toShortString(), d.inside(), d.outside(),
                                 voxel.estimate(d.exit().getX(), d.exit().getY(), d.exit().getZ()),
                                 Math.hypot(d.exit().getX() - goal.getX(), d.exit().getZ() - goal.getZ())));
             }
         }
-        // 比較: 目的地までの本当の最短（窓無し）
+        // For comparison: the true shortest distance to the destination (no window)
         BlockPos from = StanceFinder.resolveStart(cells, new BlockPos(-163, 73, 438));
-        System.out.printf(Locale.ROOT, "真の最短(窓無し) %s→目的地 = %.0f%n", from.toShortString(),
+        System.out.printf(Locale.ROOT, "true shortest (no window) %s->destination = %.0f%n", from.toShortString(),
                 ProgressiveWalk.fullVisibilityBest(cells, from, goal));
     }
 }

@@ -1,12 +1,12 @@
 package net.prason.xaeronav.xaero;
 
 /**
- * Xaero連携のmixinが当たったことの目印。注入先のクラス1つにつき1つのmixinがこれを実装する。
+ * Marker that a Xaero integration mixin applied. One mixin per injection target class implements this.
  *
- * <p>mixinが当たらなかったときは例外も警告も出ない（{@code xaeronav-xaero.mixins.json}は
- * required=false）。ユーザーには「地図に線が出ない」としか見えず、原因がXaeroの版なのか設定なのかを
- * 切り分ける手掛かりが無い。Xaeroが注入先の形を変えた新版ではこれが起きるので、
- * 「連携先のMODは読み込まれているのに注入先のクラスにこの目印が付いていない」を静かな故障の検出に使う。
+ * <p>When a mixin doesn't apply, no exception or warning is raised ({@code xaeronav-xaero.mixins.json} is
+ * required=false). Users only see "no line on the map", with no clue to tell whether the cause is the Xaero
+ * version or configuration. This happens with new Xaero versions that change the target's shape, so
+ * "the integrated mod is loaded but the target class lacks this marker" is used to detect the silent failure.
  */
 public interface XaeroHookMarker {
 }

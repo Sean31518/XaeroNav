@@ -15,45 +15,45 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>200ブロックを超える経路で、遠回りが「層1＋区間分割」と「窓の狭さ」のどちらから来ているかを
- * 分けて測る。</b>
+ * <b>For paths over 200 blocks, measures separately whether detours come from "layer 1 + segmentation" or
+ * from "the narrowness of the window".</b>
  *
- * <p>{@code PathOptimalityTest}が測るのは40〜90ブロックで、しかも<b>1回のA*で解いた経路</b>。
- * 実機はその距離を1回では解かない——層1のcost-to-goガイドで大局を決め、
- * {@link ProgressiveWalk#DETAIL_HORIZON}ごとに区間へ切り、末端から継ぎ足す。長距離の遠回りは
- * ほとんどがその組み立て方から出るので、<b>組み立てを再現しないと発生源が測れない</b>。
+ * <p>{@code PathOptimalityTest} measures 40-90 blocks, and moreover <b>paths solved by a single A*</b>.
+ * The real game doesn't solve that distance in one go: layer 1's cost-to-go guide decides the big picture,
+ * it's cut into segments every {@link ProgressiveWalk#DETAIL_HORIZON}, and extended from the end. Long
+ * detours mostly come from that assembly, so <b>the source can't be measured without reproducing the assembly</b>.
  *
- * <p>1本につき3通り測る:
+ * <p>Each route is measured three ways:
  * <ul>
- * <li><b>基準</b> — 全視界・重み1.0・ガイド無しの1回の探索</li>
- * <li><b>全視界</b> — 世界が丸ごと見えている状態で実機と同じ組み立て。基準との差は
- *     <b>層1の解像度（16ブロック）と区間分割</b>の取り分</li>
- * <li><b>窓160</b> — さらに描画距離10チャンク相当の窓を掛ける。全視界との差が<b>窓の狭さ</b>の取り分</li>
+ * <li><b>Baseline</b>: a single search with full visibility, weight 1.0 and no guide</li>
+ * <li><b>Full visibility</b>: the same assembly as the real game with the whole world visible. The difference
+ *     from the baseline is the share of <b>layer 1's resolution (16 blocks) and segmentation</b></li>
+ * <li><b>Window 160</b>: additionally applies a window equivalent to a render distance of 10 chunks. The difference from full visibility is the share of <b>the window's narrowness</b></li>
  * </ul>
  *
- * <p><b>窓の取り分はほぼ無い。</b>遠回りは層1と区間分割から出ていて、窓を広げても縮まらない。
- * このテストが最初にそれを数字にし、犯人が<b>層1ガイドの下限違反</b>だと分かった
- * （{@code GuideAdmissibilityTest}）——直す前は平均1.119倍だった。
+ * <p><b>The window's share is nearly zero.</b> Detours come from layer 1 and segmentation, and widening the
+ * window doesn't shrink them. This test first put that into numbers, revealing the culprit as <b>layer 1's
+ * guide violating the lower bound</b> ({@code GuideAdmissibilityTest}); before the fix the average was 1.119x.
  *
- * <p><b>ジ・エンドをここに入れていない</b>のは、200ブロックを超える島渡りが
- * {@code PathfindingExecutor}の緩和の梯子（橋の連続長の上限外しなど）を必要とし、
- * {@link ProgressiveWalk}はそこまで再現していないため（実測6本中3本が経路無しで終わる）。
- * 壁時計で縛る梯子を持ち込むとCIの速度で結果が変わるので、番人としては入れない方を採った。
- * ジ・エンドの長距離は{@code ProgressiveDiscoveryTest}と{@code RealEndTerrainTest}が見ている。
+ * <p><b>The End isn't included here</b> because island hopping beyond 200 blocks needs
+ * {@code PathfindingExecutor}'s relaxation ladder (lifting the cap on bridge run length, etc.), which
+ * {@link ProgressiveWalk} doesn't reproduce (measured: 3 of 6 routes end with no path).
+ * Bringing in a ladder bound by wall-clock time would make results depend on CI speed, so as a guard we chose to leave it out.
+ * Long distances in The End are covered by {@code ProgressiveDiscoveryTest} and {@code RealEndTerrainTest}.
  */
 @Tag("slow")
 class LongRouteOptimalityTest {
 
-    /** 種を固定する理由は{@link TerrainFixture#randomRoutes}に書いてある。 */
+    /** Why the seed is fixed is explained in {@link TerrainFixture#randomRoutes}. */
     private static final long SEED = 20260906L;
 
-    /** 読み込み済みの窓の半径。描画距離10チャンク相当。 */
+    /** Radius of the loaded window. Equivalent to a render distance of 10 chunks. */
     private static final int WINDOW_RADIUS = 160;
 
     /**
-     * 海と陸が半々で、512ブロックの外洋横断を含む地形。<b>1つに絞っている</b>のは、基準側の
-     * 重み1.0・ガイド無しの探索が1本あたり1〜7秒かかるため——地形を増やすより、
-     * 同じ地形で距離を振る方が層1の解像度に効く（層1のセルを何個またぐかが効き目を決める）。
+     * Terrain half sea and half land, including a 512-block open-ocean crossing. <b>It's narrowed to one</b>
+     * because the baseline search with weight 1.0 and no guide takes 1-7 seconds per route: varying distance on
+     * the same terrain matters more for layer 1's resolution than adding terrains (how many layer 1 cells are crossed determines the effect).
      */
     private static final String TERRAIN = "/overworld_wide.txt.gz";
 
@@ -61,10 +61,10 @@ class LongRouteOptimalityTest {
     private static final int MIN_ROUTE_BLOCKS = 200;
     private static final int MAX_ROUTE_BLOCKS = 450;
 
-    /** 全体の悪化を捕まえる線。実測は全視界1.046・窓1.045。 */
+    /** Line catching overall regressions. Measured: full visibility 1.046, window 1.045. */
     private static final double MEAN_LIMIT = 1.10;
 
-    /** 1本でも破滅的なら落とす線。実測は全視界1.078・窓1.093。 */
+    /** Line that fails if even one path is catastrophic. Measured: full visibility 1.078, window 1.093. */
     private static final double WORST_LIMIT = 1.20;
 
     private static FakeCells terrain() throws IOException {
@@ -89,7 +89,7 @@ class LongRouteOptimalityTest {
             List<PathStep> windowedWalk = ProgressiveWalk.walk(cells, route[0], route[1],
                     WINDOW_RADIUS, true);
             if (!Double.isFinite(best) || openWalk.isEmpty() || windowedWalk.isEmpty()) {
-                failures.add(name + ": 経路が返らない（基準" + best + "）");
+                failures.add(name + ": no path returned (baseline " + best + ")");
                 continue;
             }
             double open = ProgressiveWalk.cost(openWalk);
@@ -99,21 +99,21 @@ class LongRouteOptimalityTest {
             openRatios.add(open / best);
             windowedRatios.add(windowed / best);
             report.add(String.format(Locale.ROOT,
-                    "%3.0fブロック 基準%6.0f 全視界%6.0f(%.3f倍) 窓%6.0f(%.3f倍) 窓の取り分%.3f倍 %s",
+                    "%3.0f blocks baseline %6.0f full %6.0f (%.3fx) window %6.0f (%.3fx) window share %.3fx %s",
                     ProgressiveWalk.horizontal(route[0], route[1]), best, open, open / best,
                     windowed, windowed / best, windowed / open, name));
         }
         if (openRatios.size() < ROUTES) {
-            failures.add("測れた経路が" + openRatios.size() + "本しかない");
+            failures.add("only " + openRatios.size() + " paths could be measured");
         }
-        // 実機はPathLoopsで畳むが、ここは畳む前を見る——畳みが組み立て側のバグを隠さないように、
-        // 繋ぎ目でそもそも重なりが生まれていないことを確かめる
-        report.add("継ぎ足しの繋ぎ目で同じ位置を2度通ったステップ（畳む前）: " + overlaps);
+        // The real game folds with PathLoops, but here we look before folding: make sure the seams don't
+        // produce overlaps in the first place, so folding doesn't hide bugs in the assembly
+        report.add("steps passing the same position twice at extension seams (before folding): " + overlaps);
         if (overlaps > 0) {
-            failures.add("継ぎ足しの繋ぎ目で経路が同じ位置を" + overlaps + "回踏み直している");
+            failures.add("path re-steps the same position " + overlaps + " times at extension seams");
         }
-        report.add(check("層1＋区間分割", openRatios, failures));
-        report.add(check("窓160まで込み", windowedRatios, failures));
+        report.add(check("layer 1 + segmentation", openRatios, failures));
+        report.add(check("including window 160", windowedRatios, failures));
         System.out.println(String.join("\n", report));
         assertTrue(failures.isEmpty(),
                 String.join("\n", failures) + "\n" + String.join("\n", report));
@@ -121,16 +121,16 @@ class LongRouteOptimalityTest {
 
     private static String check(String what, List<Double> ratios, List<String> failures) {
         if (ratios.isEmpty()) {
-            return what + ": 測れた経路が無い";
+            return what + ": no paths measured";
         }
         double mean = ratios.stream().mapToDouble(Double::doubleValue).average().orElse(1.0);
         double worst = ratios.stream().mapToDouble(Double::doubleValue).max().orElse(1.0);
         if (mean > MEAN_LIMIT) {
-            failures.add(what + ": 長距離の経路が全体に遠回りになっている " + String.format(Locale.ROOT, "%.3f倍", mean));
+            failures.add(what + ": long-distance paths are detouring overall " + String.format(Locale.ROOT, "%.3fx", mean));
         }
         if (worst > WORST_LIMIT) {
-            failures.add(what + ": 破滅的に遠回りな長距離経路がある " + String.format(Locale.ROOT, "%.3f倍", worst));
+            failures.add(what + ": there is a catastrophically roundabout long route " + String.format(Locale.ROOT, "%.3fx", worst));
         }
-        return String.format(Locale.ROOT, "%s: 平均%.3f倍 最悪%.3f倍", what, mean, worst);
+        return String.format(Locale.ROOT, "%s: avg %.3fx worst %.3fx", what, mean, worst);
     }
 }

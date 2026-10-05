@@ -8,42 +8,42 @@ import net.prason.xaeronav.pathfinding.cost.FlightCosts;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * 格子A*が返す階段状の折れ線を、通せる限り真っ直ぐに伸ばす（string pull）。
+ * Straightens the staircase polyline returned by grid A* as far as it can pass (string pull).
  *
- * <p>格子の目に沿った経路をそのまま線として出すと、実際には一直線に飛べる場所でも数ブロックごとに
- * 折れた線になる。飛んでいる人間が追うのは線の<b>向き</b>なので、この折れがそのまま「機首をどこへ
- * 向ければいいのか分からない」になる。
+ * <p>Outputting a path that follows the grid as a line makes it bend every few blocks even where you could
+ * actually fly in a straight line. A person flying follows the line's <b>direction</b>, so these bends turn
+ * directly into "I can't tell where to point the nose".
  *
- * <p>近道は2つの条件を両方満たしたときだけ採る:
+ * <p>A shortcut is taken only when both conditions hold:
  * <ol>
- * <li>{@link AirGrid#clearLine}——跨ぐ<b>格子セル</b>が全て飛行可。ブロック解像度で見ないのは、
- *     壁にぴったり沿った線が「当たっていない」ことになってクリアランスが消えるため</li>
- * <li>置き換える区間より<b>高くつかない</b>こと。滑空は水平距離ぶんの降下を無料で使えるので、
- *     遠回りの方が安いことが原理的にありうる（{@link FlightCosts}参照）</li>
+ * <li>{@link AirGrid#clearLine}: every <b>grid cell</b> crossed is flyable. It doesn't look at block resolution
+ *     because a line hugging a wall would count as "not touching" and the clearance would vanish</li>
+ * <li>It <b>costs no more</b> than the section it replaces. Gliding gets descent over horizontal distance for
+ *     free, so a detour can in principle be cheaper (see {@link FlightCosts})</li>
  * </ol>
  *
- * <p><b>採否はA*とまったく同じコスト関数で決めること</b>（狭さの割増を含む）。片方だけに入れると、
- * A*が広い所へ迂回した経路を平滑化が狭い所へ引き戻す——実際に踏んだ。{@link Clearance}参照。
+ * <p><b>Decide acceptance with exactly the same cost function as A*</b> (including the narrowness surcharge). Putting it in only one
+ * side makes smoothing pull a path A* detoured into open space back into tight space; this actually happened. See {@link Clearance}.
  *
- * <h2>ここは探索より重くなりうる</h2>
+ * <h2>This can be heavier than the search</h2>
  *
- * 実機のネザーで、探索が時間上限(2秒)で打ち切られた後の平滑化に<b>6.5秒</b>かかっていた。素朴な
- * string pullは全ての(from, to)を試すのでO(n^2)、しかも1回の判定が{@link Clearance#alongLine}で
- * 線上の全セルを舐め、セルごとに26近傍の飛行可否を要求する——探索が一度も触っていない領域を
- * 大量に評価することになる。次の2つで抑えている:
+ * In the real Nether, smoothing after the search was cut off at its time limit (2 s) took <b>6.5 s</b>. Naive
+ * string pull tries every (from, to), so O(n^2), and each check scans every cell on the line via
+ * {@link Clearance#alongLine}, demanding 26-neighbour flyability per cell: it ends up evaluating large
+ * regions the search never touched. Two things keep it in check:
  *
  * <ul>
- * <li>元の折れ線のコストは<b>累積和で一度だけ</b>求める。置き換え候補ごとに区間を歩き直さない</li>
- * <li>近道の探索範囲を{@link #LOOKAHEAD_POINTS}点に限る。長い直線は数回に分けて畳まれるだけで、
- *     見た目はほとんど変わらない</li>
+ * <li>The original polyline's cost is computed <b>once as a prefix sum</b>. Sections aren't re-walked per replacement candidate</li>
+ * <li>The shortcut search range is limited to {@link #LOOKAHEAD_POINTS} points. Long straights just get folded in
+ *     several passes, which looks nearly the same</li>
  * </ul>
  *
- * <p>加えて期限を渡す。過ぎたら以降は畳まずそのまま返す——折れの残った線は見た目が少し悪いだけだが、
- * 飛んでいる相手に何秒も線を出せない方が困る。
+ * <p>A deadline is passed too. Once past it, the rest is returned unfolded: a line with leftover bends only looks
+ * a little worse, while being unable to show a line for seconds to someone in flight is worse.
  */
 final class FlightSmoother {
 
-    /** 1点から先、何点先までを近道の候補にするか。 */
+    /** From one point, how many points ahead to consider as shortcut candidates. */
     private static final int LOOKAHEAD_POINTS = 64;
 
     private FlightSmoother() {
@@ -54,7 +54,7 @@ final class FlightSmoother {
         if (points.size() < 3) {
             return points;
         }
-        // 元の折れ線のコストの累積和。置き換え候補ごとに区間を歩き直すと、これだけでO(n^2)になる
+        // Prefix sum of the original polyline's cost. Re-walking sections per replacement candidate would make this alone O(n^2)
         double[] prefix = new double[points.size()];
         for (int i = 1; i < points.size(); i++) {
             prefix[i] = prefix[i - 1]
@@ -68,7 +68,7 @@ final class FlightSmoother {
             int next = from + 1;
             if (MonotonicTime.millis() < deadline) {
                 int limit = Math.min(points.size() - 1, from + LOOKAHEAD_POINTS);
-                // 遠い方から試す。最初に見つかったものが最も多くの折れを畳める
+                // Try from the far end. The first one found folds the most bends
                 for (int to = limit; to > from + 1; to--) {
                     if (!grid.clearLine(points.get(from), points.get(to))) {
                         continue;

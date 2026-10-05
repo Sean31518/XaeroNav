@@ -69,8 +69,8 @@ jobs:
       - name: Test release notes validation
         run: python3 -m unittest discover -s tools -p 'test_release_notes.py' -v
 
-      # テスト・起動確認はこのcommitのCIが済ませているので、リリースでは繰り返さずCIの結果を見る
-      # （正典ノードのテストを回すとそれだけで10分以上かかり、ビルドの律速になる）
+      # Tests and launch checks have already been done by CI for this commit, so the release doesn't repeat them and looks at the CI result
+      # (running the canonical node's tests alone takes over 10 minutes and becomes the bottleneck of the build)
       - name: Require a green CI run for this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,8 +83,8 @@ jobs:
             exit 1
           fi
 
-      # 全ノードを構成するとMinecraftを1つずつ用意して40分を超える。一覧は構成しないノードも持っているので、
-      # 正典ノードだけを構成すれば足りる
+      # Configuring all nodes prepares Minecraft one by one and takes over 40 minutes. The list also includes unconfigured nodes,
+      # so configuring only the canonical node is enough
       - name: Discover release nodes
         id: nodes
         run: |
@@ -94,9 +94,9 @@ jobs:
           echo "nodes=$NODES" >> "$GITHUB_OUTPUT"
           echo "canonical_node=$CANON" >> "$GITHUB_OUTPUT"
 
-      # 公開ジョブも正典ノードだけを構成するので、ここで空から作ったGradleホームがそのまま使える。
-      # setup-gradleに任せると、公開ジョブには自分のエントリが無く、別ジョブの全ノード分の巨大なキャッシュを
-      # 1件ごとに2分以上かけて戻していた
+      # The publish jobs also configure only the canonical node, so the Gradle home created from scratch here can be used as-is.
+      # Left to setup-gradle, the publish jobs had no entry of their own and restored another job's huge cache for all nodes,
+      # taking over 2 minutes per entry
       - name: Stop the Gradle daemon before caching
         run: ./gradlew --stop
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -106,7 +106,7 @@ jobs:
             ~/.gradle/wrapper
           key: release-publish-gradle-${{ github.run_id }}
 
-  # ノードごとに別ランナーでビルドする。1台で全ノードを順に作ると20分近くかかる
+  # Build each node on a separate runner. Building all nodes in sequence on one machine takes nearly 20 minutes
   build:
     needs: discover
     runs-on: ubuntu-latest
@@ -122,7 +122,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
-      # CIのbuildジョブのキャッシュを借りるだけにする。リリースから書き出しても次のリリースまでに追い出される
+      # Only borrow the cache of CI's build job. Anything written from a release gets evicted before the next release
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-read-only: true
@@ -133,7 +133,7 @@ jobs:
           NODE: ${{ matrix.node.node }}
         run: ./gradlew verifyDistribution --console=plain -Prelease "-Pmod_version=$RELEASE_VERSION" "-Pxaeronav.onlyNodes=$NODE"
 
-      # 公開ジョブと同じく正典ノードだけを構成して試す
+      # Like the publish jobs, configure and test only the canonical node
       - name: Dry run every platform
         env:
           RELEASE_VERSION: ${{ needs.discover.outputs.version }}
@@ -211,8 +211,8 @@ jobs:
       actions: read
     strategy:
       fail-fast: false
-      # GitHub Proで同時に動かせるジョブ数の上限（これ以上は待たされるだけ）。
-      # 1件の投稿は数リクエストなので、Modrinth（IPごとに毎分300）・CurseForgeの上限には届かない
+      # The limit on concurrent jobs with GitHub Pro (beyond this they just wait).
+      # One upload is a few requests, so it stays under the Modrinth (300 per minute per IP) and CurseForge limits
       max-parallel: 40
       matrix:
         platform: [modrinth, curseforge]
@@ -264,7 +264,7 @@ jobs:
           MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
           CURSEFORGE_PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
           CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
-        # 投稿はビルド済みのjarを送るだけなので、公開ノードは構成しない（構成するとそのノードのMinecraftを用意する）
+        # Uploading only sends already-built jars, so the publish nodes aren't configured (configuring would prepare that node's Minecraft)
         run: ./gradlew publishMods -Prelease "-Pmod_version=$RELEASE_VERSION" "-Ppublish_target=$PLATFORM" "-Ppublish_node=$NODE" "-Pxaeronav.onlyNodes=$CANONICAL_NODE"
 
   github_release:

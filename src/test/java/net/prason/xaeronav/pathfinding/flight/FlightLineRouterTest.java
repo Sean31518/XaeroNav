@@ -18,7 +18,7 @@ class FlightLineRouterTest {
     private static final Vec3 START = new Vec3(-100.0, 100.0, 0.0);
     private static final Vec3 GOAL = new Vec3(100.0, 100.0, 0.0);
 
-    /** X=0付近に、高さ{@code top}・X方向の厚み{@code halfWidth*2}・Z方向の幅{@code halfDepth*2}の壁を置く。 */
+    /** Places a wall near X=0 with height {@code top}, X thickness {@code halfWidth*2}, and Z width {@code halfDepth*2}. */
     private static FakeCells wall(int halfWidth, int top, int halfDepth) {
         FakeCells cells = FakeCells.empty(BOUNDS);
         for (int x = -halfWidth; x <= halfWidth; x++) {
@@ -31,7 +31,7 @@ class FlightLineRouterTest {
         return cells;
     }
 
-    /** {@link #wall}と同じ形の水塊。 */
+    /** A water body with the same shape as {@link #wall}. */
     private static FakeCells water(int halfWidth, int top, int halfDepth) {
         FakeCells cells = FakeCells.empty(BOUNDS);
         for (int x = -halfWidth; x <= halfWidth; x++) {
@@ -48,7 +48,7 @@ class FlightLineRouterTest {
         return new FlightLineRouter(cells).findGuideLine(START, GOAL);
     }
 
-    /** 曲がり点が中点からどちらへ、どれだけずれたか。 */
+    /** Which way, and how far, the bend point shifted from the midpoint. */
     private static Vec3 bendOffset(List<Vec3> line) {
         return line.get(1).subtract(START.add(GOAL).scale(0.5));
     }
@@ -60,24 +60,24 @@ class FlightLineRouterTest {
 
     @Test
     void bendsAroundAThinTallSpire() {
-        // 薄くて高い尖峰。越えるには何十マスも上がる必要があるが、横へは数マスで抜けられる
+        // A thin, tall spire. Going over it needs dozens of blocks of climbing, but sideways it can be passed in a few blocks
         List<Vec3> line = route(wall(2, 260, 2));
 
-        assertEquals(3, line.size(), "曲がり点が入らず、尖峰を突き抜けたままになっている");
+        assertEquals(3, line.size(), "No bend point was added; the line still pierces the spire");
         Vec3 offset = bendOffset(line);
         assertTrue(Math.abs(offset.z) > Math.abs(offset.y),
-                "細い尖峰は横に避けるべきだが、上を越えようとしている: " + offset);
+                "A narrow spire should be avoided sideways, but it's trying to go over: " + offset);
     }
 
     @Test
     void climbsOverALowButVeryWideRidge() {
-        // 低いが左右に広い尾根。横へ抜けるには探索半径いっぱいでも足りず、上へ数マス上がる方が安い
+        // A low but wide ridge. Going around sideways isn't enough even at the full search radius; climbing a few blocks is cheaper
         List<Vec3> line = route(wall(4, 110, 180));
 
-        assertEquals(3, line.size(), "曲がり点が入らず、尾根を突き抜けたままになっている");
+        assertEquals(3, line.size(), "No bend point was added; the line still pierces the ridge");
         Vec3 offset = bendOffset(line);
         assertTrue(offset.y > Math.abs(offset.z),
-                "広い尾根は上を越えるべきだが、横へ避けようとしている: " + offset);
+                "A wide ridge should be crossed over the top, but it's trying to avoid it sideways: " + offset);
     }
 
     @Test
@@ -88,29 +88,29 @@ class FlightLineRouterTest {
         FlightLineRouter router = new FlightLineRouter(cells);
         for (int i = 0; i + 1 < line.size(); i++) {
             assertTrue(router.findGuideLine(line.get(i), line.get(i + 1)).size() == 2,
-                    "曲げた後の区間 " + i + " がまだ地形を貫いている");
+                    "Segment " + i + " after bending still pierces the terrain");
         }
     }
 
     @Test
     void fallsBackToTheStraightLineWhenNothingClears() {
-        // 上下・左右いずれの向きにも探索範囲を超えて広がる壁。曲げようが無い
+        // A wall extending beyond the search range up, down, left, and right. There's no way to bend around it
         List<Vec3> line = route(wall(4, BOUNDS.maxY(), 200));
 
         assertEquals(List.of(START, GOAL), line,
-                "避けられないときは素の直線へ落とすべき（線ごと消してはいけない）");
+                "When it can't be avoided, fall back to the plain straight line (don't drop the line altogether)");
     }
 
     @Test
     void bendsAroundWater() {
-        // 水も障害物。滑空の点線が水面を貫かないための挙動
-        assertEquals(3, route(water(2, 260, 2)).size(), "水塊を突き抜けたまま曲がっていない");
+        // Water is an obstacle too. This behavior keeps the gliding dotted line from piercing the water surface
+        assertEquals(3, route(water(2, 260, 2)).size(), "The line still pierces the water body without bending");
     }
 
     @Test
     void ignoresUnknownCellsInsteadOfTreatingThemAsWalls() {
-        // 未読み込み扱い(ABSENT)で埋めた空間。データが無いだけの場所を壁と見なすと、
-        // 描画距離の遥か先を指す目的地では毎回「貫いている」判定になってしまう
+        // Space filled as unloaded (ABSENT). Treating places that merely have no data as walls would make
+        // a goal far beyond the render distance be judged as "piercing" every time
         FakeCells cells = FakeCells.empty(BOUNDS).fillWith(FakeCells.ABSENT);
 
         assertEquals(List.of(START, GOAL), route(cells));

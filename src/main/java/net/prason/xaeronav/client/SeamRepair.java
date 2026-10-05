@@ -32,84 +32,84 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.util.ChangeGate;
 
 /**
- * <b>繋ぎ目をまたぐ区間だけを解き直す。</b>安くなったならその区間だけ差し替える。
+ * <b>Re-solves only the stretch that spans a seam.</b> If it got cheaper, only that stretch is swapped in.
  *
- * <p>継ぎ足しも合流も、後の区間は<b>前の区間がどこを通ったかを知らないまま</b>解かれる。
- * 区間Aは人工的な中間目標へ最適に着くよう解かれるので、「そこへどう着くか」と
- * 「そこからどう出るか」が食い違い、繋ぎ目にだけ角が残る（{@link #SPAN_BLOCKS}）。
- * 両側が揃ったここで初めて、その角を丸められる。
+ * <p>With both extend and splice, the later leg is solved <b>without knowing where the earlier leg went</b>.
+ * Leg A is solved to arrive optimally at an artificial intermediate target, so "how to get there" and
+ * "how to leave from there" disagree, and a corner is left only at the seam ({@link #SPAN_BLOCKS}).
+ * Only here, with both sides in place, can that corner be rounded off.
  *
- * <p><b>全部引き直すのでは代わりにならない。</b>オフライン実測（{@code SeamDetourTest}）では、
- * 引き直しても繋ぎ目の遠回りは半分しか消えず（引き直した先にも新しい繋ぎ目ができる）、
- * 足元の線が4〜12回描き変わった。ここは1〜3回で、しかも足元ではなく先の方が変わる。
+ * <p><b>Replanning everything is no substitute.</b> In offline measurements ({@code SeamDetourTest}),
+ * replanning removed only half of the seam detours (the replanned path gets new seams of its own),
+ * and the line underfoot was redrawn 4-12 times. Here it's 1-3 times, and it's the line ahead that changes, not the one underfoot.
  *
- * <p>{@link PathfindingState}の目的地/経路/計算中フラグは{@link Host}経由でしか触らない
- * （{@link FlightNavState}が{@code stillFlyingTo}/{@code onChanged}で同じことをしている）。
- * 非同期完了時に読むのは<b>呼んだ時点でキャプチャした値ではなく、その時点の最新の状態</b>——
- * 目的地の変更や経路の差し替えが完了までの間に起きていれば、それを見逃さないため。
+ * <p>{@link PathfindingState}'s destination/path/computing flag are touched only via {@link Host}
+ * ({@link FlightNavState} does the same with {@code stillFlyingTo}/{@code onChanged}).
+ * On async completion it reads <b>the latest state at that moment, not values captured at call time</b>,
+ * so that a destination change or path swap that happened before completion isn't missed.
  */
 final class SeamRepair {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
     /**
-     * 繋ぎ目をまたいで解き直す長さ（繋ぎ目の手前・先それぞれ何ブロックか）。
+     * Length re-solved across a seam (how many blocks before and after the seam, each).
      *
-     * <p><b>繋ぎ目にだけ遠回りが溜まる</b>のは、区間Aが「{@code detailHorizon}先の人工的な
-     * 中間目標へ最適に着く」よう解かれるため——そこへ<b>どう着くか</b>と、そこから<b>どう出るか</b>は
-     * 別問題で、両側が揃うまで最適化のしようがない。オフライン実測（{@code SeamDetourTest}）では
-     * 繋ぎ目を含む64ブロックの窓が平均1.02〜1.21倍・最悪1.795倍で、繋ぎ目を含まない窓（1.00〜1.05倍）
-     * とはっきり分かれた。
+     * <p><b>Detours accumulate only at seams</b> because leg A is solved to "arrive optimally at an artificial
+     * intermediate target {@code detailHorizon} ahead"; <b>how it arrives</b> there and <b>how it leaves</b> from there are
+     * separate problems, and can't be optimized until both sides are in place. In offline measurements ({@code SeamDetourTest}),
+     * 64-block windows containing a seam averaged 1.02-1.21x with a worst case of 1.795x, clearly separated
+     * from windows without a seam (1.00-1.05x).
      *
-     * <p>48は「片側1区間ぶんの半分」。これより短いと角を丸める余地が無く、長くすると
-     * <b>まだ歩いていない線が大きく描き変わる</b>方の代償が勝つ。
+     * <p>48 is "half of one leg on one side". Shorter leaves no room to round the corner; longer lets the cost of
+     * <b>significantly redrawing the line not yet walked</b> win out.
      */
     private static final double SPAN_BLOCKS = 48.0;
 
     /**
-     * プレイヤーの前方これだけは解き直さない（ブロック）。
+     * This much ahead of the player is never re-solved (blocks).
      *
-     * <p>足元の線が描き変わるのは一度直した症状（「歩いているだけで案内が変わる」）。繋ぎ目は
-     * 継ぎ足しの根元＝ふつうは数十ブロック先にあるので、ここを残しても修復の効き目は落ちない。
+     * <p>The line underfoot being redrawn is a symptom fixed once before ("the guidance changes just by walking"). Seams are
+     * at the root of an extension = usually dozens of blocks ahead, so leaving this alone doesn't weaken the repair.
      */
     private static final double KEEP_BLOCKS = 16.0;
 
-    /** 解き直した区間がこの割合より安くならないなら、線を描き変えない。 */
+    /** If the re-solved stretch isn't cheaper by at least this ratio, the line isn't redrawn. */
     private static final double MIN_GAIN = 0.98;
 
     /**
-     * 解き直す区間の最小のステップ数。これを割るなら繋ぎ目の両側が揃っていない
-     * （経路の端に寄りすぎている）ので、解き直しても丸める角が無い。
+     * Minimum number of steps in the re-solved stretch. Below this, the two sides of the seam aren't both in place
+     * (it's too close to the end of the path), so re-solving has no corner to round.
      */
     private static final int MIN_STEPS = 4;
 
     /**
-     * 繋ぎ目の修復に使う重み。<b>ここだけ1.0</b>——修復は「今より確実に安い線」が見つかったときだけ
-     * 採るもので、貪欲な重みで別の線を引き当てても交換する意味が無い。区間が96ブロックと短いので
-     * 重み1.0でも上の予算に収まる。
+     * Weight used for seam repair. <b>1.0 here only</b>: a repair is adopted only when a "line definitely cheaper than now"
+     * is found, and there's no point swapping for a different line hit upon with a greedy weight. The stretch is short at 96 blocks, so
+     * it fits within the budget above even with weight 1.0.
      */
     private static final double HEURISTIC_WEIGHT = 1.0;
 
     /**
-     * 解き直し待ちの繋ぎ目を覚えておく数。溢れたら古い方から捨てる。
+     * Number of seams awaiting re-solve to remember. When it overflows, the oldest are dropped.
      *
-     * <p>捨てて構わないのは、古い繋ぎ目ほど<b>プレイヤーが既に歩き終えている</b>から——
-     * 直しても案内は変わらない。覚え続けると、経路が伸びるほど列だけが伸びていく。
+     * <p>Dropping is fine because the older a seam, the more likely <b>the player has already walked past it</b>;
+     * fixing it wouldn't change the guidance. Remembering them all would make the queue grow as the path grows.
      */
     private static final int QUEUE_LIMIT = 4;
 
-    /** {@link PathfindingState}が持つ、非同期完了時に読み書きする必要のある可変状態。 */
+    /** Mutable state held by {@link PathfindingState} that must be read and written on async completion. */
     interface Host {
-        /** 現在の目的地。 */
+        /** Current destination. */
         @Nullable BlockPos goal();
 
-        /** 現在表示中の経路。 */
+        /** Currently displayed path. */
         PathfindingState.DisplayedPath displayed();
 
-        /** 表示中の経路を差し替える。 */
+        /** Swaps the displayed path. */
         void setDisplayed(PathfindingState.DisplayedPath path);
 
-        /** 探索中フラグを立て下げする。 */
+        /** Sets and clears the computing flag. */
         void setComputing(boolean computing);
     }
 
@@ -121,38 +121,38 @@ final class SeamRepair {
     private final RecentFailures recentFailures;
 
     /**
-     * まだ解き直していない繋ぎ目の座標（継ぎ足しの根元、または合流点）。
+     * Coordinates of seams not yet re-solved (the root of an extension, or a splice point).
      *
-     * <p><b>列で持つ。</b>深い先読みでは継ぎ足しが数tick続けて走るので、1つしか覚えないと
-     * 最後の繋ぎ目以外が取りこぼされる。書くのはワーカースレッド（継ぎ足し・合流の完了）、
-     * 読むのはtick——{@link #QUEUE_LIMIT}で頭打ちにして古い方から捨てる。
+     * <p><b>Kept as a queue.</b> With deep lookahead, extensions run several ticks in a row, so remembering only one
+     * would miss every seam but the last. Written by worker threads (extend/splice completion),
+     * read on tick; capped by {@link #QUEUE_LIMIT}, dropping the oldest.
      *
-     * <p>添字ではなく座標で持つ。修復が走るまでに合流や迂回で添字がずれうるうえ、
-     * 見つからなければ「その繋ぎ目はもう無い」と分かって黙って捨てられる。
+     * <p>Kept as coordinates rather than indices. Indices can shift with splices or detours before the repair runs, and
+     * if a coordinate isn't found it's clear that "that seam is gone", so it can be silently dropped.
      */
     private final Queue<BlockPos> pending = new ConcurrentLinkedQueue<>();
 
     /**
-     * 継ぎ足しが経路の手前へ並走して戻ってきた輪の両端（{@code Extend#noteLoop}）。
+     * The two ends of a loop where an extension ran back alongside the earlier path ({@code Extend#noteLoop}).
      *
-     * <p>1つだけでなく複数覚える。同じtickに続いた継ぎ足しの小さな輪が大きな輪を上書きすると、大きな方が残る
-     * （実機のエンド: 153ステップの輪が26ステップの輪に上書きされ、V字が残った）。
+     * <p>Several are remembered, not just one. When a small loop from a following extension in the same tick overwrites a large loop, the large one remains
+     * (in-game End: a 153-step loop was overwritten by a 26-step loop, and a V shape remained).
      *
-     * <p>繋ぎ目の列とは別に持つ。{@link PathLoops#fold}が畳めるのは同じ座標を2度踏む輪だけで、横を
-     * 並走して戻る輪は残る。繋ぎ目の前後{@link #SPAN_BLOCKS}を解き直す通常の修復では、輪の入口が
-     * {@link #KEEP_BLOCKS}の内側（足元）にあると入口ごと残ってしまう。輪の両端をそのまま区間にすれば、
-     * 入口より手前の線は1ブロックも変わらない。
+     * <p>Kept separately from the seam queue. {@link PathLoops#fold} can only fold loops that step on the same coordinate twice;
+     * loops that run back alongside remain. With the usual repair that re-solves {@link #SPAN_BLOCKS} around a seam, if the loop's entry
+     * is inside {@link #KEEP_BLOCKS} (underfoot), the entry remains too. Using the loop's two ends as the stretch directly,
+     * the line before the entry doesn't change by a single block.
      */
     private final ConcurrentLinkedQueue<Loop> pendingLoops = new ConcurrentLinkedQueue<>();
 
-    /** 覚えておく輪の数。溢れたら古い方から捨てる。 */
+    /** Number of loops to remember. When it overflows, the oldest are dropped. */
     private static final int LOOP_QUEUE_LIMIT = 4;
 
-    /** 輪の入口（経路側）と、戻ってきた所（継ぎ足し側）。 */
+    /** The loop's entry (path side) and where it came back (extension side). */
     record Loop(BlockPos entry, BlockPos rejoin) {
     }
 
-    /** 直近に報告した繋ぎ目の解き直し見送りの理由。同じ理由を毎回出さないための重複除去。 */
+    /** Most recently reported reason for skipping a seam repair. Deduplication so the same reason isn't printed every time. */
     private final ChangeGate<String> refusalGate = new ChangeGate<>();
 
     SeamRepair(PathfindingExecutor executor, AtomicLong generation, GenerationGate generationGate,
@@ -165,12 +165,12 @@ final class SeamRepair {
         this.recentFailures = recentFailures;
     }
 
-    /** 解き直し待ちの繋ぎ目が1つも無いか。 */
+    /** Whether there are no seams awaiting re-solve. */
     boolean isEmpty() {
         return pending.isEmpty() && pendingLoops.isEmpty();
     }
 
-    /** 並走して戻る輪を覚える。次の{@link #tryRepair}で、繋ぎ目より先に解き直す。 */
+    /** Remembers a loop running back alongside. Re-solved on the next {@link #tryRepair}, before seams. */
     void queueLoop(Loop loop) {
         pendingLoops.add(loop);
         while (pendingLoops.size() > LOOP_QUEUE_LIMIT) {
@@ -178,7 +178,7 @@ final class SeamRepair {
         }
     }
 
-    /** 解き直し待ちの繋ぎ目を覚える。溢れたら古い方から捨てる。 */
+    /** Remembers a seam awaiting re-solve. When it overflows, the oldest are dropped. */
     void queue(BlockPos seam) {
         pending.add(seam);
         while (pending.size() > QUEUE_LIMIT) {
@@ -186,36 +186,36 @@ final class SeamRepair {
         }
     }
 
-    /** 目的地の変更で、解き直し待ちの列と直近の見送り理由を捨てる。 */
+    /** On a destination change, drops the queue of seams awaiting re-solve and the most recent skip reason. */
     void clear() {
         pending.clear();
         pendingLoops.clear();
         refusalGate.reset();
     }
 
-    /** 全部引き直すとき、手前の経路ごと消える繋ぎ目だけを捨てる。見送り理由はまだ有効なので残す。 */
+    /** When replanning everything, drops only the seams that vanish along with the earlier path. The skip reason is still valid, so it's kept. */
     void dropPending() {
         pending.clear();
         pendingLoops.clear();
     }
 
-    /** 直近に報告した見送りの理由（診断用）。 */
+    /** Most recently reported skip reason (for diagnostics). */
     @Nullable String currentRefusal() {
         return refusalGate.current();
     }
 
     /**
-     * 1つの繋ぎ目につき一度だけ試す。断られた繋ぎ目をtickごとに測り直しても、地形も経路も
-     * 変わっていないので同じ答えしか返らない。
+     * Each seam is tried only once. Re-measuring a refused seam every tick returns only the same answer,
+     * since neither the terrain nor the path has changed.
      *
-     * @return 解き直しを投げたか（投げたなら、結果は非同期で反映される）
+     * @return whether a re-solve was dispatched (if so, the result is applied asynchronously)
      */
     boolean tryRepair(Level level, Player player, PathfindingState.DisplayedPath shown, int renderRadius) {
         long lap = TickLaps.start();
         try {
             return tryRepairNow(level, player, shown, renderRadius);
         } finally {
-            TickLaps.add("繋ぎ目の解き直し", lap);
+            TickLaps.add("seam repair", lap);
         }
     }
 
@@ -233,11 +233,11 @@ final class SeamRepair {
         int walkedTo = PathProgress.INSTANCE.indexFor(result);
         int seamIndex = stepIndexOf(steps, seam, walkedTo);
         if (seamIndex < 0) {
-            // 合流や迂回でその繋ぎ目ごと消えていた。直すものが無い
-            noteSeamRepairRefused("繋ぎ目が経路上に無い");
+            // The seam vanished with a splice or detour. Nothing to fix
+            noteSeamRepairRefused("seam not on the path");
             return false;
         }
-        // 足元は残す。ここを削ると「歩いているだけで案内が変わる」に戻る
+        // Keep the stretch underfoot. Cutting it would bring back "the guidance changes just by walking"
         int first = walkedTo + 1;
         while (first < steps.size()
                 && pathLengthBetween(steps, walkedTo, first) < KEEP_BLOCKS) {
@@ -252,21 +252,21 @@ final class SeamRepair {
             to++;
         }
         if (from < 1 || from >= seamIndex || to <= seamIndex || to - from < MIN_STEPS) {
-            // 繋ぎ目の両側が揃っていない（経路の端か、足元に寄りすぎている）
-            noteSeamRepairRefused("繋ぎ目の両側が揃っていない (手前=" + (seamIndex - from)
-                    + "ステップ, 先=" + (to - seamIndex) + "ステップ)");
+            // The two sides of the seam aren't both in place (at the end of the path, or too close to the player's feet)
+            noteSeamRepairRefused("both sides of the seam not in place (before=" + (seamIndex - from)
+                    + " steps, after=" + (to - seamIndex) + " steps)");
             return false;
         }
 
-        solve(level, player, shown, renderRadius, from, to, first, "繋ぎ目=" + seam.toShortString());
+        solve(level, player, shown, renderRadius, from, to, first, "seam=" + seam.toShortString());
         return true;
     }
 
     /**
-     * 輪の入口から戻ってきた所までを解き直す。入口より手前は変えない。
+     * Re-solves from the loop's entry to where it came back. Nothing before the entry is changed.
      *
-     * <p>輪の先のステップが、輪の中で置いたブロックや掘った穴を前提に繋がっていれば解き直さない。輪ごと消すと足場ごと消える
-     * （{@link PathLoops#laterStepsDependOn}）。前提にしていなければ、輪の中に設置・掘削があっても結び直す。
+     * <p>If steps after the loop depend on blocks placed or holes dug inside the loop, it isn't re-solved: removing the loop would remove the footing too
+     * ({@link PathLoops#laterStepsDependOn}). If they don't depend on them, it's reconnected even if the loop has placements or digging.
      */
     private boolean tryCutLoop(Level level, Player player, PathfindingState.DisplayedPath shown, int renderRadius,
             Loop loop) {
@@ -275,24 +275,24 @@ final class SeamRepair {
         int entry = stepIndexOf(steps, loop.entry(), walkedTo);
         int rejoin = entry < 0 ? -1 : stepIndexOf(steps, loop.rejoin(), entry + 1);
         if (rejoin < 0) {
-            // 通り過ぎたか、合流や引き直しで輪ごと消えていた
-            noteSeamRepairRefused("輪が経路上に無い");
+            // Already passed, or the loop vanished with a splice or replan
+            noteSeamRepairRefused("loop not on the path");
             return false;
         }
         if (PathLoops.laterStepsDependOn(steps, entry + 1, rejoin)) {
-            noteSeamRepairRefused("輪の先が輪の中の設置・掘削を前提にしている");
+            noteSeamRepairRefused("steps after the loop depend on placements/digging inside it");
             return false;
         }
         solve(level, player, shown, renderRadius, entry + 1, rejoin, walkedTo + 1,
-                "輪=" + loop.entry().toShortString() + "→" + loop.rejoin().toShortString());
+                "loop=" + loop.entry().toShortString() + "→" + loop.rejoin().toShortString());
         return true;
     }
 
     /**
-     * 経路の{@code sectionFrom}から{@code sectionTo}まで（両端を含む）を、{@code sectionFrom - 1}から
-     * {@code sectionTo}へ引き直した線で置き換える。安くなるときだけ。
+     * Replaces the path from {@code sectionFrom} to {@code sectionTo} (inclusive) with a line replanned from {@code sectionFrom - 1}
+     * to {@code sectionTo}. Only when it gets cheaper.
      *
-     * @param first 置く枚数を数え始める添字（プレイヤーの少し先）
+     * @param first index from which to start counting placed blocks (a little ahead of the player)
      */
     private void solve(Level level, Player player, PathfindingState.DisplayedPath shown, int renderRadius,
             int sectionFrom, int sectionTo, int first, String label) {
@@ -307,15 +307,15 @@ final class SeamRepair {
                 renderRadius);
         long captureLap = TickLaps.start();
         ChunkView view = ChunkView.capture(level, player, bounds, tuning.movementOptions());
-        TickLaps.add("チャンク集め", captureLap);
+        TickLaps.add("chunk capture", captureLap);
         SearchLimits full = tuning.searchLimits();
-        // 予算は1区間と同じ。<b>頭打ちにしてはいけない</b>——6万で切ったところ、実機ログに
-        // 「解き直しが繋ぎ目の先へ届かなかった (NODE_BUDGET)」が出て、ネザーの橋だらけの繋ぎ目が
-        // 直らないまま残った（オフラインでも局所の遠回りが最悪1.059倍→1.927倍に戻る）。
-        // 待ち時間を縛っているのは元々ノード数ではなく壁時計（既定2秒）の方
+        // The budget is the same as one leg. <b>Don't cap it</b>: when it was cut at 60k, the in-game log
+        // showed "re-solve didn't reach past the seam (NODE_BUDGET)", and Nether seams full of bridges
+        // were left unfixed (offline, local detours also went back from a worst case of 1.059x to 1.927x).
+        // What bounds the wait was never the node count but the wall clock (default 2 seconds)
         SearchLimits limits = new SearchLimits(full.maxExpandedNodes(), full.timeLimitMillis(),
                 HEURISTIC_WEIGHT);
-        // 差し替えない区間で置くと決まっているぶんは、この区間には使えない
+        // Blocks committed to be placed in the stretches not being swapped can't be used in this stretch
         Carryover carried = new Carryover(Carryover.trailingBridgeRun(steps.subList(0, sectionFrom)),
                 Carryover.placements(steps.subList(0, sectionFrom), first)
                         + Carryover.placements(steps, sectionTo + 1));
@@ -323,21 +323,21 @@ final class SeamRepair {
         BlockPos currentGoal = host.goal();
         long myGeneration = generation.incrementAndGet();
         host.setComputing(true);
-        // 層1のガイドは掛けない。大局はこの区間が差し替える経路の側が既に決めていて、ここで要るのは
-        // <b>その両端を結ぶいちばん安い線</b>だけ。<b>掛けても効かないことは実測済み</b>——96ブロックの
-        // 区間では16ブロック解像度のガイドが幾何Heuristicを下回り、maxで常に負けるので展開ノード数が
-        // 1つも変わらなかった（5地形すべてで完全一致）
+        // Layer 1's guide isn't applied. The big picture is already decided by the path this stretch replaces; all that's needed here is
+        // <b>the cheapest line connecting its two ends</b>. <b>Applying it was measured to have no effect</b>: in a 96-block
+        // stretch the 16-block-resolution guide falls below the geometric Heuristic and always loses in max, so the expanded node count
+        // didn't change by a single node (identical on all 5 terrains)
         PlannedCellSource repairTerrain = new PlannedCellSource(view, steps.subList(0, sectionFrom),
                 walkedTo + 1);
         CompletableFuture<PathResult> repairFuture = executor.submit(
                 AvoidedCellSource.wrap(repairTerrain, recentFailures.avoided()),
                 fromPos, toPos, limits, false, 0, carried);
-        generationGate.whenStillCurrent(repairFuture, myGeneration, TickLaps.timed("受け取り/繋ぎ目", (repaired, error) -> {
+        generationGate.whenStillCurrent(repairFuture, myGeneration, TickLaps.timed("receive/seam", (repaired, error) -> {
             try {
                 host.setComputing(false);
                 if (error != null) {
                     if (!(error instanceof CancellationException)) {
-                        LOGGER.error("XaeroNav: 繋ぎ目の解き直しに失敗しました", error);
+                        LOGGER.error("XaeroNav: Failed to re-solve the seam", error);
                     }
                     return;
                 }
@@ -346,20 +346,20 @@ final class SeamRepair {
                 }
                 if (!repaired.complete() || repaired.steps().isEmpty()
                         || !PathfindingState.endOf(repaired, fromPos).equals(toPos)) {
-                    noteSeamRepairRefused("解き直しが繋ぎ目の先へ届かなかった (" + repaired.termination() + ")");
+                    noteSeamRepairRefused("re-solve didn't reach past the seam (" + repaired.termination() + ")");
                     return;
                 }
                 double replacement = stepsCost(repaired.steps(), 0, repaired.steps().size() - 1);
                 if (replacement >= current * MIN_GAIN) {
-                    noteSeamRepairRefused("解き直しても安くならない (" + Math.round(current) + "→"
+                    noteSeamRepairRefused("re-solve isn't cheaper (" + Math.round(current) + "→"
                             + Math.round(replacement) + "tick)");
                     return;
                 }
                 refusalGate.reset();
                 long replaceLap = TickLaps.start();
                 host.setDisplayed(withSection(shown, repaired.steps(), sectionFrom, sectionTo));
-                TickLaps.add("解き直しの差し替え", replaceLap);
-                LOGGER.debug("XaeroNav: 繋ぎ目を解き直しました ({}, {}→{}tick, {}→{}ステップ, 展開ノード数={})",
+                TickLaps.add("seam repair swap", replaceLap);
+                LOGGER.debug("XaeroNav: Re-solved the seam ({}, {}→{}tick, {}→{} steps, expanded nodes={})",
                         label, Math.round(current), Math.round(replacement),
                         sectionTo - sectionFrom + 1, repaired.steps().size(), repaired.expandedNodes());
             } finally {
@@ -369,18 +369,18 @@ final class SeamRepair {
     }
 
     /**
-     * 繋ぎ目を直せなかった理由を残す（診断）。ここが黙っていると、実機で
-     * 「繋ぎ目を解き直しました」が出ないときに<b>断っているのか、そもそも走っていないのか</b>が
-     * 分からない。同じ理由を毎回出さないよう、直前と違うときだけ出す。
+     * Records why a seam couldn't be fixed (diagnostics). If this stayed silent, then when
+     * "Re-solved the seam" doesn't appear in-game, you couldn't tell <b>whether it's refusing or not running at all</b>.
+     * To avoid printing the same reason every time, it's printed only when it differs from the previous one.
      */
     private void noteSeamRepairRefused(String reason) {
         if (!refusalGate.changed(reason)) {
             return;
         }
-        LOGGER.debug("XaeroNav: 繋ぎ目の解き直しを見送りました ({})", reason);
+        LOGGER.debug("XaeroNav: Skipped re-solving the seam ({})", reason);
     }
 
-    /** {@code from}以降で、この座標を踏んでいるステップの添字。無ければ{@code -1}。 */
+    /** Index of the step at or after {@code from} that stands on this coordinate, or {@code -1} if none. */
     private static int stepIndexOf(List<PathStep> steps, BlockPos pos, int from) {
         for (int i = Math.max(0, from); i < steps.size(); i++) {
             if (steps.get(i).pos().equals(pos)) {
@@ -390,7 +390,7 @@ final class SeamRepair {
         return -1;
     }
 
-    /** 経路に沿った{@code from}から{@code to}までの長さ（ブロック）。 */
+    /** Length along the path from {@code from} to {@code to} (blocks). */
     private static double pathLengthBetween(List<PathStep> steps, int from, int to) {
         double length = 0;
         for (int i = Math.max(1, from + 1); i <= to && i < steps.size(); i++) {
@@ -399,7 +399,7 @@ final class SeamRepair {
         return length;
     }
 
-    /** {@code from}から{@code to}まで（両端を含む）のコストの合計。 */
+    /** Total cost from {@code from} to {@code to} (inclusive). */
     private static double stepsCost(List<PathStep> steps, int from, int to) {
         double total = 0;
         for (int i = from; i <= to && i < steps.size(); i++) {
@@ -409,10 +409,10 @@ final class SeamRepair {
     }
 
     /**
-     * 経路の{@code from}から{@code to}までを差し替えた経路を組み立てる。前後はそのまま残る。
+     * Builds the path with {@code from} through {@code to} swapped out. Everything before and after stays as is.
      *
-     * <p>差し替えた中にあった区間の切れ目は落とす——その繋ぎ目はもう無い。落としたぶんの
-     * 中間目標の番号は後ろの区間が引き取る（HUDのカウンタも地図の点線もそちらを見る）。
+     * <p>Leg boundaries that were inside the swapped part are dropped; those seams no longer exist. The intermediate target
+     * numbers of the dropped ones are taken over by the following leg (the HUD counter and the map's dotted line both look at that one).
      */
     static PathfindingState.DisplayedPath withSection(PathfindingState.DisplayedPath shown,
                                                         List<PathStep> section, int from, int to) {
@@ -420,7 +420,7 @@ final class SeamRepair {
         List<PathStep> merged = new ArrayList<>(steps.subList(0, from));
         merged.addAll(section);
         merged.addAll(steps.subList(to + 1, steps.size()));
-        // 差し替えた区間は前後がどこを通るかを知らないので、繋ぎ目で同じ位置を踏み直しうる
+        // The swapped stretch doesn't know where its neighbors go, so it may step on the same position again at the seam
         PathLoops.Folded folded = PathLoops.fold(merged);
         int shift = section.size() - (to - from + 1);
         List<PathfindingState.PathSegment> segments = new ArrayList<>();
@@ -442,7 +442,7 @@ final class SeamRepair {
         }
         PathResult combined = new PathResult(List.copyOf(folded.steps()), shown.result().termination(),
                 shown.result().expandedNodes(), shown.result().distinctNodes(), shown.result().limitsHeld());
-        // 差し替えたのは歩いた先だけなので、いま指している位置はそのまま通用する
+        // Only the part ahead of where the player walked was swapped, so the position currently pointed at remains valid
         PathProgress.INSTANCE.carryOver(combined);
         return new PathfindingState.DisplayedPath(combined, shown.mode(), shown.waypointIndex(),
                 List.copyOf(segments));

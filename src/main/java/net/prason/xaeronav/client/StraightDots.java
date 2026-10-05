@@ -1,20 +1,20 @@
 package net.prason.xaeronav.client;
 
 /**
- * 経路が分からない区間を目的地まで直線で結ぶ、地図用の点線。
+ * A dotted line for the map that joins the stretch with no known route straight to the destination.
  *
- * <p>未読み込みチャンクの先は探索そのものができないので、地図上でも経路は途中で終わる。
- * どちらへ向かえばいいのかだけは分かるように、残りを直線で繋いで描く。地形を辿った経路とは
- * 別物なので、実線ではなく点線にして区別する。
+ * <p>Beyond unloaded chunks no search is possible at all, so the route on the map ends partway too.
+ * So that at least the direction to head is clear, the rest is drawn as a straight connection. It's not the same thing
+ * as a route that follows terrain, so it's drawn dotted rather than solid to tell them apart.
  */
 final class StraightDots {
 
-    /** 点線の周期（ブロック）。周期の前半だけを描く。 */
+    /** Period of the dotted line (blocks). Only the first half of each period is drawn. */
     private static final int PERIOD = 4;
     private static final int DASH = 2;
 
     /**
-     * 刻む点の上限。目的地が数千ブロック先でも、地図に載らない範囲まで数える意味はない。
+     * Cap on the number of dots. Even if the destination is thousands of blocks away, there's no point counting beyond what fits on the map.
      */
     private static final int MAX_DOTS = 4096;
 

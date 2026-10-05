@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import net.minecraft.core.BlockPos;
 
-/** 空の下で光の柱を立てる地点と、HUDの矢印の向き。 */
+/** Where to raise the light pillar under open sky, and the direction of the HUD arrow. */
 class SkyGuideTest {
 
     private static final IntBinaryOperator FLAT_64 = (x, z) -> 64;
@@ -33,7 +33,7 @@ class SkyGuideTest {
 
     @Test
     void standsAboveAnUndergroundGoalWithoutCaveData() {
-        // 要塞のように目的地だけが地下で、ルートは地表を通っている。目的地の真上の地表に立てる
+        // Like a stronghold, only the goal is underground while the route runs along the surface. Raise it on the surface directly above the goal
         BlockPos goal = new BlockPos(400, 20, 0);
         List<BlockPos> route = List.of(new BlockPos(100, 64, 0), new BlockPos(200, 64, 0));
 
@@ -50,12 +50,12 @@ class SkyGuideTest {
 
     @Test
     void arrowPointsRelativeToWhereThePlayerFaces() {
-        // ヨー0は南(+Z)向き。南の目的地は正面、西(-X)は右、東(+X)は左、北は後ろ
+        // Yaw 0 faces south (+Z). A goal to the south is ahead, west (-X) is right, east (+X) is left, north is behind
         assertEquals("↑", NavHud.bearingArrow(0, 0, 0f, 0, 100));
         assertEquals("→", NavHud.bearingArrow(0, 0, 0f, -100, 0));
         assertEquals("←", NavHud.bearingArrow(0, 0, 0f, 100, 0));
         assertEquals("↓", NavHud.bearingArrow(0, 0, 0f, 0, -100));
-        // 西を向いている（ヨー90）なら、西の目的地が正面
+        // Facing west (yaw 90), a goal to the west is ahead
         assertEquals("↑", NavHud.bearingArrow(0, 0, 90f, -100, 0));
         assertEquals("↗", NavHud.bearingArrow(0, 0, -720f, -100, 100));
     }

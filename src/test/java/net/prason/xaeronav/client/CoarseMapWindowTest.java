@@ -7,13 +7,13 @@ import org.junit.jupiter.api.Test;
 
 import net.minecraft.core.BlockPos;
 
-/** 読み取り範囲の上限チェックと、所要時間計測のフィールドが素通しになっていないかの確認。 */
+/** Checks the read range cap, and that the timing field isn't just passed through. */
 class CoarseMapWindowTest {
 
     @Test
     void anOversizedSpanSkipsTheReadEntirelyAndReportsZeroMillis() {
-        // MAX_SPAN_CHUNKS(1024)を大きく超えるX距離。地図もXaeroも一切呼ばれないので
-        // Minecraft/Xaeroのランタイムが無くても検証できる。
+        // An X distance far beyond MAX_SPAN_CHUNKS (1024). Neither the map nor Xaero is called at all, so
+        // this can be verified without a Minecraft/Xaero runtime.
         BlockPos from = new BlockPos(0, 64, 0);
         BlockPos to = new BlockPos(1024 * 16, 64, 0);
         CoarseMapWindow.Window window = CoarseMapWindow.read(from, to, 1);

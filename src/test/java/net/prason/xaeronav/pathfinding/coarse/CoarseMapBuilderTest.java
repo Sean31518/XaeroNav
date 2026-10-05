@@ -5,9 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link CoarseMapBuilder#putFloor}の床の並び替え・上書き・上限の振る舞い。
- * ネザーの多層構造（同じXZに複数の独立した通路が上下に重なる）を{@link CoarseMap}が
- * 正しく持てるかの土台なので、境界条件を単体で押さえる。
+ * Behavior of floor sorting, overwriting and capping in {@link CoarseMapBuilder#putFloor}.
+ * This is the foundation for whether {@link CoarseMap} can correctly hold the Nether's multi-layer structure (several independent
+ * passages stacked vertically at the same XZ), so the boundary conditions are pinned down in isolation.
  */
 class CoarseMapBuilderTest {
 
@@ -51,15 +51,15 @@ class CoarseMapBuilderTest {
         builder.putFloor(0, 0, CoarseMap.LAVA_MIXED, 64);
         CoarseMap map = builder.build();
 
-        assertEquals(1, map.floorCount(0, 0), "同じ高さは新しい床ではなく上書き");
+        assertEquals(1, map.floorCount(0, 0), "The same height overwrites rather than adding a new floor");
         assertEquals(CoarseMap.LAVA_MIXED, map.kindAtFloor(0, 0, 0));
     }
 
     @Test
     void aFloorBeyondTheLimitIsDropped() {
         CoarseMapBuilder builder = oneCell();
-        // 参照Yに近い順に渡す想定（XaeroMapReader#layersForの並びに合わせる）。
-        // 上限ちょうどまで埋めてから、いちばん高い床を1枚足す
+        // Assumes floors are passed in order of closeness to the reference Y (matching the order of XaeroMapReader#layersFor).
+        // Fill exactly up to the cap, then add one more floor, the highest
         for (int i = 0; i < CoarseMap.MAX_FLOORS; i++) {
             builder.putFloor(0, 0, CoarseMap.LAND, 30 + i * 10);
         }

@@ -18,7 +18,7 @@ class VoxelTerrainTest {
     void unknownCellsStayPassable() {
         VoxelTerrain terrain = VoxelTerrain.of(BOX, 4, false);
         assertEquals(VoxelTerrain.OPEN, terrain.kindAt(terrain.indexOfBlock(32, 32, 32)),
-                "地図に無い場所を壁にすると、そこにある迂回路ごと消える");
+                "Making places not on the map into walls erases the detours there along with them");
     }
 
     @Test
@@ -30,8 +30,8 @@ class VoxelTerrainTest {
     }
 
     /**
-     * 溶岩は橋の設定に関わらず記録する。渡ってよい設定でも、溶岩の海と「地図が無いだけの場所」を
-     * 同じ値段にすると迂回すべき向きが消える。
+     * Lava is recorded regardless of the bridge setting. Even when crossing is allowed, pricing a lava sea the same as
+     * "a place that just isn't on the map" erases the direction you should detour.
      */
     @Test
     void lavaIsRecordedWhicheverWayBridgingIsSet() {
@@ -39,12 +39,12 @@ class VoxelTerrainTest {
             VoxelTerrain terrain = VoxelTerrain.of(BOX, 4, bridging);
             terrain.markFloor(8, 8, 19, true);
             assertEquals(VoxelTerrain.LAVA, terrain.kindAt(terrain.indexOfBlock(8, 20, 8)),
-                    "溶岩橋=" + bridging);
-            assertEquals(1, terrain.floorMarks(), "溶岩橋=" + bridging);
+                    "lavaBridge=" + bridging);
+            assertEquals(1, terrain.floorMarks(), "lavaBridge=" + bridging);
         }
     }
 
-    /** 同じセルに床と溶岩が混じったら床が勝つ。書いた順に依らないこと。 */
+    /** If floor and lava mix in the same cell, floor wins. Regardless of write order. */
     @Test
     void floorWinsOverLavaInTheSameCell() {
         VoxelTerrain lavaFirst = VoxelTerrain.of(BOX, 4, false);
@@ -66,10 +66,10 @@ class VoxelTerrainTest {
     }
 
     /**
-     * 箱のYは<b>床のある範囲</b>で決まり、次元の全高では決まらないこと。
+     * The box's Y is determined by <b>the range that has floors</b>, not the dimension's full height.
      *
-     * <p>次元がその中身より高いと（実機のネザーは高さ256だった）、岩盤天井より上の空きが
-     * 格子の半分を占め、ガイドが「天井の上を橋で走る」道を描いて歩けなくなる。
+     * <p>If the dimension is taller than its contents (the real Nether was 256 high), the empty space above the
+     * bedrock ceiling takes half the grid, and the guide draws a "bridge across the top of the ceiling" path that can't be walked.
      */
     @Test
     void theBoxFollowsTheMappedFloorsNotTheDimensionHeight() {
@@ -80,7 +80,7 @@ class VoxelTerrainTest {
         assertEquals(70 + VoxelTerrain.VERTICAL_MARGIN_BLOCKS, box.maxY());
     }
 
-    /** 次元の高さは上限として効く。床の周りの余白がそれを超えて広がってはいけない。 */
+    /** The dimension's height acts as a cap. The margin around the floors must not spread beyond it. */
     @Test
     void theBoxNeverLeavesTheDimension() {
         LevelHeightAccessor nether = LevelHeightAccessor.create(0, 128);
@@ -90,24 +90,24 @@ class VoxelTerrainTest {
         assertEquals(127, box.maxY());
     }
 
-    /** 始点と目的地は必ず箱の中。目的地が外だとガイドの起点が決まらず、表が丸ごと空になる。 */
+    /** Start and destination are always inside the box. If the destination is outside, the guide's origin is undefined and the table is entirely empty. */
     @Test
     void theBoxAlwaysHoldsTheStartAndTheGoal() {
         LevelHeightAccessor tall = LevelHeightAccessor.create(0, 256);
         SearchBounds box = VoxelTerrain.boxFor(tall, new BlockPos(0, 200, 0),
                 new BlockPos(100, 12, 100), 40, 60);
-        assertTrue(box.contains(0, 200, 0), "始点が箱の外: " + box);
-        assertTrue(box.contains(100, 12, 100), "目的地が箱の外: " + box);
+        assertTrue(box.contains(0, 200, 0), "Start is outside the box: " + box);
+        assertTrue(box.contains(100, 12, 100), "Destination is outside the box: " + box);
     }
 
-    /** 遠い目的地で確保量が爆発しないこと。セルを粗くして吸収する。 */
+    /** Allocation doesn't explode for distant destinations. Absorbed by coarsening the cells. */
     @Test
     void coarsensTheGridForFarGoals() {
         SearchBounds wide = new SearchBounds(0, 0, 0, 4000, 127, 4000);
         int cell = VoxelTerrain.cellBlocksFor(wide);
-        assertTrue(cell > VoxelTerrain.DEFAULT_CELL_BLOCKS, "粗くなっていない: " + cell);
+        assertTrue(cell > VoxelTerrain.DEFAULT_CELL_BLOCKS, "Not coarsened: " + cell);
         VoxelTerrain terrain = VoxelTerrain.of(wide, true);
         assertNotNull(terrain);
-        assertTrue(terrain.cellCount() <= 500_000, "セル数=" + terrain.cellCount());
+        assertTrue(terrain.cellCount() <= 500_000, "cells=" + terrain.cellCount());
     }
 }

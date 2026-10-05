@@ -3,9 +3,9 @@ package net.prason.xaeronav.pathfinding.world;
 import net.minecraft.core.BlockPos;
 
 /**
- * 地形の一部を配列に写し取った{@link CellSource}。{@link FakeCells}はセルをハッシュ表で引くので、実機の
- * {@code ChunkView}（チャンクごとの配列）より読み出しがずっと重く、計測の大半がそれで埋まってしまう。
- * 計測で実機の比率を見たいときに、窓の範囲だけをこれで包む。範囲の外は元の地形へ素通しする。
+ * A {@link CellSource} copying part of the terrain into an array. {@link FakeCells} looks cells up in a hash table, so reads are
+ * much heavier than the real game's {@code ChunkView} (per-chunk arrays), and that dominates most of a measurement.
+ * When a measurement should reflect the real game's proportions, wrap just the window range with this. Outside the range it passes through to the original terrain.
  */
 public final class ArrayCells implements CellSource {
 
@@ -18,7 +18,7 @@ public final class ArrayCells implements CellSource {
     private final int sizeZ;
     private final long[] cells;
 
-    /** {@code player}から水平{@code radius}の正方形で、{@code all}の高さの範囲全部を写し取る。 */
+    /** Copies the square of horizontal {@code radius} around {@code player}, over the full height range of {@code all}. */
     public ArrayCells(CellSource all, BlockPos player, int radius) {
         this.all = all;
         SearchBounds bounds = all.bounds();

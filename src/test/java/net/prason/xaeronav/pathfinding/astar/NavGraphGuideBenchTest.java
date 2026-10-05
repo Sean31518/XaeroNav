@@ -21,22 +21,22 @@ import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * 航法グラフのガイドが、実機で作れるデータからどこまで上界（{@link ClosureGraph}の完璧な残りコスト）に
- * 届くかを測る。判定を持たない計測（{@code bench}）。
+ * Measures how close the nav graph guide, built from data obtainable in the real game, gets to the upper bound
+ * (the perfect remaining cost of {@link ClosureGraph}). A measurement with no assertions ({@code bench}).
  *
- * <p>採点は{@code LongRouteOptimalityTest}と同じ——全視界・重み1.0・ガイド無しの1回解きを1.000とする。
+ * <p>Scoring is the same as {@code LongRouteOptimalityTest}: a single solve with full visibility, weight 1.0, and no guide counts as 1.000.
  */
 @Tag("bench")
 class NavGraphGuideBenchTest {
 
     private static final int WINDOW = 160;
 
-    /** 閉包の水平マージン。探索窓より広く取る（{@link ClosureGraph}の罠3）。 */
+    /** Horizontal margin of the closure. Wider than the search window (pitfall 3 of {@link ClosureGraph}). */
     private static final int CLOSURE_MARGIN = 224;
 
     private static final long SEED = 20260917L;
 
-    /** 地形1つぶんの条件。 */
+    /** Conditions for one terrain. */
     private record Terrain(String name, FakeCells cells, List<BlockPos[]> routes, int minY, int maxY,
                            ProgressiveWalk.Mode mode) {
     }
@@ -54,12 +54,12 @@ class NavGraphGuideBenchTest {
 
     private static Terrain terrain(String name) throws IOException {
         return switch (name) {
-            case "mountains" -> random("地上/山岳", "/overworld_mountains.txt.gz", 5, 120, 200);
-            case "coast" -> random("地上/海岸", "/overworld_coast.txt.gz", 5, 120, 200);
-            case "wide" -> random("地上/広域(短)", "/overworld_wide.txt.gz", 4, 120, 260);
-            case "wideLong" -> random("地上/広域(長)", "/overworld_wide.txt.gz", 4, 200, 450);
-            case "end" -> random("エンド", "/end_terrain_columns.txt.gz", 4, 120, 220);
-            case "nether" -> new Terrain("ネザー", NetherLiveWalkTest.terrain(), NetherLiveWalkTest.routes(),
+            case "mountains" -> random("surface/mountains", "/overworld_mountains.txt.gz", 5, 120, 200);
+            case "coast" -> random("surface/coast", "/overworld_coast.txt.gz", 5, 120, 200);
+            case "wide" -> random("surface/wide(short)", "/overworld_wide.txt.gz", 4, 120, 260);
+            case "wideLong" -> random("surface/wide(long)", "/overworld_wide.txt.gz", 4, 200, 450);
+            case "end" -> random("End", "/end_terrain_columns.txt.gz", 4, 120, 220);
+            case "nether" -> new Terrain("Nether", NetherLiveWalkTest.terrain(), NetherLiveWalkTest.routes(),
                     NetherLiveWalkTest.NETHER_MIN_Y, NetherLiveWalkTest.NETHER_MAX_Y, ProgressiveWalk.Mode.REPAIR);
             default -> throw new IllegalArgumentException(name);
         };
@@ -79,26 +79,26 @@ class NavGraphGuideBenchTest {
                                   double[] perfect, Map<String, String> notes) {
         List<Arm> arms = new ArrayList<>();
         boolean nether = terrain.mode() == ProgressiveWalk.Mode.REPAIR;
-        arms.add(new Arm("A 現行", graph -> nether
+        arms.add(new Arm("A current", graph -> nether
                 ? XaeroMapModel.guide(terrain.cells(), rawStart, rawGoal, terrain.minY(), terrain.maxY(), 1.0, 0L)
                 : null, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT, true));
-        arms.add(new Arm("P 完璧", graph -> graph.guide(perfect), 1.0, true));
-        arms.add(new Arm("B 窓160＋外は圧縮(本物)", graph -> {
+        arms.add(new Arm("P perfect", graph -> graph.guide(perfect), 1.0, true));
+        arms.add(new Arm("B window160+outside compressed(real)", graph -> {
             double[] compressed = graph.distancesTo(goal, SectionCompression.compress(graph, 4, false).kept());
             CostToGo far = graph.guide(compressed);
             return windowArm(graph, goal, far);
         }, 1.0));
-        arms.add(new Arm("B 窓160＋外は既存の粗い層", graph -> {
+        arms.add(new Arm("B window160+outside existing coarse layer", graph -> {
             CostToGo far = nether
                     ? XaeroMapModel.guide(terrain.cells(), rawStart, rawGoal, terrain.minY(), terrain.maxY(), 1.0, 0L)
                     : CoarseRouter.costToGo(LiveCoarseSampler.sample(terrain.cells(), terrain.cells().bounds(),
                             start.getY(), () -> false), goal, false, CoarseRouter.BridgePolicy.BRIDGE);
             return windowArm(graph, goal, far);
         }, 1.0));
-        arms.add(new Arm("B 窓160＋外は幾何", graph -> windowArm(graph, goal,
+        arms.add(new Arm("B window160+outside geometric", graph -> windowArm(graph, goal,
                 (ClosureGraph.OutsideValue) (x, y, z) -> Double.POSITIVE_INFINITY), 1.0));
         CellSource synthCells = nether ? XaeroSynthCells.floors(terrain.cells()) : XaeroSynthCells.surface(terrain.cells());
-        arms.add(new Arm("B 窓160＋外はXaero合成の自然のみ", graph -> {
+        arms.add(new Arm("B window160+outside Xaero-synth natural only", graph -> {
             BlockPos synthGoal = StanceFinder.resolveGoal(synthCells, goal);
             BlockPos synthStart = StanceFinder.resolveStart(synthCells, start);
             ClosureGraph synthGraph = ClosureGraph.build(synthCells, synthStart, synthGoal, ClosureGraph.box(
@@ -110,17 +110,17 @@ class NavGraphGuideBenchTest {
             return windowArm(graph, goal,
                     (ClosureGraph.OutsideValue) (x, y, z) -> synthGraph.nearestValue(synthDistance, 3, x, y, z));
         }, 1.0));
-        arms.add(new Arm("S 殻8/2を全体に", graph -> graph.nearestGuide(graph.distancesTo(goal, graph.shellEdges(8, 2)), 3),
+        arms.add(new Arm("S shell 8/2 everywhere", graph -> graph.nearestGuide(graph.distancesTo(goal, graph.shellEdges(8, 2)), 3),
                 1.0, true));
         return arms;
     }
 
-    /** 区間ごとに、プレイヤーの窓の中を正確に解き直し、外は{@code far}の値を境界に置くガイド。 */
+    /** A guide that, per segment, re-solves the player's window exactly and puts {@code far}'s values on the boundary outside it. */
     private static Function<BlockPos, CostToGo> windowArm(ClosureGraph graph, BlockPos goal, CostToGo far) {
         return windowArm(graph, goal, (ClosureGraph.OutsideValue) far::estimate);
     }
 
-    /** 外の値が分からない点（{@link Double#POSITIVE_INFINITY}）は境界の種にしない版。 */
+    /** Variant that doesn't seed the boundary with points whose outside value is unknown ({@link Double#POSITIVE_INFINITY}). */
     private static Function<BlockPos, CostToGo> windowArm(ClosureGraph graph, BlockPos goal,
                                                           ClosureGraph.OutsideValue far) {
         BlockPos[] last = {null};
@@ -148,7 +148,7 @@ class NavGraphGuideBenchTest {
             double[] perfect = graph.distancesTo(goal, null);
             PathResult check = new AStarPathfinder(cells, new SearchLimits(3_000_000, 120_000, 1.0),
                     graph.guide(perfect)).search(start, goal, () -> false);
-            System.out.printf(Locale.ROOT, "%s→%s 基準%.0f 閉包%dノード/%d辺/%dms 検査%+.2f%%(%dノード)%n",
+            System.out.printf(Locale.ROOT, "%s->%s baseline%.0f closure%dnodes/%dedges/%dms check%+.2f%%(%dnodes)%n",
                     start.toShortString(), goal.toShortString(), best, graph.nodes(), graph.edges(),
                     graph.buildMillis, 100.0 * (ProgressiveWalk.cost(check.steps()) / best - 1.0),
                     check.expandedNodes());
@@ -162,7 +162,7 @@ class NavGraphGuideBenchTest {
                         guide, arm.weight());
                 double ratio = trace.steps().isEmpty() ? Double.POSITIVE_INFINITY
                         : ProgressiveWalk.cost(trace.steps()) / best;
-                System.out.printf(Locale.ROOT, "  %-18s %.3f倍 繋ぎ目%d ガイド%dms %s%n", arm.name(), ratio,
+                System.out.printf(Locale.ROOT, "  %-18s %.3fx seams%d guide%dms %s%n", arm.name(), ratio,
                         trace.joints().size(), guideMillis, trace.stopped());
                 ratios.computeIfAbsent(arm.name(), k -> new ArrayList<>()).add(ratio);
             }
@@ -172,7 +172,7 @@ class NavGraphGuideBenchTest {
             double mean = list.stream().filter(Double::isFinite).mapToDouble(Double::doubleValue).average().orElse(0);
             double worst = list.stream().mapToDouble(Double::doubleValue).max().orElse(0);
             long missed = list.stream().filter(r -> !Double.isFinite(r)).count();
-            System.out.printf(Locale.ROOT, "  %-18s 平均%.3f 最悪%.3f 未到達%d %s%n", arm, mean, worst, missed,
+            System.out.printf(Locale.ROOT, "  %-18s mean%.3f worst%.3f unreached%d %s%n", arm, mean, worst, missed,
                     notes.getOrDefault(arm, ""));
         });
     }
@@ -207,7 +207,7 @@ class NavGraphGuideBenchTest {
         measure("nether");
     }
 
-    /** ネザーで、形まで完璧なガイドに対する終点選びの賭けの上限を追試する。 */
+    /** In the Nether, re-tests the upper limit of the endpoint-choice gamble against a guide that's perfect even in shape. */
     @Test
     void netherFallbackBudgetWithPerfectGuide() throws IOException {
         Terrain terrain = terrain("nether");
@@ -225,8 +225,8 @@ class NavGraphGuideBenchTest {
                     try {
                         ProgressiveWalk.Trace trace = ProgressiveWalk.trace(cells, start, goal, WINDOW,
                                 terrain.mode(), ProgressiveWalk.Aim.GOAL, perfect, weight);
-                        System.out.printf(Locale.ROOT, "%s 重み%.1f 上限%s %.3f倍 繋ぎ目%d %s%n",
-                                start.toShortString(), weight, budget ? "あり" : "なし",
+                        System.out.printf(Locale.ROOT, "%s weight%.1f cap%s %.3fx seams%d %s%n",
+                                start.toShortString(), weight, budget ? "on" : "off",
                                 trace.steps().isEmpty() ? Double.POSITIVE_INFINITY
                                         : ProgressiveWalk.cost(trace.steps()) / best,
                                 trace.joints().size(), trace.stopped());

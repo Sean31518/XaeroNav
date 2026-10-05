@@ -1,6 +1,6 @@
 plugins {
     id("xaeronav.common")
-    // 26.1以降は難読化されていないので、リマップをしないLoom（旧来のfabric-loomはマッピングを要る）
+    // 26.1 and later are unobfuscated, so use the non-remapping Loom (the traditional fabric-loom requires mappings)
     id("net.fabricmc.fabric-loom") version "1.18.2"
 }
 
@@ -10,7 +10,7 @@ fun dep(key: String) = stonecutter.properties.get<String>("deps.$key")
 
 val minecraftVersion = dep("minecraft")
 
-// fabric.mod.jsonの"java"依存へ渡す実行時要件
+// Runtime requirement passed to the "java" dependency in fabric.mod.json
 val javaVersion = javaVersionFor(minecraftVersion)
 val mixinCompatibilityLevel = mixinCompatibilityLevelFor(minecraftVersion)
 val packFormat = packFormatFor(minecraftVersion)
@@ -19,8 +19,8 @@ repositories {
     maven("https://maven.terraformersmc.com/releases") { name = "TerraformersMC" }
 }
 
-// 開放しているのはRenderType.CompositeState等（NavRenderTypes）で、26.1にはその構造が無い。
-// fabric.mod.jsonの"accessWidener"は常にこの名前で指すので、見出しだけの空のファイルを置く
+// What's widened is RenderType.CompositeState etc. (NavRenderTypes), and 26.1 has no such structures.
+// "accessWidener" in fabric.mod.json always points at this name, so put an empty file with only the header
 val emptyAccessWidener: File = layout.buildDirectory.file("generated/emptyAccessWidener/xaeronav.accesswidener").get().asFile.also {
     it.parentFile.mkdirs()
     it.writeText("accessWidener v2 official\n")
@@ -29,12 +29,12 @@ val emptyAccessWidener: File = layout.buildDirectory.file("generated/emptyAccess
 loom {
     accessWidenerPath = emptyAccessWidener
 
-    // 実行ディレクトリはノード配下（versions/<ノード>/run）のloom既定のまま。
+    // The run directory stays Loom's default under the node (versions/<node>/run).
     runs {
         named("client") {
             client()
             configName = "Fabric Client (${stonecutter.current.project})"
-            // `-Pxaeronav.quickPlay=<ワールド名>`でタイトル画面を飛ばして既存のワールドへ入る（手元の確認用）
+            // `-Pxaeronav.quickPlay=<world name>` skips the title screen and enters an existing world (for local testing)
             providers.gradleProperty("xaeronav.quickPlay").orNull?.let { programArgs("--quickPlaySingleplayer", it) }
             providers.gradleProperty("xaeronav.clientJvmArgs").orNull?.split(" ")?.filter { it.isNotBlank() }
                 ?.forEach { vmArg(it) }
@@ -45,10 +45,10 @@ loom {
 val xaeroModules = xaeroModuleCoordinates(
     "fabric", minecraftVersion, dep("xaerolib"), dep("xaero_worldmap"), dep("xaero_minimap"))
 
-// Xaeroを開発実行（runClient）へ載せるか。`./gradlew runClient -Pwith_xaero=false` で外せる。
+// Whether to put Xaero on the dev run (runClient). Can be left out with `./gradlew runClient -Pwith_xaero=false`.
 val withXaero = withXaeroProperty()
 
-// XaeroはMODとして読み込ませる必要があるので、実行時クラスパスではなくrun/modsへ置く。
+// Xaero needs to be loaded as a mod, so it goes into run/mods rather than the runtime classpath.
 val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
 
 dependencies {
@@ -57,18 +57,18 @@ dependencies {
     implementation("net.fabricmc:fabric-loader:${dep("fabric_loader")}")
     implementation("net.fabricmc.fabric-api:fabric-api:${dep("fabric_api")}")
 
-    // Fabricには本体にMixinExtrasが無いので同梱する（mixinの@Local / @WrapOperationが依存）
+    // Fabric has no MixinExtras built in, so bundle it (mixin @Local / @WrapOperation depend on it)
     implementation("io.github.llamalad7:mixinextras-fabric:${dep("mixinextras")}")
     include("io.github.llamalad7:mixinextras-fabric:${dep("mixinextras")}")
 
-    // 設定のTOML読み書き（NightConfigStore）
+    // TOML read/write for settings (NightConfigStore)
     implementation("com.electronwill.night-config:core:${dep("night_config")}")
     implementation("com.electronwill.night-config:toml:${dep("night_config")}")
     include("com.electronwill.night-config:core:${dep("night_config")}")
     include("com.electronwill.night-config:toml:${dep("night_config")}")
 
-    // Modsの一覧から設定画面を開けるようにするだけの連携。未導入でもエントリポイントが
-    // 呼ばれなくなるだけなので、配布物にも実行時依存にも含めない
+    // Integration that only lets the settings screen open from the Mods list. Without it installed, the entry point
+    // simply isn't called, so it's included in neither the distribution nor the runtime dependencies
     compileOnly("com.terraformersmc:modmenu:${dep("modmenu")}") {
         exclude(group = "net.fabricmc", module = "fabric-loader")
         exclude(group = "eu.pb4", module = "placeholder-api")
@@ -78,14 +78,14 @@ dependencies {
         exclude(group = "eu.pb4", module = "placeholder-api")
     }
 
-    // Xaeroはfabric.mod.json上optionalな連携先。コンパイルにだけ必要
+    // Xaero is an optional integration in fabric.mod.json. Only needed for compilation
     xaeroModules.forEach { compileOnly(it) }
     if (withXaero) {
         xaeroModules.forEach { xaeroRuntimeMods(it) }
     }
 }
 
-// Syncではなくコピーにして、手で入れた他のMODを消さない。
+// Copy rather than Sync, so other mods added by hand aren't deleted.
 val installXaeroMods = tasks.register<Copy>("installXaeroMods") {
     from(xaeroRuntimeMods)
     into(layout.projectDirectory.dir("run/mods"))
@@ -95,7 +95,7 @@ tasks.matching { it.name == "runClient" }.configureEach {
     dependsOn(installXaeroMods)
 }
 
-// CIの起動スモークテスト（mc-runtime-test）へ渡す一式。配布jarとXaeroを1箇所へ集める
+// The set handed to CI's launch smoke test (mc-runtime-test). Collects the distribution jar and Xaero in one place
 val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     from(xaeroRuntimeMods)
     from(tasks.named("jar"))
@@ -113,12 +113,12 @@ tasks.named<ProcessResources>("processResources").configure {
 
     inputs.properties(replaceProperties)
 
-    // NeoForge/Forge側のMOD定義・AT定義はFabricのjarには要らない
+    // NeoForge/Forge mod definitions and AT definitions aren't needed in the Fabric jar
     exclude("META-INF/neoforge.mods.toml")
     exclude("META-INF/mods.toml")
     exclude("META-INF/accesstransformer.cfg")
 
-    // 開放する行を落として見出しだけにする（emptyAccessWidenerと同じ中身）
+    // Drop the widening lines, leaving only the header (same contents as emptyAccessWidener)
     filesMatching("xaeronav.accesswidener") {
         filter { line -> if (line.startsWith("accessWidener ")) "accessWidener v2 official" else "" }
     }

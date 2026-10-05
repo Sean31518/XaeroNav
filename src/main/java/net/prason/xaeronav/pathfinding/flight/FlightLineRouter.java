@@ -9,24 +9,25 @@ import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * 滑空中に出す「目的地までの点線」を、間にある山や丘を避ける形に曲げる。
+ * Bends the "dotted line to the destination" shown while gliding so it avoids mountains and hills in between.
  *
- * <p>徒歩のA*とは目的がまるで違う。これは<b>辿るための経路ではなく、どちらへ機首を向ければいいかを
- * 示す線</b>なので、最短性も到達保証も要らない。求めるのは「見て自然で、地形を突き抜けていないこと」
- * だけ——そのぶん探索は1つの曲がり点を試すだけに留め、失敗したら素の直線へ落とす。
+ * <p>Its purpose is completely different from the walking A*. This is <b>not a route to follow but a line showing
+ * which way to point the nose</b>, so it needs neither optimality nor a reachability guarantee. All it asks is "looks
+ * natural and doesn't pierce the terrain"; accordingly the search only tries a single bend point, and falls back to the plain straight line on failure.
  *
- * <p>曲がり点は始点と終点の中点を、進行方向に直交する向きへずらした1点。ずらす向きは上・左右・
- * 斜め上の5方向で、半径を小さい方から広げながら全方向を試し、最初に地形を貫かなくなったものを採る。
- * <b>V字の余分な距離は{@code 2*sqrt((L/2)^2 + r^2) - L}で、ずらす向きに依らず半径rだけで決まる</b>。
- * つまり半径の小さい順に見ていけば、最初に見つかったものが最も安い——「幅の狭い峰なら横に、
- * 幅の広い山地なら上に」が優先順位を決め打ちせずに地形の側から決まる。
+ * <p>The bend point is the midpoint of start and end, shifted perpendicular to the direction of travel. The shift
+ * directions are 5: up, left/right, and diagonally up; radii are widened from small to large trying every direction,
+ * and the first that no longer pierces the terrain is taken.
+ * <b>The extra distance of the V is {@code 2*sqrt((L/2)^2 + r^2) - L}, determined by the radius r alone regardless of direction</b>.
+ * So checking in order of increasing radius, the first one found is the cheapest; "sideways for a narrow ridge,
+ * over the top for a wide mountain range" is decided by the terrain without hard-coding a priority.
  */
 public final class FlightLineRouter {
 
     /**
-     * 曲がり点を探す半径の下限・上限と、1段ごとの倍率（ブロック）。等差ではなく等比にするのは、
-     * 数マスの丘から100マス級の山地まで同じ手数で届かせるため。倍率1.5なら8マスから128マスまで
-     * 8段で済み、最小半径を最大1.5倍だけ超過する（線の見た目には影響しない粗さ）。
+     * Lower and upper bound of the bend-point search radius, and the per-step multiplier (blocks). Geometric rather
+     * than arithmetic so the same number of steps reaches from hills of a few blocks to 100-block mountain ranges. With
+     * a multiplier of 1.5, 8 to 128 blocks takes 8 steps, overshooting the minimum radius by at most 1.5x (a coarseness that doesn't affect the line's look).
      */
     private static final double BEND_MIN_RADIUS = 8.0;
 
@@ -35,13 +36,13 @@ public final class FlightLineRouter {
     private static final double BEND_RADIUS_GROWTH = 1.5;
 
     /**
-     * 探索が触りうる範囲。曲がり点は最大{@link #BEND_MAX_RADIUS}だけ横へ振れるので、
-     * 呼び出し側が用意する{@link SearchBounds}はこれだけの水平マージンを要る（狭いと横へ振った
-     * 先が範囲外＝データ無しになり、避けられるはずの山を避けられなくなる）。
+     * Range the search can touch. The bend point can swing sideways by up to {@link #BEND_MAX_RADIUS}, so the
+     * {@link SearchBounds} prepared by the caller needs this much horizontal margin (if narrow, the swung point falls
+     * outside the range = no data, and a mountain that could have been avoided isn't).
      */
     public static final int HORIZONTAL_MARGIN_BLOCKS = (int) BEND_MAX_RADIUS + 16;
 
-    /** 垂直マージン。飛行高度は出発点・目的地のYではなく途中の山の高さで決まるので水平より厚く取る。 */
+    /** Vertical margin. Flight altitude is determined by the height of mountains along the way, not the start/destination Y, so it's thicker than horizontal. */
     public static final int VERTICAL_MARGIN_BLOCKS = 192;
 
     private final CellSource view;
@@ -51,9 +52,9 @@ public final class FlightLineRouter {
     }
 
     /**
-     * 始点から終点までの点線を組む。地形を貫かないなら2点、避ける必要があれば曲がり点を挟んだ3点。
-     * どう曲げても避けられなければ2点のまま返す（見た目が理想的でなくても、行き先を示すという
-     * 本来の役目は果たせる。ここで線ごと消す方が困る）。
+     * Builds the dotted line from start to end. 2 points if it doesn't pierce the terrain, 3 points with a bend point
+     * if it needs to avoid it. If no bend avoids it, returns the 2 points as-is (even if it doesn't look ideal, it
+     * still fulfills its real role of showing where to go; erasing the line here would be worse).
      */
     public List<Vec3> findGuideLine(Vec3 start, Vec3 goal) {
         if (!intersectsTerrain(start, goal)) {
@@ -64,10 +65,10 @@ public final class FlightLineRouter {
         double dz = goal.z - start.z;
         double horizontal = Math.sqrt(dx * dx + dz * dz);
         if (horizontal < 1.0e-4) {
-            // 目的地が真上か真下。横へずらす向きが定まらないうえ、そもそも曲げても意味が無い
+            // Destination is directly above or below. There's no defined sideways direction, and bending would be pointless anyway
             return List.of(start, goal);
         }
-        // 進行方向に直交する水平ベクトル（単位長）
+        // Horizontal vector perpendicular to the direction of travel (unit length)
         double perpX = -dz / horizontal;
         double perpZ = dx / horizontal;
         Vec3 middle = start.add(goal).scale(0.5);
@@ -84,19 +85,19 @@ public final class FlightLineRouter {
     }
 
     /**
-     * 左・右・左斜め上・右斜め上・上の順。真下へ曲げても地形は避けられないので持たない。
+     * Order: left, right, upper-left, upper-right, up. Bending straight down can't avoid terrain, so it's not included.
      *
-     * <p>同じ半径ならどの向きも余分距離は同じ（半径だけで決まる）ため、複数方向が同時に地形を
-     * 避けられる際どい間合いでは並び順がそのままタイブレークになる。水平成分の大きい向きから
-     * 試すことで、際どい場面では「上へ抜ける」より「横へ逸れる」を優先する。
+     * <p>For the same radius every direction has the same extra distance (determined by radius alone), so at tight
+     * distances where multiple directions avoid the terrain simultaneously, the order serves directly as the tiebreak.
+     * Trying directions with larger horizontal components first prefers "veer sideways" over "go over the top" in close calls.
      */
     private static final int DIRECTION_COUNT = 5;
 
     private static final double DIAGONAL = Math.sqrt(0.5);
 
     /**
-     * 中点を{@code direction}の向きへ{@code radius}だけずらした曲がり点。Yはワールドの上限で
-     * 頭打ちにする（超えた高さの点を返しても、そこは必ず範囲外＝データ無しになる）。
+     * Bend point: the midpoint shifted by {@code radius} in the {@code direction}. Y is capped at the world's top
+     * (returning a point above that would always be out of range = no data).
      */
     private Vec3 bendPoint(Vec3 middle, double perpX, double perpZ, double radius, int direction) {
         double lateral = switch (direction) {
@@ -119,17 +120,17 @@ public final class FlightLineRouter {
     }
 
     /**
-     * 線分が地形を貫いているか。走査は{@link VoxelRay}が持つ。
+     * Whether the segment pierces the terrain. The scan is done by {@link VoxelRay}.
      */
     private boolean intersectsTerrain(Vec3 a, Vec3 b) {
         return !VoxelRay.traverse(a, b, (x, y, z) -> !isSolid(x, y, z));
     }
 
     /**
-     * 範囲外・未読み込みチャンク（{@code ABSENT}）は障害物として扱わない。目的地は描画距離の
-     * 遥か先にあるのが普通で、そこを壁とみなすと線は必ず「貫いている」判定になり、どう曲げても
-     * 直らないまま毎回全方向を試すだけになる。見えている地形だけを避け、見えていない先は
-     * 素通りさせるのがこの線の役目に合う。
+     * Out-of-range and unloaded chunks ({@code ABSENT}) are not treated as obstacles. The destination is normally far
+     * beyond render distance, and treating that as a wall would make the line always judged "piercing", just trying
+     * every direction every time without ever fixing it. Avoiding only visible terrain and letting the unseen part
+     * pass through fits this line's role.
      */
     private boolean isSolid(int x, int y, int z) {
         long cell = view.cell(x, y, z);

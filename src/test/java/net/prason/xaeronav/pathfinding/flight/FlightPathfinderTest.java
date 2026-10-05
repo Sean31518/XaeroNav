@@ -29,7 +29,7 @@ class FlightPathfinderTest {
                 clearancePenaltyTicks).search(start, goal, GOAL_RADIUS);
     }
 
-    /** 天井と床のあるネザー状の空間。{@code floor}以下と{@code ceiling}以上を岩で埋める。 */
+    /** A Nether-like space with a ceiling and floor. Fills everything at or below {@code floor} and at or above {@code ceiling} with rock. */
     private static FakeCells nether(int floor, int ceiling) {
         FakeCells cells = FakeCells.empty(BOUNDS);
         for (int x = -160; x <= 160; x++) {
@@ -45,7 +45,7 @@ class FlightPathfinderTest {
         return cells;
     }
 
-    /** 折れ線の全区間が飛行可なセルだけを通っているか。 */
+    /** Whether every segment of the polyline passes only through flyable cells. */
     private static boolean staysInOpenAir(FlightRoute route, FakeCells cells) {
         AirGrid grid = new AirGrid(cells, CELL);
         for (int i = 0; i + 1 < route.points().size(); i++) {
@@ -65,14 +65,14 @@ class FlightPathfinderTest {
         FlightRoute route = route(FakeCells.empty(BOUNDS), new Vec3(-100.0, 64.0, 0.0),
                 new Vec3(100.0, 64.0, 0.0), false);
 
-        assertTrue(route.complete(), "何も無い空で目的地に届いていない: " + route.termination());
-        assertEquals(2, route.points().size(), "平滑化しても折れが残っている: " + route.points());
+        assertTrue(route.complete(), "Didn't reach the destination in empty sky: " + route.termination());
+        assertEquals(2, route.points().size(), "Bends remain even after smoothing: " + route.points());
     }
 
     @Test
     void threadsThroughTheOnlyGapInAWall() {
         FakeCells cells = nether(32, 120);
-        // X=0 に天井まで届く壁。Z=40 付近だけ開けてある
+        // A wall at X=0 reaching up to the ceiling. Only around Z=40 is left open
         for (int y = 33; y < 120; y++) {
             for (int z = -160; z <= 160; z++) {
                 if (z >= 36 && z <= 48) {
@@ -85,19 +85,19 @@ class FlightPathfinderTest {
 
         FlightRoute route = route(cells, new Vec3(-100.0, 80.0, 0.0), new Vec3(100.0, 80.0, 0.0), false);
 
-        assertTrue(route.complete(), "唯一の隙間を抜けられていない: " + route.termination());
-        assertTrue(staysInOpenAir(route, cells), "経路が岩を貫いている: " + route.points());
+        assertTrue(route.complete(), "Couldn't get through the only gap: " + route.termination());
+        assertTrue(staysInOpenAir(route, cells), "The route goes through rock: " + route.points());
         double gapZ = route.points().stream()
                 .filter(point -> Math.abs(point.x) < 8.0)
                 .mapToDouble(Vec3::z)
                 .findFirst()
                 .orElse(Double.NaN);
-        assertTrue(gapZ >= 32.0 && gapZ <= 52.0, "壁を通る位置が隙間からずれている: z=" + gapZ);
+        assertTrue(gapZ >= 32.0 && gapZ <= 52.0, "The position where the route passes the wall is off from the gap: z=" + gapZ);
     }
 
     @Test
     void goesAroundRatherThanOverWhenTheCeilingIsInTheWay() {
-        // ネザーの本質。壁は天井まで届いているので「上を越える」が原理的に選べない
+        // The essence of the Nether. The wall reaches the ceiling, so "going over it" is fundamentally not an option
         FakeCells cells = nether(32, 96);
         for (int y = 33; y < 96; y++) {
             for (int z = -160; z <= 60; z++) {
@@ -108,28 +108,28 @@ class FlightPathfinderTest {
 
         FlightRoute route = route(cells, new Vec3(-100.0, 64.0, 0.0), new Vec3(100.0, 64.0, 0.0), false);
 
-        assertTrue(route.complete(), "壁を回り込めていない: " + route.termination());
-        assertTrue(staysInOpenAir(route, cells), "経路が岩を貫いている: " + route.points());
-        assertTrue(maxY(route) < 96.0, "岩盤天井より上を通る経路が出ている: " + maxY(route));
+        assertTrue(route.complete(), "Couldn't go around the wall: " + route.termination());
+        assertTrue(staysInOpenAir(route, cells), "The route goes through rock: " + route.points());
+        assertTrue(maxY(route) < 96.0, "A route passing above the bedrock ceiling came out: " + maxY(route));
         assertTrue(route.points().stream().anyMatch(point -> point.z > 55.0),
-                "壁の端（z>60）を回り込んでいない: " + route.points());
+                "Didn't go around the end of the wall (z>60): " + route.points());
     }
 
     @Test
     void doesNotRouteThroughUnloadedSpace() {
-        // 読めない先へ経路を引いてはいけない。範囲の外は点線の担当
+        // Never draw a route into what can't be read. Beyond the range is the dotted line's job
         FakeCells cells = FakeCells.empty(new SearchBounds(-160, 0, -160, 160, 128, 8));
 
         FlightRoute route = route(cells, new Vec3(0.0, 64.0, 0.0), new Vec3(0.0, 64.0, 120.0), false);
 
-        assertFalse(route.complete(), "範囲外の目的地に届いたことになっている");
+        assertFalse(route.complete(), "Counted as reaching a destination outside the range");
         assertTrue(route.points().stream().allMatch(point -> point.z < 8.0),
-                "経路が範囲外へ伸びている: " + route.points());
+                "The route extends outside the range: " + route.points());
     }
 
     @Test
     void climbsWhenItHasToRegardlessOfRockets() {
-        // 上がるしか道が無い地形。ロケットの有無でコストは変わるが、どちらでも経路は出ること
+        // Terrain where climbing is the only way. Rockets change the cost, but a route must come out either way
         FakeCells cells = nether(32, 120);
         for (int y = 33; y <= 80; y++) {
             for (int z = -160; z <= 160; z++) {
@@ -141,15 +141,15 @@ class FlightPathfinderTest {
         for (boolean rockets : new boolean[] {false, true}) {
             FlightRoute route = route(cells, new Vec3(-100.0, 40.0, 0.0), new Vec3(100.0, 40.0, 0.0), rockets);
 
-            assertTrue(route.complete(), "ロケット" + rockets + "で壁を越えられていない: " + route.termination());
-            assertTrue(staysInOpenAir(route, cells), "経路が岩を貫いている: " + route.points());
-            assertTrue(maxY(route) > 80.0, "壁を越えていない: " + maxY(route));
+            assertTrue(route.complete(), "Couldn't get over the wall with rockets=" + rockets + ": " + route.termination());
+            assertTrue(staysInOpenAir(route, cells), "The route goes through rock: " + route.points());
+            assertTrue(maxY(route) > 80.0, "Didn't get over the wall: " + maxY(route));
         }
     }
 
     @Test
     void prefersDescendingOverStayingLevelWhenBothAreOpen() {
-        // 「水平飛行はすでに登り」。同じ場所へ行けるなら、滑空で降りられる方が安い
+        // "Level flight is already climbing". If both reach the same place, the one that can descend by gliding is cheaper
         FlightRoute route = route(FakeCells.empty(BOUNDS), new Vec3(-100.0, 100.0, 0.0),
                 new Vec3(100.0, 40.0, 0.0), false);
 
@@ -157,13 +157,13 @@ class FlightPathfinderTest {
         List<Vec3> points = route.points();
         for (int i = 0; i + 1 < points.size(); i++) {
             assertTrue(points.get(i + 1).y <= points.get(i).y + 1.0e-6,
-                    "降りていく途中で登り返している: " + points);
+                    "Climbs back up partway through the descent: " + points);
         }
     }
 
     @Test
     void reusingOneInstanceForASecondGoalDoesNotKeepTheOldEstimates() {
-        // 見積もりはノード生成時にゴールから計算する。表を持ち越すと2回目は前のゴールへ引き寄せられる
+        // Estimates are computed from the goal when nodes are created. Carrying the table over pulls the second search toward the previous goal
         FlightPathfinder pathfinder = new FlightPathfinder(
                 new AirGrid(FakeCells.empty(BOUNDS), CELL), false, SearchLimits.DEFAULT, 0.0);
         Vec3 start = new Vec3(0.0, 64.0, 0.0);
@@ -171,13 +171,13 @@ class FlightPathfinderTest {
         pathfinder.search(start, new Vec3(120.0, 64.0, 0.0), GOAL_RADIUS);
         FlightRoute second = pathfinder.search(start, new Vec3(-120.0, 64.0, 0.0), GOAL_RADIUS);
 
-        assertTrue(second.complete(), "2回目の探索が届いていない: " + second.termination());
-        assertTrue(second.tail().x < -100.0, "2回目の経路が1回目のゴール側を向いている: " + second.points());
+        assertTrue(second.complete(), "The second search didn't reach: " + second.termination());
+        assertTrue(second.tail().x < -100.0, "The second route points toward the first goal: " + second.points());
     }
 
     /**
-     * X=-30〜30 の分厚い壁に2つの通り道を開ける。z=2 に断面がちょうど格子1セルぶんしかない長いトンネル、
-     * z=60〜92 に断面の広い通路。直線距離ではトンネルの方が短い。
+     * Opens two passages through a thick wall spanning X=-30 to 30: at z=2 a long tunnel whose cross-section is exactly one grid cell,
+     * and at z=60-92 a passage with a wide cross-section. In straight-line distance the tunnel is shorter.
      */
     private static FakeCells wallWithATightTunnelAndAWideDetour(boolean withDetour) {
         FakeCells cells = nether(32, 120);
@@ -201,36 +201,36 @@ class FlightPathfinderTest {
         FlightRoute route = route(wallWithATightTunnelAndAWideDetour(true),
                 new Vec3(-100.0, 62.0, 2.0), new Vec3(100.0, 62.0, 2.0), false, 0.0);
 
-        assertTrue(route.complete(), "細いトンネルを抜けられていない: " + route.termination());
+        assertTrue(route.complete(), "Couldn't get through the narrow tunnel: " + route.termination());
         assertTrue(route.points().stream().allMatch(point -> point.z < 40.0),
-                "割増が無いのに遠回りしている: " + route.points());
+                "Detours even though there's no surcharge: " + route.points());
     }
 
     @Test
     void avoidsTheTightTunnelWhenClearanceIsWorthADetour() {
-        // 「最短でも狭い所は案内しないでほしい」。距離では負けている広い通路を選ぶこと
+        // "Don't guide me through tight spots even if they're shortest". Choose the wide passage even though it loses on distance
         FlightRoute route = route(wallWithATightTunnelAndAWideDetour(true),
                 new Vec3(-100.0, 62.0, 2.0), new Vec3(100.0, 62.0, 2.0), false, 12.0);
 
-        assertTrue(route.complete(), "広い通路からも抜けられていない: " + route.termination());
+        assertTrue(route.complete(), "Couldn't get through via the wide passage either: " + route.termination());
         assertTrue(route.points().stream().anyMatch(point -> point.z > 50.0),
-                "割増を入れても細いトンネルを通っている: " + route.points());
+                "Still goes through the narrow tunnel even with the surcharge: " + route.points());
     }
 
     @Test
     void stillUsesATightPassageWhenItIsTheOnlyWay() {
-        // 割増は禁止ではない。そこしか道が無ければ通る（経路ごと消えるのが一番困る）
+        // A surcharge isn't a ban. If it's the only way, go through it (losing the route entirely is the worst outcome)
         FlightRoute route = route(wallWithATightTunnelAndAWideDetour(false),
                 new Vec3(-100.0, 62.0, 2.0), new Vec3(100.0, 62.0, 2.0), false, 12.0);
 
-        assertTrue(route.complete(), "唯一の細いトンネルを割増のせいで諦めている: " + route.termination());
+        assertTrue(route.complete(), "Gives up on the only narrow tunnel because of the surcharge: " + route.termination());
     }
 
     @Test
     void reachesAGoalWhoseExactPointIsBuriedInTerrain() {
-        // 中間目標はチャンク中心＋帯のYという推定値なので、ブロック解像度では岩の中にあることが
-        // 珍しくない。球のゴールで縛ると原理的に到達不能になり、それを発見するために毎回
-        // ノード上限を焼く——地形が複雑なほど当たりやすく、経路が伸びなくなる
+        // Intermediate waypoints are estimates (chunk center + band Y), so at block resolution they're often inside rock.
+        // Requiring a spherical goal makes them unreachable in principle, and every search burns the node cap to discover
+        // that; the more complex the terrain the more likely this is, and the route stops extending
         FakeCells cells = nether(32, 120);
         for (int x = 92; x <= 108; x++) {
             for (int z = -8; z <= 8; z++) {
@@ -240,13 +240,13 @@ class FlightPathfinderTest {
             }
         }
 
-        // 目的地は岩の中。真上20ブロックは開いている
+        // The destination is inside rock. The 20 blocks directly above are open
         FlightRoute route = route(cells, new Vec3(-100.0, 80.0, 0.0), new Vec3(100.0, 60.0, 0.0), false);
 
-        assertTrue(route.complete(), "岩に埋もれた目標へ寄れていない: " + route.termination());
-        assertTrue(staysInOpenAir(route, cells), "経路が岩を貫いている: " + route.points());
+        assertTrue(route.complete(), "Couldn't get close to a target buried in rock: " + route.termination());
+        assertTrue(staysInOpenAir(route, cells), "The route goes through rock: " + route.points());
         assertTrue(route.expandedNodes() < 20_000,
-                "到達はしたが探索を焼きすぎている（領域ゴールが効いていない）: " + route.expandedNodes());
+                "Reached, but burned too much search (the region goal isn't working): " + route.expandedNodes());
     }
 
     @Test

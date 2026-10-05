@@ -12,41 +12,43 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>実機のワールド保存データそのもの</b>で探索を再現する。
+ * Reproduces the search on <b>the real world save data itself</b>.
  *
- * <p>ジ・エンドの島渡りが「ルートが全然見つからない」まま4回の推測を外したので、
- * {@code run/saves/test/DIM1/region/r.2.2.mca}をパースして固体ブロックの列を書き出したものを
- * 読み込む（{@code src/test/resources/end_terrain_columns.txt.gz}）。実機ログに出ていた始点・
- * 中間目標をそのまま使うので、<b>実機で失敗している探索と同じ問題</b>を手元で回せる。
+ * <p>End island-hopping stayed "can't find a route at all" through four wrong guesses, so this loads the
+ * solid-block columns written out by parsing {@code run/saves/test/DIM1/region/r.2.2.mca}
+ * ({@code src/test/resources/end_terrain_columns.txt.gz}). It uses the start and intermediate targets from the
+ * in-game log as-is, so <b>the same problem as the search failing in-game</b> can be run locally.
  *
- * <p><b>ここでしか測れないものだけを置く。</b>1ケース約8秒かかるので、合成の地形で決まる性質は
- * 置かない——梯子の段の順序は{@code CapStagesTest}、予算と{@code Carryover}の算術は
- * {@code BlockBudgetTest}が、どちらもミリ秒で見ている。残してあるのは<b>規模が大きいときにだけ
- * 現れる穴</b>：{@code PathNode.placedTotal}がノードの同一性に含まれない近似なので、前線が進むほど
- * 設置の枝が理由なく消える。幅4の合成の裂け目では前線が伸びず、構造的に再現できない。
+ * <p><b>Only things that can be measured nowhere else go here.</b> Each case takes about 8 seconds, so
+ * properties determined by synthetic terrain don't belong: the order of the ladder stages is covered by
+ * {@code CapStagesTest}, and the budget and {@code Carryover} arithmetic by {@code BlockBudgetTest}, both
+ * in milliseconds. What remains is <b>the hole that only appears at large scale</b>: {@code PathNode.placedTotal}
+ * is an approximation not included in node identity, so the further the frontier advances, the more placement
+ * branches vanish for no reason. In a synthetic 4-wide rift the frontier doesn't extend, so it structurally
+ * can't be reproduced.
  */
 @Tag("slow")
 class RealEndTerrainTest {
 
-    /** 実機ログ(08:24)の失敗した探索の始点。 */
+    /** Start of the failed search in the in-game log (08:24). */
     private static final BlockPos START = new BlockPos(1233, 57, 1142);
-    /** 同じログの区間1の目標（直行ルート）。 */
+    /** Target of segment 1 in the same log (direct route). */
     private static final BlockPos DIRECT_GOAL = new BlockPos(1288, 57, 1080);
 
     /**
-     * 予算が原因の穴を踏む値。{@code PathfindingExecutor#capStages}の実測では
-     * <b>16〜40だけが60万ノードを焼いて6ステップで終わる</b>（42以上と8以下は到達する）。
-     * 帯の端ではなく中央を採るのは、コストモデルが動いたときに帯から外れて<b>静かに空振り</b>に
-     * ならないようにするため。
+     * A value that hits the budget-caused hole. Measured with {@code PathfindingExecutor#capStages},
+     * <b>only 16-40 burn 600k nodes and end after 6 steps</b> (42 and above, and 8 and below, reach the goal).
+     * The middle of the band rather than its edge is taken so that when the cost model moves, the test doesn't
+     * drift out of the band and <b>silently miss</b>.
      */
     private static final int BUDGET_INSIDE_THE_BROKEN_BAND = 32;
 
-    /** この地形を渡るのに要る橋の本数。 */
+    /** Number of bridges needed to cross this terrain. */
     private static final int BRIDGES_NEEDED = 43;
 
     private static FakeCells terrain(int maxBridgeRun, int placedBlockBudget) throws IOException {
-        // 実機の条件に合わせる。落下ダメージの許容は体力満タンの1/3＝6ポイント
-        // （0は「一切落ちない」で、低い島へ降りる経路が全部消える）
+        // Match in-game conditions. Fall damage tolerance is 1/3 of full health = 6 points
+        // (0 means "never fall", which erases every route dropping down to lower islands)
         return TerrainFixture.load("/end_terrain_columns.txt.gz", bounds -> FakeCells.empty(bounds)
                 .canPlaceBlocks(true)
                 .maxBridgeRunBlocks(maxBridgeRun)
@@ -67,78 +69,82 @@ class RealEndTerrainTest {
     }
 
     /**
-     * <b>この地形の奈落を渡れること。</b>実測195,486ノードで、既定予算(100,000)には収まらない——
-     * 実機ではこれを{@code PathfindingExecutor#submitWithDeepFallback}の深い予算(6倍)が拾う。
-     * 深い予算は通常予算と<b>並列に</b>走るので、失敗を確認してから始めるぶんの待ちは無い。
+     * <b>The void in this terrain can be crossed.</b> Measured at 195,486 nodes, it doesn't fit in the default
+     * budget (100,000); in-game the deep budget (6x) of {@code PathfindingExecutor#submitWithDeepFallback}
+     * picks it up. The deep budget runs <b>in parallel</b> with the normal budget, so there's no wait for
+     * confirming the failure first.
      *
-     * <p>かつては既定予算で渡れていた（69,159ノード）。層1のガイドから「発明された重み」を
-     * 落として実コストの下限にした（{@code CoarseRouter#costToGo}）ぶん、ガイドが探索を絞る力が
-     * 弱くなったのと引き換え。<b>経路の質を採った選択</b>で、その量は{@code PathOptimalityTest}が測る。
+     * <p>It used to be crossable on the default budget (69,159 nodes). Dropping the "invented weights" from the
+     * layer 1 guide and making it a lower bound of the real cost ({@code CoarseRouter#costToGo}) weakened the
+     * guide's ability to narrow the search in exchange. <b>A choice in favor of route quality</b>; how much is
+     * measured by {@code PathOptimalityTest}.
      *
-     * <p>橋の上限96で解けることもここで見る（別テストに分けると同じ探索をもう一度払う）。
+     * <p>Solving it with a bridge cap of 96 is also checked here (a separate test would pay for the same search again).
      */
     @Test
     void crossesTheVoidWithTheDeepBudget() throws IOException {
         assertFalse(search(96, 150_000, 0, Carryover.NONE).complete(),
-                "150,000で届く＝探索が想定より軽い。閾値を測り直すこと");
+                "Reached at 150,000 = the search is lighter than expected. Re-measure the threshold");
 
         PathResult deep = search(96, 250_000, 0, Carryover.NONE);
-        assertTrue(deep.complete(), "深い予算で渡れるはず: " + deep.termination());
+        assertTrue(deep.complete(), "Should be crossable with the deep budget: " + deep.termination());
         assertTrue(longestBridgeRun(deep) > 30,
-                "上限30を超える橋が要る地形（だから上限も上げてある）: " + longestBridgeRun(deep));
+                "Terrain needing a bridge longer than the cap of 30 (which is why the cap was raised): " + longestBridgeRun(deep));
     }
 
     /**
-     * <b>効いているのは橋の上限ではなく予算だ</b>ということの固定。上限を旧既定の30まで
-     * 締めても、緩和の梯子が開いて同じように解ける——上限をいじって直そうとすると空振りする。
-     * 実際にこのセッションで一度その回り道をした。
+     * Pins down that <b>what matters is the budget, not the bridge cap</b>. Even tightening the cap to the old
+     * default of 30, the relaxation ladder opens and it solves the same way; trying to fix it by tweaking the
+     * cap misses. This session actually took that detour once.
      *
-     * <p><b>所要時間の比較はしない。</b>かつては「上限30だと最初の探索が丸ごと無駄になり倍以上
-     * 掛かる」を壁時計で固定していたが、{@code PathfindingExecutor#FIRST_PASS_PERCENT}で
-     * 最初の探索の取り分を絞ってからは差が消えた（実測 4129ms vs 4048ms）。壁時計の比は
-     * マシンの混み具合でも揺れる。
+     * <p><b>Durations are not compared.</b> It used to pin down by wall clock that "with a cap of 30 the first
+     * search is entirely wasted and it takes more than twice as long", but since
+     * {@code PathfindingExecutor#FIRST_PASS_PERCENT} narrowed the first search's share, the difference vanished
+     * (measured 4129ms vs 4048ms). Wall-clock ratios also swing with how busy the machine is.
      *
-     * <p>既定を96にしてある根拠は所要時間ではなく<b>実測の奈落の幅</b>（保存データで47〜81ブロック）。
+     * <p>The basis for the default of 96 is not duration but <b>the measured width of the void</b> (47-81 blocks in the save data).
      */
     @Test
     void theStrictBridgeCapStillSolvesItThroughTheLooseningLadder() throws IOException {
         assertTrue(search(30, 600_000, 0, Carryover.NONE).complete(),
-                "上限30でも緩和の梯子が開いて解けるはず");
+                "Should solve even with a cap of 30 as the relaxation ladder opens");
     }
 
     /**
-     * <b>持ち物のブロックが足りなくても島渡りは案内する。</b>
+     * <b>Island-hopping is guided even when inventory blocks run short.</b>
      *
-     * <p>この地形は橋が{@link #BRIDGES_NEEDED}本要る。それ未満に絞ると、<b>中間の帯だけが
-     * 60万ノードを焼いて6ステップで終わっていた</b>——前線が進むほど設置の枝が理由なく消え、
-     * 探索が橋以外の道を探し続ける。少ない側で通るのは橋が即座に切られて探索が橋を諦めるからで、
-     * <b>「少なくすれば安全」ではない</b>のがこの穴の質の悪いところ。
+     * <p>This terrain needs {@link #BRIDGES_NEEDED} bridges. Narrowing below that, <b>only the middle band burned
+     * 600k nodes and ended after 6 steps</b>: the further the frontier advances, the more placement branches
+     * vanish for no reason, and the search keeps looking for paths other than bridges. The low side gets
+     * through because bridges are cut immediately and the search gives up on them; the nasty part of this hole
+     * is that <b>"fewer is safer" does not hold</b>.
      *
-     * <p>直したのは{@code PathfindingExecutor#capStages}——予算が原因のときは、他の上限より
-     * 先に予算を外す段を積む。実機ユーザー報告「エンドの島渡りだけできない」の正体。
+     * <p>The fix was in {@code PathfindingExecutor#capStages}: when the budget is the cause, a stage dropping the
+     * budget is stacked before the other limits. The cause of the in-game user report "only End island-hopping fails".
      */
     @Test
     void crossesTheIslandsEvenWhenBlocksRunShort() throws IOException {
         PathResult result = search(96, 600_000, BUDGET_INSIDE_THE_BROKEN_BAND, Carryover.NONE);
 
         assertTrue(result.complete(),
-                "予算" + BUDGET_INSIDE_THE_BROKEN_BAND + "で島渡りが出なくなった: "
+                "Island-hopping no longer comes out with budget " + BUDGET_INSIDE_THE_BROKEN_BAND + ": "
                         + result.termination() + " steps=" + result.steps().size());
     }
 
     /**
-     * <b>区間をまたいで予算を絞っても島渡りは案内する。</b>
+     * <b>Island-hopping is guided even when the budget is narrowed across segments.</b>
      *
-     * <p>手前の区間が使うぶんを引き継ぐようにした以上（{@link Carryover}）、上の穴には
-     * <b>予算そのものを絞らなくても入りうる</b>——満額の{@link #BRIDGES_NEEDED}でも、手前が20使って
-     * いれば残りは23で帯のど真ん中に落ちる。予算を真っ先に外す段は引き継ぎの有無に関わらず効くこと。
+     * <p>Now that what earlier segments use is carried over ({@link Carryover}), the hole above can be entered
+     * <b>without narrowing the budget itself</b>: even with the full {@link #BRIDGES_NEEDED}, if earlier segments
+     * used 20, the remaining 23 lands right in the middle of the band. The stage that drops the budget first must
+     * work regardless of carryover.
      */
     @Test
     void crossesTheIslandsWhenEarlierSegmentsAlreadySpentTheBudget() throws IOException {
         PathResult result = search(96, 600_000, BRIDGES_NEEDED, new Carryover(0, 20));
 
         assertTrue(result.complete(),
-                "手前の区間が20個使った状態で島渡りが出なくなった: " + result.termination()
+                "Island-hopping no longer comes out with 20 already used by earlier segments: " + result.termination()
                         + " steps=" + result.steps().size());
     }
 

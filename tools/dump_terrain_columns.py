@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Minecraftのワールド保存データ(.mca)から、テスト用の地形フィクスチャを書き出す。
+"""Writes terrain fixtures for tests from Minecraft world save data (.mca).
 
-出力は `TerrainFixture`(src/test/java/.../world/TerrainFixture.java) が読む形式:
+Output is in the format read by `TerrainFixture` (src/test/java/.../world/TerrainFixture.java):
 
     minX minY minZ maxX maxY maxZ
-    x z <種別><fromY>,<toY> <種別><fromY>,<toY> …
+    x z <kind><fromY>,<toY> <kind><fromY>,<toY> ...
 
-種別は `FakeCells` の記号1文字。省略（数字で始まる）なら石として読む——
-種別を持たなかった頃に書き出したフィクスチャをそのまま読めるようにするため。
+The kind is a one-character symbol from `FakeCells`. If omitted (starts with a digit), it's read as stone,
+so fixtures written before kinds existed can still be read as-is.
 
-使い方:
+Usage:
     python3 tools/dump_terrain_columns.py <region-dir> <minX> <minZ> <maxX> <maxZ> \
-        --band <下>,<上> --out src/test/resources/<name>.txt.gz
+        --band <low>,<high> --out src/test/resources/<name>.txt.gz
 """
 import argparse
 import gzip
@@ -22,8 +22,8 @@ import zlib
 
 STONE, SOFT, WATER, LAVA, VINE, LADDER, WALL = '#', 'D', '~', 'L', 'V', 'H', 'B'
 
-# 通り抜けられる（空気として書き出す）ブロック。草・花・松明の類までを含める——
-# 固体として書くと、地表が一面「掘らないと進めない」地形になる
+# Blocks that can be passed through (written as air). Includes grass, flowers, torches and the like;
+# writing them as solid would turn the whole surface into terrain you can't cross without digging
 PASSABLE_SUFFIXES = (
     '_air', 'air', 'grass', 'fern', 'flower', 'tulip', 'orchid', 'bluet', 'daisy', 'rose',
     'poppy', 'dandelion', 'cornflower', 'lily_of_the_valley', 'allium', 'sapling', 'torch',
@@ -38,16 +38,16 @@ PASSABLE_EXACT = {
     'minecraft:structure_void', 'minecraft:moving_piston', 'minecraft:tripwire',
     'minecraft:nether_portal', 'minecraft:end_portal', 'minecraft:end_gateway',
 }
-# 値は (記号, 地面の高さの基準にしないか)
+# Values are (symbol, whether to exclude it as a reference for ground height)
 CLIMBABLE = {'minecraft:ladder': (LADDER, False), 'minecraft:vine': (VINE, True),
              'minecraft:weeping_vines': (VINE, True), 'minecraft:weeping_vines_plant': (VINE, True),
              'minecraft:twisting_vines': (VINE, True), 'minecraft:twisting_vines_plant': (VINE, True),
              'minecraft:cave_vines': (VINE, True), 'minecraft:cave_vines_plant': (VINE, True),
              'minecraft:scaffolding': (LADDER, False)}
 
-# 掘れない壁として書き出す。実機の`DiggableBlocks`は許可リスト制で、原木・幹は許可していない
+# Written as undiggable walls. The real `DiggableBlocks` is allowlist-based and doesn't allow logs or stems
 LOG_SUFFIXES = ('_log', '_wood', '_stem', '_hyphae')
-# `_stem`で終わるが実機では掘れる
+# Ends in `_stem` but is diggable in the real game
 NOT_LOG = {'minecraft:mushroom_stem'}
 SOFT_BLOCKS = {
     'minecraft:dirt', 'minecraft:grass_block', 'minecraft:coarse_dirt', 'minecraft:rooted_dirt',
@@ -61,10 +61,10 @@ SOFT_BLOCKS = {
 
 
 def classify(name):
-    """(記号, 地面の高さの基準にしないか) を返す。記号がNoneなら空気として書き出さない。
+    """Returns (symbol, whether to exclude it as a reference for ground height). If the symbol is None, it isn't written as air.
 
-    第2の値は`--depth`がどこから深さを測るかにだけ効く。木・ツタ・竹は地面の上に生えている
-    ものなので基準にできず、水と溶岩は液面ではなくその下の地形から測らないと海底が削れる。
+    The second value only affects where `--depth` measures depth from. Trees, vines, and bamboo grow on top of the ground,
+    so they can't be the reference, and water and lava must be measured from the terrain below rather than the surface or the seabed gets cut off.
     """
     if name in {'minecraft:bedrock', 'minecraft:barrier'}:
         return WALL, False
@@ -79,7 +79,7 @@ def classify(name):
         return WATER, True
     if name == 'minecraft:lava':
         return LAVA, True
-    # 葉・竹は実機では「掘って通る固体」。空気として捨てるとジャングルの天蓋が地形から消える
+    # Leaves and bamboo are "solids you dig through" in the real game. Discarding them as air removes the jungle canopy from the terrain
     if short.endswith('leaves'):
         return SOFT, True
     if name == 'minecraft:bamboo':
@@ -92,7 +92,7 @@ def classify(name):
 
 
 class Nbt:
-    """必要なタグだけを読む最小のNBTリーダー。"""
+    """A minimal NBT reader that reads only the tags it needs."""
 
     def __init__(self, data):
         self.d = data
@@ -144,8 +144,8 @@ class Nbt:
                 child = self.u1()
                 if child == 0:
                     return out
-                # 名前を先に読む。`out[self.name()] = self.value(child)` と書くと、Pythonは
-                # 右辺を先に評価するので値と名前が入れ替わる
+                # Read the name first. Writing `out[self.name()] = self.value(child)` makes Python
+                # evaluate the right-hand side first, which swaps the value and the name
                 key = self.name()
                 out[key] = self.value(child)
         if tag == 11:
@@ -180,22 +180,22 @@ def read_chunk(region, cx, cz):
     elif compression == 2:
         payload = zlib.decompress(payload)
     else:
-        # 3(非圧縮)・4(LZ4, 1.20.5+の一部設定)は対応していない。ここで弾かないと、
-        # 圧縮されたままのバイト列を素のNBTとして読もうとして分かりにくい失敗をする
-        # （運悪く先頭バイトが有効なtag IDと一致すると、エラーにすらならず誤った地形を書き出す）
+        # 3 (uncompressed) and 4 (LZ4, some 1.20.5+ settings) aren't supported. Without rejecting them here,
+        # it would try to read the still-compressed bytes as raw NBT and fail confusingly
+        # (if the first byte happens to match a valid tag ID, it doesn't even error and writes wrong terrain)
         raise ValueError('unsupported chunk compression type: %d' % compression)
     return Nbt(payload).root()
 
 
 def section_overlaps_band(section_y, band_low, band_high):
-    """このセクション（16ブロック立方、`Y`は1.18以降のセクション座標で負にもなる）が
-    `[band_low, band_high]`と重なるか。"""
+    """Whether this section (a 16-block cube; `Y` is the section coordinate since 1.18 and can be negative)
+    overlaps `[band_low, band_high]`."""
     base_y = section_y * 16
     return base_y <= band_high and base_y + 15 >= band_low
 
 
 def section_blocks(section):
-    """1セクション(16^3)のブロック名を、y*256+z*16+x の並びで返す。全部同じなら文字列1つ。"""
+    """Returns one section's (16^3) block names in y*256+z*16+x order. A single string if they're all the same."""
     states = section.get('block_states')
     if states is None:
         return None
@@ -223,11 +223,11 @@ def main():
     parser.add_argument('min_z', type=int)
     parser.add_argument('max_x', type=int)
     parser.add_argument('max_z', type=int)
-    parser.add_argument('--band', required=True, help='書き出すYの範囲 "下,上"')
+    parser.add_argument('--band', required=True, help='Y range to write: "low,high"')
     parser.add_argument('--depth', type=int, default=0,
-                        help='列ごとに、地面のいちばん上からこの深さまでだけ書き出す（0で無制限）。'
-                             '地表を歩く経路しか見ないなら、下の岩盤まで書いてもファイルが太るだけ。'
-                             '木・ツタ・竹は基準にも含めず、常にそのまま残す')
+                        help='For each column, write only down to this depth from the top of the ground (0 for unlimited). '
+                             'If you only look at paths walking on the surface, writing all the way down to bedrock just bloats the file. '
+                             'Trees, vines, and bamboo are not used as the reference and are always kept as-is')
     parser.add_argument('--out', required=True)
     args = parser.parse_args()
 
@@ -285,8 +285,8 @@ def main():
     for (x, z), cells in sorted(columns.items()):
         cells.sort()
         if args.depth > 0:
-            # 基準は地面のいちばん上。列の最上端から測ると木やツタの下の地面ごと削れる——
-            # 葉を固体として書くジャングルでは、それだと1割の列から地面が消える
+            # The reference is the top of the ground. Measuring from the column's topmost block would cut away the ground under trees and vines;
+            # in jungles, where leaves are written as solid, that removes the ground from 10% of the columns
             ground = next((y for y, _, not_ground in reversed(cells) if not not_ground),
                           cells[-1][0])
             cells = [c for c in cells if c[0] >= ground - args.depth]
@@ -309,7 +309,7 @@ def main():
     with gzip.open(args.out, 'wt', encoding='utf-8') as out:
         out.write(header + '\n')
         out.write('\n'.join(lines) + '\n')
-    print('%s 列=%d Y=%d..%d %.1fKB' % (args.out, len(columns), min_y, max_y,
+    print('%s columns=%d Y=%d..%d %.1fKB' % (args.out, len(columns), min_y, max_y,
                                         os.path.getsize(args.out) / 1024.0))
 
 

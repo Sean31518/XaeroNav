@@ -26,31 +26,34 @@ import net.prason.xaeronav.util.ChangeGate;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * 採った経路が何でできていて、なぜその形になったのかをdebugに残す。
+ * Logs to debug what the adopted route is made of and why it took that shape.
  *
- * <p>1行目（経路の内訳）は採るたびに出す。手の種類ごとの手数と値段・高い手の塊・直線からのずれ・ガイドの見積もりと
- * 実際の差を並べるので、「なぜ遠回りに見えるか」の多くはこの1行で割れる（例: 積む7段を避けて丘の斜面を回った）。
+ * <p>The first line (route breakdown) is emitted every time a route is adopted. It lists the step count and cost per
+ * move type, the expensive runs, the deviation from a straight line, and the gap between the guide's estimate and
+ * reality, so most "why does this look like a detour" questions are answered by this one line (e.g. it went around
+ * the hillside to avoid stacking 7 blocks).
  *
- * <p>2行目（再現用）は、模型（{@code FakeCells}＋{@code tools/dump_terrain_columns.py}）で同じ探索を解き直すのに要る
- * 設定と地形の書き出し範囲。中身が変わったときだけ出す——始点は1行目にあるので、毎回出しても同じ行が並ぶだけになる。
+ * <p>The second line (for reproduction) is the settings and terrain export range needed to re-solve the same search
+ * on the model ({@code FakeCells} + {@code tools/dump_terrain_columns.py}). Emitted only when its content changes:
+ * the start is already on the first line, so emitting it every time would just repeat the same line.
  */
 final class RouteExplain {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
-    /** 高い手の塊を何個まで並べるか。 */
+    /** How many expensive runs to list. */
     private static final int COSTLY_RUNS = 3;
 
-    /** 書き出し範囲を始点と目的地の外接箱からどれだけ広げるか。窓の縁の外まで少し入れないと、模型の窓が欠ける。 */
+    /** How far to expand the export range beyond the bounding box of start and destination. Without a bit beyond the window edge, the model's window is incomplete. */
     private static final int DUMP_PAD_BLOCKS = 128;
 
     /**
-     * 書き出し範囲を始点からこれより遠くへ伸ばさない。目的地が数千ブロック先だと書き出しが数百MBになり、
-     * 局所の形を調べるのに要るのは窓（最大224）とその少し外だけ。
+     * Do not extend the export range farther than this from the start. With a destination thousands of blocks away the
+     * export would be hundreds of MB, and examining the local shape only needs the window (up to 224) and a bit beyond.
      */
     private static final int DUMP_MAX_REACH_BLOCKS = 1024;
 
-    /** 書き出し範囲の丸め。少し歩くたびに範囲が変わって再現用の行が出直さないようにする。 */
+    /** Rounding for the export range, so the reproduction line is not re-emitted every time you walk a little. */
     private static final int DUMP_GRID_BLOCKS = 256;
 
     private static final ChangeGate<String> reproGate = new ChangeGate<>();
@@ -59,11 +62,12 @@ final class RouteExplain {
     }
 
     /**
-     * @param kind   何がこの経路を引いたか（再計算のきっかけ・継ぎ足しなど）
-     * @param target この探索が狙った点（中間目標・着地点・目的地）
-     * @param guide  探索に掛けたガイド。掛けていなければ{@code null}
-     * @param window 目的地までの航法グラフのガイド。エンドの着地点を狙う探索は{@code guide}が着地点までの値に引き直されているので、
-     *               値の出どころ（窓のどの縁から出るか）はこちらで見る
+     * @param kind   what produced this route (re-plan trigger, extension, etc.)
+     * @param target the point this search aimed at (intermediate target, landing point, destination)
+     * @param guide  the guide applied to the search; {@code null} if none
+     * @param window the navigation graph guide to the destination. Searches aiming at an End landing point have
+     *               {@code guide} re-based to values up to the landing point, so the source of values (which window
+     *               edge they come from) is read from this one
      */
     static void log(String kind, Level level, BlockPos start, BlockPos target, BlockPos goal, PathResult result,
                     @Nullable CostToGo guide, @Nullable CostToGo window, CellSource view, MovementOptions options,
@@ -71,19 +75,19 @@ final class RouteExplain {
         if (!LOGGER.isDebugEnabled() || result.steps().isEmpty()) {
             return;
         }
-        // 次元と高さはワールドから読むのでここで写す。数えるのは航法グラフのガイドを下るぶん重いので、ログ用のスレッドへ回す
+        // Dimension and height are read from the world, so copy them here. Counting walks down the navigation graph guide and is heavy, so it goes to the logging thread
         String repro = repro(level, start, target, goal, window, view, options, renderRadius);
         List<String> digging = diggingDetails(level, view, start, result);
         NavGraphGuide.logOffThread(() -> {
-            LOGGER.debug("XaeroNav: 経路の内訳 ({})", summary(kind, start, target, goal, result, guide, window));
-            digging.forEach(detail -> LOGGER.debug("XaeroNav: 掘削の判定 ({})", detail));
+            LOGGER.debug("XaeroNav: route breakdown ({})", summary(kind, start, target, goal, result, guide, window));
+            digging.forEach(detail -> LOGGER.debug("XaeroNav: dig check ({})", detail));
             if (reproGate.changed(repro)) {
-                LOGGER.debug("XaeroNav: 経路の再現用 ({})", repro);
+                LOGGER.debug("XaeroNav: route repro ({})", repro);
             }
         });
     }
 
-    /** 採用した経路だけ、最大8手。ワールドと探索用セルの読みは呼び出し側で写しておく。 */
+    /** Only for the adopted route, up to 8 steps. Reads of the world and the search cells are copied by the caller. */
     private static List<String> diggingDetails(Level level, CellSource view, BlockPos start, PathResult result) {
         List<String> details = new ArrayList<>();
         BlockPos from = start;
@@ -103,7 +107,7 @@ final class RouteExplain {
                         view.cell(from.getX(), from.getY() - 1, from.getZ()));
                 boolean targetFloor = CellData.standable(
                         view.cell(step.pos().getX(), step.pos().getY() - 1, step.pos().getZ()));
-                details.add("始点=%s, 終点=%s, 移動=%s, 始点の頭が水=%s, 始点の足場=%s, 終点の足場=%s, 素の掘削=%.3ftick, 移動込み=%.3ftick, 対象=[%s]"
+                details.add("from=%s, to=%s, movement=%s, startHeadInWater=%s, startFooting=%s, endFooting=%s, rawDig=%.3ftick, withMove=%.3ftick, targets=[%s]"
                         .formatted(from.toShortString(), step.pos().toShortString(), step.movement(), sourceWater,
                                 sourceFloor, targetFloor, raw, step.cost(), blocks));
                 if (details.size() == 8) {
@@ -168,64 +172,66 @@ final class RouteExplain {
         double straight = Math.hypot(end.getX() - start.getX(), end.getZ() - start.getZ());
 
         StringJoiner kinds = new StringJoiner(" ");
-        byKind.forEach((action, tally) -> kinds.add("%s%d手/%d".formatted(action, (int) tally[0], Math.round(tally[1]))));
-        // 歩きの塊は長いだけで理由にならない。見たいのは「ここで高い手を払った」所
+        byKind.forEach((action, tally) -> kinds.add("%s%d steps/%d".formatted(action, (int) tally[0], Math.round(tally[1]))));
+        // Runs of walking are not a reason just for being long. What we want to see is "where an expensive move was paid"
         StringJoiner costly = new StringJoiner(" ");
-        runs.stream().filter(r -> !r.action.equals("歩く")).sorted(Comparator.comparingDouble((Run r) -> r.cost).reversed())
+        runs.stream().filter(r -> !r.action.equals("walk")).sorted(Comparator.comparingDouble((Run r) -> r.cost).reversed())
                 .limit(COSTLY_RUNS)
                 .forEach(r -> costly.add("%s%d@%s(%d)".formatted(r.action, r.steps, r.from.toShortString(),
                         Math.round(r.cost))));
 
         return String.format(Locale.ROOT,
-                "%s, 始点=%s, 末端=%s, 狙い=%s, 目的地=%s, %s, 到達=%s, 展開=%d, %dステップ, 値段=%dtick, 内訳=[%s], "
-                        + "高い手=[%s], 登り%d 降り%d y%d〜%d, 直線%d→歩く長さ%d(%.2f倍), 狙いへの直線から最大%d@%s, %s",
+                "%s, start=%s, end=%s, target=%s, goal=%s, %s, reached=%s, expanded=%d, %d steps, cost=%dtick, breakdown=[%s], "
+                        + "costly=[%s], up%d down%d y%d to %d, straight%d→walked%d(%.2fx), max off straight-to-target %d@%s, %s",
                 kind, start.toShortString(), end.toShortString(), target.toShortString(), goal.toShortString(),
                 result.termination(), result.complete(), result.expandedNodes(), steps.size(), Math.round(cost),
-                kinds, costly.length() == 0 ? "無し" : costly, up, down, minY, maxY, Math.round(straight),
+                kinds, costly.length() == 0 ? "none" : costly, up, down, minY, maxY, Math.round(straight),
                 Math.round(walked), straight < 1.0 ? 0.0 : walked / straight, Math.round(deviation),
                 deviationAt.toShortString(), guideVerdict(guide, window, start, end, cost));
     }
 
     /**
-     * ガイドが始点で言っていた残りと、実際に払った値段＋末端の残りを比べる。大きく食い違えば、探索はガイドに
-     * 引っ張られて形が決まっている（窓の外の推定が安すぎて外へ寄る、など）。航法グラフなら値の出どころも添える。
+     * Compares the remainder the guide predicted at the start with the cost actually paid + the remainder at the end.
+     * A large mismatch means the search's shape is being pulled by the guide (e.g. the outside-window estimate is too
+     * cheap, so it drifts outward). For the navigation graph, the source of the values is added too.
      */
     private static String guideVerdict(@Nullable CostToGo guide, @Nullable CostToGo window, BlockPos start,
                                        BlockPos end, double cost) {
-        String measured = guide == null ? "ガイド=無し" : "ガイド%s 始点の残り%d 払った%d+末端の残り%d".formatted(
-                guide == window ? "" : "(狙いまで)", Math.round(guide.estimate(start.getX(), start.getY(), start.getZ())),
+        String measured = guide == null ? "guide=none" : "guide%s startRemaining%d paid%d+endRemaining%d".formatted(
+                guide == window ? "" : "(to target)", Math.round(guide.estimate(start.getX(), start.getY(), start.getZ())),
                 Math.round(cost), Math.round(guide.estimate(end.getX(), end.getY(), end.getZ())));
         if (!(window instanceof WindowField field)) {
             return measured;
         }
-        return "%s, 窓の中心=%d,%d 半径%d, 始点の値の出どころ=%s, 末端の値の出どころ=%s".formatted(measured,
+        return "%s, windowCenter=%d,%d radius%d, startValueSource=%s, endValueSource=%s".formatted(measured,
                 field.centerX(), field.centerZ(), field.radius(), NavGraphGuide.origin(field, start),
                 NavGraphGuide.origin(field, end));
     }
 
     private static String action(PathStep step) {
         if (step.bridging()) {
-            return step.movement() == MovementType.ASCEND ? "積む" : "橋";
+            return step.movement() == MovementType.ASCEND ? "pillar" : "bridge";
         }
         if (step.digging()) {
-            return "掘る";
+            return "dig";
         }
         return switch (step.movement()) {
-            case TRAVERSE -> "歩く";
-            case ASCEND -> "登る";
-            case DESCEND -> "降りる";
-            case JUMP -> "跳ぶ";
-            case FALL_DAMAGE -> "落ちる(ダメージ)";
-            case FALL_MLG -> "落ちる(水バケツ)";
-            case SWIM -> "泳ぐ";
-            case BOAT -> "ボート";
-            case CLIMB -> "梯子";
+            case TRAVERSE -> "walk";
+            case ASCEND -> "climb";
+            case DESCEND -> "descend";
+            case JUMP -> "jump";
+            case FALL_DAMAGE -> "fall(damage)";
+            case FALL_MLG -> "fall(water bucket)";
+            case SWIM -> "swim";
+            case BOAT -> "boat";
+            case CLIMB -> "ladder";
         };
     }
 
     /**
-     * 模型で解き直すための1行。設定は{@code FakeCells}の同名メソッドにそのまま渡せる形で並べる。
-     * 窓の外の推定は書き出した範囲の地形から組み直すので、範囲を始点の近くに切ったときは遠くの値が実機と違う。
+     * One line for re-solving on the model. Settings are listed in a form that can be passed as-is to the same-named
+     * methods of {@code FakeCells}. The outside-window estimate is rebuilt from the terrain in the exported range, so
+     * when the range is clipped near the start, far-away values differ from the real game.
      */
     private static String repro(Level level, BlockPos start, BlockPos target, BlockPos goal, @Nullable CostToGo guide,
                                 CellSource view, MovementOptions options, int renderRadius) {
@@ -245,18 +251,18 @@ final class RouteExplain {
         int maxZ = Math.min(Math.max(start.getZ(), goal.getZ()) + DUMP_PAD_BLOCKS, start.getZ() + DUMP_MAX_REACH_BLOCKS);
         boolean clipped = maxX - minX < Math.abs(goal.getX() - start.getX()) + 2 * DUMP_PAD_BLOCKS
                 || maxZ - minZ < Math.abs(goal.getZ() - start.getZ()) + 2 * DUMP_PAD_BLOCKS;
-        // ネザーは天井の岩盤より上（y128〜）を書き出しても、屋根の上を歩く経路しか増えない
+        // In the Nether, exporting above the bedrock ceiling (y128+) only adds routes that walk on the roof
         int bandTop = level.dimensionType().hasCeiling() ? 127 : GameCompat.maxBuildHeight(level) - 1;
         return String.format(Locale.ROOT,
-                "目的地=%s, 狙い=%s, 窓=%d, 掘る=%s, 設定=%s, 書き出し=python3 tools/dump_terrain_columns.py "
-                        + "saves/<ワールド>/%s %d %d %d %d --band %d,%d --out <名前>.txt.gz%s",
+                "goal=%s, target=%s, window=%d, dig=%s, settings=%s, export=python3 tools/dump_terrain_columns.py "
+                        + "saves/<world>/%s %d %d %d %d --band %d,%d --out <name>.txt.gz%s",
                 goal.toShortString(), target.toShortString(), window, options.diggingEnabled(), settings,
                 regionDir(level), Math.floorDiv(minX, DUMP_GRID_BLOCKS) * DUMP_GRID_BLOCKS,
                 Math.floorDiv(minZ, DUMP_GRID_BLOCKS) * DUMP_GRID_BLOCKS,
                 Math.floorDiv(maxX, DUMP_GRID_BLOCKS) * DUMP_GRID_BLOCKS + DUMP_GRID_BLOCKS - 1,
                 Math.floorDiv(maxZ, DUMP_GRID_BLOCKS) * DUMP_GRID_BLOCKS + DUMP_GRID_BLOCKS - 1,
                 GameCompat.minBuildHeight(level), bandTop,
-                clipped ? " (目的地が遠いので始点の近くだけ。窓の外の推定は実機と違う)" : "");
+                clipped ? " (destination is far, so only near the start. The outside-window estimate differs from the real game)" : "");
     }
 
     private static String regionDir(Level level) {
@@ -269,7 +275,7 @@ final class RouteExplain {
         if (level.dimension() == Level.OVERWORLD) {
             return "region";
         }
-        return "dimensions/<名前空間>/<次元>/region";
+        return "dimensions/<namespace>/<dimension>/region";
     }
 
     private static final class Run {

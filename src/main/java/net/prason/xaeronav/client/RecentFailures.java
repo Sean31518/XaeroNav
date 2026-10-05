@@ -9,39 +9,39 @@ import java.util.Map;
 import net.minecraft.core.BlockPos;
 
 /**
- * 直前に{@link PathValidator}が不成立と判定したセルを、短い間だけ覚えておく。
- * 次の探索はこれを{@code AvoidedCellSource}で避ける。
+ * Briefly remembers the cells {@link PathValidator} just judged as not holding.
+ * The next search avoids them via {@code AvoidedCellSource}.
  *
- * <p><b>これが無いと輪が閉じない。</b>探索側のセル判定と再確認の判定が同じ座標で食い違うと、
- * 引き直した経路がまた同じセルを通り、また即座に無効と判断される。{@code Splice}の再挑戦ゲートも
- * {@code SeamRepair}の1繋ぎ目1回制限も、<b>そのセルを選び直す探索そのもの</b>は止められない
- * ——実機報告(#47)では同じ座標で14秒間その輪が回り続けた。
+ * <p><b>Without this the loop never closes.</b> If the search's cell check and the recheck disagree at the same coordinate,
+ * the replanned path goes through the same cell again and is immediately judged invalid again. Neither {@code Splice}'s retry gate
+ * nor {@code SeamRepair}'s once-per-seam limit can stop <b>the search itself from picking that cell again</b>;
+ * in an in-game report (#47) that loop kept spinning at the same coordinate for 14 seconds.
  *
- * <p>覚えるのは一時的でよい。食い違いの原因が実際の地形変化なら、次に見たときには
- * 探索側も同じ判定になるので避ける必要は無くなる。{@link #TTL_NANOS}は実機ログの輪の周期
- * （2〜5秒）を確実に跨ぐ長さにしてある。
+ * <p>Remembering only temporarily is enough. If the disagreement is caused by a real terrain change, the next time it's looked at
+ * the search side reaches the same verdict, so there's no longer any need to avoid it. {@link #TTL_NANOS} is long enough to reliably span
+ * the loop period seen in in-game logs (2-5 seconds).
  *
- * <p><b>メインスレッド専用。</b>記録するのは経路の再確認（tick）、読むのは探索を投げる直前の
- * {@code ChunkView}構築時で、どちらもメインスレッドに限られる（{@code ChunkView#capture}が
- * メインスレッド専用なので、読む側は原理的にそこから外れない）。
+ * <p><b>Main thread only.</b> Recording happens in the path recheck (tick), and reading when building the {@code ChunkView}
+ * right before dispatching a search; both are confined to the main thread ({@code ChunkView#capture} is
+ * main-thread only, so the reading side can't leave it in principle).
  */
 final class RecentFailures {
 
-    /** 覚えておく長さ。 */
+    /** How long to remember. */
     private static final long TTL_NANOS = 15_000_000_000L;
 
     /**
-     * 同時に覚えるセルの数。溢れたら古い方から捨てる（{@code SeamRepair#QUEUE_LIMIT}と同じ考え方）。
+     * Number of cells remembered at once. When it overflows, the oldest are dropped (same idea as {@code SeamRepair#QUEUE_LIMIT}).
      *
-     * <p>際限なく増やさないのは、避けるセルが増えるほど<b>探索から取り上げる選択肢が増える</b>から。
-     * 止めたいのは同じ1点へ吸い込まれる輪であって、地形を広く封じることではない。
+     * <p>It's not allowed to grow without limit because the more cells are avoided, <b>the more options are taken away from the search</b>.
+     * What we want to stop is a loop sucked into the same single point, not sealing off terrain broadly.
      */
     private static final int LIMIT = 8;
 
-    /** 不成立だったセル→記録した時刻。挿入順で持ち、溢れたら先頭から捨てる。 */
+    /** Cell that didn't hold → time recorded. Kept in insertion order; on overflow, dropped from the front. */
     private final Map<BlockPos, Long> failures = new LinkedHashMap<>();
 
-    /** このセルを不成立として覚える。既に覚えているなら時刻を更新する。 */
+    /** Remembers this cell as not holding. If already remembered, updates the time. */
     void note(BlockPos cell) {
         failures.remove(cell);
         failures.put(cell, System.nanoTime());
@@ -52,14 +52,14 @@ final class RecentFailures {
         }
     }
 
-    /** いま避けるべきセル。期限切れはここで落とす。 */
+    /** Cells to avoid right now. Expired ones are dropped here. */
     List<BlockPos> avoided() {
         long now = System.nanoTime();
         failures.values().removeIf(at -> now - at > TTL_NANOS);
         return new ArrayList<>(failures.keySet());
     }
 
-    /** 目的地の変更で、覚えていたセルを捨てる。 */
+    /** On a destination change, drops the remembered cells. */
     void clear() {
         failures.clear();
     }

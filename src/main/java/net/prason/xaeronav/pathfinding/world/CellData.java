@@ -36,26 +36,26 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * 1ブロック分の探索用データを{@code long}に詰めた表現。
+ * Search data for one block, packed into a {@code long}.
  *
- * <p>レコードとして持つと、1セルあたりMapのエントリ込みで100バイト近くかかる。longに詰めることで
- * fastutilのプリミティブMapへそのまま格納でき、キャッシュ1件あたりのアロケーションがゼロになる。
+ * <p>Holding it as a record costs close to 100 bytes per cell including the Map entry. Packing it into a long lets it
+ * go straight into fastutil's primitive Maps, with zero allocation per cache entry.
  *
- * <p>掘削コストは{@code float}精度で保持する。値はtick数（数十〜数千）なので有効桁は十分で、
- * {@link net.prason.xaeronav.pathfinding.cost.ActionCosts#INFEASIBLE}（正の無限大）も
- * floatとの往復で正確に保存される。
+ * <p>The dig cost is kept at {@code float} precision. The value is a tick count (tens to thousands), so the
+ * significant digits are plenty, and {@link net.prason.xaeronav.pathfinding.cost.ActionCosts#INFEASIBLE}
+ * (positive infinity) also survives the round trip through float exactly.
  */
 public final class CellData {
 
     /**
-     * 探索範囲外・未ロードチャンクを表す。{@link CellData}のどの述語も{@code false}を返すため、
-     * 「触れない・立てない・掘れない」＝経路が伸びない、という安全側の扱いになる。
+     * Represents outside the search range or an unloaded chunk. Every {@link CellData} predicate returns {@code false},
+     * so it is handled on the safe side: "cannot touch, cannot stand, cannot dig" = the route does not extend.
      */
     public static final long ABSENT = 0L;
 
-    // フラグはパッケージ内公開に留める。同じパッケージのテスト（FakeCells）が
-    // BlockStateを介さずにセルを組み立てられるようにするため —
-    // flagsOf(BlockState)はMinecraftのレジストリ起動を要求するので単体テストからは呼べない。
+    // Flags are kept package-private so that tests in the same package (FakeCells)
+    // can build cells without going through BlockState —
+    // flagsOf(BlockState) requires Minecraft's registries to be bootstrapped, so unit tests cannot call it.
     static final long PRESENT = 1L;
     static final long PASSABLE_EMPTY = 1L << 1;
     static final long WATER = 1L << 2;
@@ -68,46 +68,46 @@ public final class CellData {
     static final long COBWEB = 1L << 9;
     static final long HAZARD = 1L << 10;
     /**
-     * その上を進むにはスニークが要る床。マグマブロックだけ——踏むとダメージを受けるが、
-     * バニラの{@code isSteppingCarefully}（スニーク中）なら無傷で渡れる。通行可否ではなく
-     * 「案内に一言添える必要があるか」の印なので{@link #HAZARD}とは分けてある。
+     * A floor that requires sneaking to walk on. Only magma blocks: stepping on one deals damage, but vanilla's
+     * {@code isSteppingCarefully} (while sneaking) lets you cross unharmed. It is a marker for "does the guidance need a
+     * note", not for passability, so it is kept separate from {@link #HAZARD}.
      */
     static final long SNEAK_REQUIRED = 1L << 11;
     /**
-     * ここへブロックを置けるか（バニラの{@code BlockBehaviour.BlockStateBase#canBeReplaced}）。
+     * Whether a block can be placed here (vanilla {@code BlockBehaviour.BlockStateBase#canBeReplaced}).
      *
-     * <p>当たり判定が無いことと、そこへ置けることは別。しだれツタ・ねじれツタ・洞窟のツタ・
-     * 松明・レール・花は体が通り抜けられるが<b>replaceableではない</b>ので、狙って置いても
-     * {@code BlockPlaceContext#getClickedPos}が隣のセルを返す——案内した位置には絶対に置かれない。
-     * 普通のツタ({@code vine})だけはreplaceableなので置ける。
+     * <p>Having no collision is not the same as being placeable. Weeping vines, twisting vines, cave vines, torches,
+     * rails, and flowers can be walked through but are <b>not replaceable</b>, so even if you aim to place there,
+     * {@code BlockPlaceContext#getClickedPos} returns the neighboring cell: nothing is ever placed at the guided
+     * position. Only regular vines ({@code vine}) are replaceable and can be placed into.
      */
     static final long REPLACEABLE = 1L << 12;
 
     private static final long OCCUPIABLE = PASSABLE_EMPTY | WATER | CLIMBABLE;
 
     /**
-     * 移動速度の倍率（{@link #travelSpeedFactor}）を100倍した値を置く位置。
-     * 0は「未設定＝等速」を表す（{@link #ABSENT}のセルもここが0になるので辻褄が合う）。
+     * Bit position for the movement speed multiplier ({@link #travelSpeedFactor}) times 100.
+     * 0 means "unset = normal speed" (an {@link #ABSENT} cell also has 0 here, so it stays consistent).
      */
     private static final int SPEED_FACTOR_SHIFT = 16;
     private static final long SPEED_FACTOR_MASK = 0xFFL << SPEED_FACTOR_SHIFT;
 
-    /** 当たり判定の境界がセルの端に接しているかを見るときの許容誤差。 */
+    /** Tolerance for checking whether a collision boundary touches the edge of the cell. */
     private static final double EDGE_EPSILON = 1.0E-7;
 
     /**
-     * 「滑る床」とみなす摩擦の下限。普通のブロックは0.6、氷・氷塊・青氷だけが0.98以上になる。
-     * スライムブロック(0.8)は跳ねるだけで速くはならないので、この間に線を引いて外す。
+     * Lower bound of friction for a "slippery floor". Normal blocks are 0.6; only ice, packed ice, and blue ice are 0.98
+     * or higher. Slime blocks (0.8) only bounce and are not faster, so the line is drawn between to exclude them.
      */
     private static final float SLIPPERY_FRICTION = 0.9f;
 
-    /** 氷の上を進むときの速度倍率（{@link #travelSpeedFactor}）。 */
+    /** Speed multiplier when moving on ice ({@link #travelSpeedFactor}). */
     private static final float ICE_SPEED_FACTOR = 1.2f;
 
     /**
-     * マグマブロックの上を進むときの速度倍率（{@link #travelSpeedFactor}）。バニラの
-     * {@code isSteppingCarefully}（スニーク中）はダメージを受けない代わりに移動速度が
-     * 疾走の約0.3倍まで落ちる——通行不能にはせず、その遅さをそのままコストにする。
+     * Speed multiplier when moving on magma blocks ({@link #travelSpeedFactor}). Vanilla's
+     * {@code isSteppingCarefully} (while sneaking) avoids damage, but movement speed drops to about 0.3 times sprinting.
+     * Instead of making it impassable, that slowness becomes the cost as-is.
      */
     private static final float MAGMA_SPEED_FACTOR = 0.3f;
 
@@ -115,43 +115,44 @@ public final class CellData {
     }
 
     /**
-     * {@link BlockState}から掘削コスト以外のフラグを判定する。形状・流体の問い合わせは
-     * {@code BlockState}側のキャッシュを読むだけでlevelを参照しないため、どのスレッドからでも呼べる。
+     * Determines the flags other than dig cost from a {@link BlockState}. Shape and fluid queries just read
+     * {@code BlockState}'s cache and do not touch the level, so this can be called from any thread.
      *
-     * <p>探索（ワーカースレッド）と経路の再確認（メインスレッド）で同じ判定を共有するためのもの。
-     * ここが食い違うと、探索が通した経路を再確認が即座に無効と判断して再計算が止まらなくなる。
+     * <p>This lets the search (worker thread) and route re-check (main thread) share the same checks.
+     * If they disagree, the re-check immediately invalidates the route the search let through, and recalculation
+     * never stops.
      *
-     * <p>戻り値に掘削コストは含まれない（{@link #digTicks}は0を返す）。
-     * 探索に使う完全なセルデータは{@link #withDigTicks}で組み立てること。
+     * <p>The return value does not include the dig cost ({@link #digTicks} returns 0).
+     * Build the full cell data used for searching with {@link #withDigTicks}.
      */
     public static long flagsOf(BlockState state) {
-        // 危険の判定を先に置くのは、パウダースノーのように「形状が動的（革のブーツで変わる）」でも
-        // あり「入ると危険」でもあるブロックを、より意味の近いHAZARDとして扱うため。
-        // どちらも進入不可という結論は同じなので、探索の挙動は変わらない
+        // The hazard check comes first so that blocks like powder snow, which both "have a dynamic shape (changed by
+        // leather boots)" and are "dangerous to enter", are treated as the closer-in-meaning HAZARD.
+        // Either way the conclusion is "cannot enter", so search behavior does not change
         if (harmful(state)) {
-            // 触れた時点で事故になるセル。進入も足場も許さず、掘って通す対象にもしない
+            // A cell that causes an accident on contact. Neither entering nor standing on it is allowed, and it is not dug through either
             return PRESENT | HAZARD;
         }
 
         if (state.getBlock().hasDynamicShape()) {
-            // 形状の解決に実際のlevelを要求するブロック。ワーカースレッドからは正しく評価できないので、
-            // 通ることも立つことも掘ることもできない障害物として扱う。
+            // Blocks whose shape resolution needs the real level. They cannot be evaluated correctly from a worker thread,
+            // so treat them as obstacles that cannot be passed, stood on, or dug.
             return PRESENT | UNRESOLVED_SHAPE;
         }
 
         FluidState fluid = state.getFluidState();
         boolean water = fluid.is(FluidTags.WATER);
         boolean lava = fluid.is(FluidTags.LAVA);
-        // waterloggedな階段・ハーフブロック・フェンスは「流体は水」でありながら当たり判定を持つ。
-        // 流体だけを見てWATERを立てると、固体を泳いで通り抜ける経路ができてしまう
+        // Waterlogged stairs, slabs, and fences have "water as fluid" yet still have collision.
+        // Setting WATER from the fluid alone would create routes that swim through solids
         VoxelShape collision = state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
         boolean collisionEmpty = collision.isEmpty();
         boolean openable = openableByHand(state);
-        // 開いたドア・フェンスゲート・トラップドアは薄い板の当たり判定が残るので当たり判定は空にならない。
-        // バニラのモブ経路探索と同じ判定（levelを参照しないのでワーカースレッドから呼べる）でくぐれるかを見る
-        // isPathfindableは1.20.5より前では(BlockGetter, BlockPos, PathComputationType)を取る旧シグネチャ。
-        // levelを見ない判定なのでgetCollisionShapeと同じ空のプローブ値を渡せば意味は変わらない。
-        // vanilla APIのシグネチャそのものが違うので、ここだけはpathfinding/にゲートを置く例外にする
+        // Open doors, fence gates, and trapdoors keep a thin panel of collision, so their collision is not empty.
+        // Check whether they can be passed with the same check as vanilla mob pathfinding (it does not touch the level, so it can be called from a worker thread)
+        // Before 1.20.5, isPathfindable has the old signature taking (BlockGetter, BlockPos, PathComputationType).
+        // The check does not look at the level, so passing the same empty probe values as getCollisionShape keeps the meaning.
+        // The vanilla API signature itself differs, so this is the one exception where a gate is placed in pathfinding/
         boolean passable = collisionEmpty
                 || openable && state.isPathfindable(
                         //? if >=1.20.5 {
@@ -196,25 +197,25 @@ public final class CellData {
                 /*state.getMaterial().isReplaceable()
                 *///?}
         ) {
-            // 引数無しの版はreplaceableフラグを読むだけでlevelを参照しないので、
-            // ワーカースレッドから呼べる（BlockPlaceContextを取る版は「同じブロックを
-            // 手に持っているとき」の話なので、普通のブロックを置く判定には使わない）
+            // The no-argument version only reads the replaceable flag and does not touch the level,
+            // so it can be called from a worker thread (the version taking BlockPlaceContext is about "holding the
+            // same block in hand", so it is not used to judge placing an ordinary block)
             flags |= REPLACEABLE;
         }
         return flags | speedFactorBits(state);
     }
 
     /**
-     * 上に立てる床か。{@link BlockState#isFaceSturdy}だけでは足りない。
+     * Whether this is a floor you can stand on. {@link BlockState#isFaceSturdy} alone is not enough.
      *
-     * <p>{@code isFaceSturdy}は「セル境界(y=1)の上面が完全な1×1か」を見るため、実際には普通に
-     * 歩ける床の多くが外れてしまう — 階段・ハーフブロック・農地・土の道・葉・ホッパー・大釜が
-     * すべて「立てない」になり、村の道も家の階段も通れなくなる（足場が無い場所へは移動そのものが
-     * 生成されないので、コストがずれるのではなく経路が消える）。
+     * <p>{@code isFaceSturdy} checks "whether the top face at the cell boundary (y=1) is a full 1×1", so many floors
+     * you can actually walk on normally fail it — stairs, slabs, farmland, dirt paths, leaves, hoppers, and cauldrons
+     * all become "unstandable", and village paths and house stairs become impassable (no move is generated at all
+     * toward a spot with no footing, so the route disappears rather than the cost being off).
      *
-     * <p>そこで当たり判定が水平方向に1マスを覆っているかで判定する。合わせて「自分のセルより上へ
-     * はみ出さない」ことを求め、柵・塀・フェンスゲート（高さ1.5）を除く — これらは上に立てはするが、
-     * 下から普通のジャンプ（1.25マス）では登れないので、登る移動を作らせてはいけない。
+     * <p>So instead it checks whether the collision covers one full cell horizontally. It also requires "not sticking
+     * out above its own cell", which excludes fences, walls, and fence gates (height 1.5) — you can stand on them, but
+     * a normal jump (1.25 blocks) from below cannot climb them, so no climbing move must be created.
      */
     private static boolean walkableTop(VoxelShape collision) {
         if (collision.isEmpty()) {
@@ -227,29 +228,29 @@ public final class CellData {
     }
 
     /**
-     * 触れた時点で事故になるブロック。当たり判定が無く探索器からは「空気と同じ」に見えるものが
-     * 多いが、入れば燃える・凍える・別次元へ飛ばされる。
+     * Blocks that cause an accident on contact. Many have no collision and look "the same as air" to the pathfinder,
+     * but entering them burns, freezes, or sends you to another dimension.
      *
-     * <p>掘って通す対象にもしない。掘っている間ずっと隣に立ち続けることになるので、
-     * 迂回した方が安全でたいてい安い。
+     * <p>They are not dug through either. You would stay standing next to them the whole time you dig, so
+     * going around is safer and usually cheaper.
      */
     private static boolean harmful(BlockState state) {
         Block block = state.getBlock();
-        // MagmaBlockはここに含めない。当たり判定を持つ完全な足場で、スニークすれば無傷で歩ける
-        // （バニラの{@code isSteppingCarefully}）——遅いが安全な道として通行可にし、
-        // {@link #travelSpeedFactor}でそのぶんの遅さをコストに反映する
-        return block instanceof BaseFireBlock                       // 火・魂の火。当たり判定が無い
-                || block instanceof SweetBerryBushBlock             // 棘のダメージ＋大幅な減速
-                || block instanceof WitherRoseBlock                 // 接触で衰弱
+        // MagmaBlock is not included here. It is a full footing with collision, and sneaking lets you walk it unharmed
+        // (vanilla {@code isSteppingCarefully}); it is made passable as a slow but safe path, and
+        // {@link #travelSpeedFactor} reflects that slowness in the cost
+        return block instanceof BaseFireBlock                       // fire, soul fire. No collision
+                || block instanceof SweetBerryBushBlock             // thorn damage + heavy slowdown
+                || block instanceof WitherRoseBlock                 // wither on contact
                 //? if >=1.17 {
-                || block instanceof PowderSnowBlock                 // 落ちると凍える。雪原では地面と見分けがつかない
-                || block instanceof BigDripleafBlock                // 乗ると傾いて下へ落とされる
+                || block instanceof PowderSnowBlock                 // falling in freezes you. Indistinguishable from the ground in snowfields
+                || block instanceof BigDripleafBlock                // tilts when stood on and drops you below
                 //?}
                 //? if >=1.19 {
-                || block instanceof SculkShriekerBlock              // 踏むとウォーデンを呼ぶ
+                || block instanceof SculkShriekerBlock              // stepping on it summons the Warden
                 //?}
                 || (block instanceof CampfireBlock && state.getValue(CampfireBlock.LIT))
-                // 通り抜けた瞬間に別次元へ送られる。エンドポータルは戻る手段も無い
+                // Sends you to another dimension the moment you pass through. End portals have no way back either
                 || block instanceof NetherPortalBlock
                 || block instanceof EndPortalBlock
                 || block instanceof EndGatewayBlock
@@ -260,7 +261,7 @@ public final class CellData {
                 ;
     }
 
-    /** このブロックの上を進むときの速度倍率を100倍して詰める。等速（1.0）なら詰めない。 */
+    /** Packs the speed multiplier for moving on this block, times 100. Not packed for normal speed (1.0). */
     private static long speedFactorBits(BlockState state) {
         return speedFactorBits(travelSpeedFactor(state));
     }
@@ -269,24 +270,25 @@ public final class CellData {
         if (factor == 1.0f) {
             return 0L;
         }
-        // 0に丸めると「未設定＝等速」と区別が付かなくなるので、下は1（0.01倍）で止める
+        // Rounding to 0 would be indistinguishable from "unset = normal speed", so the floor is 1 (0.01 times)
         long scaled = Math.max(1L, Math.round(factor * 100.0f));
         return (scaled << SPEED_FACTOR_SHIFT) & SPEED_FACTOR_MASK;
     }
 
     /**
-     * このブロックの上を進むときの速度倍率（1.0で等速）。
+     * Speed multiplier for moving on this block (1.0 = normal speed).
      *
-     * <p>遅くなる側は{@code Block#getSpeedFactor}をそのまま使う（ソウルサンド・蜂蜜ブロックの0.4）。
+     * <p>For slowdowns, {@code Block#getSpeedFactor} is used as-is (0.4 for soul sand and honey blocks).
      *
-     * <p>速くなる側は氷だけを見る。氷の速さは速度係数ではなく摩擦（既定0.6に対して0.98〜0.989）から
-     * 来ていて、走るだけの定常速度はほぼ変わらない一方、走り幅跳びを続けると着地のたびの減速が
-     * 小さいぶん明確に速くなる。加速の途中経過まで正しく再現するには区間の長さを見る必要があるので、
-     * ここは「氷はいくらか速い」という一定倍率の近似にとどめる。値は素の疾走(5.6m/s)と
-     * 平地の走り幅跳び(7.1m/s)の間に収まる控えめな側に置いてある。
+     * <p>For speedups, only ice is considered. Ice's speed comes not from the speed factor but from friction (0.98 to
+     * 0.989 versus the default 0.6). The steady-state speed of just running barely changes, while chaining sprint jumps
+     * is clearly faster because each landing slows you less. Reproducing the acceleration accurately would require
+     * looking at the stretch length, so this stays an approximation with a constant multiplier: "ice is somewhat
+     * faster". The value sits on the conservative side, between plain sprinting (5.6 m/s) and sprint-jumping on flat
+     * ground (7.1 m/s).
      */
-    // Forge 61は位置付きの自前拡張へ誘導するためにバニラのgetFrictionを非推奨にしている。この層はローダーに
-    // 依存しない決まりなので、位置で摩擦を変えるMODのブロックまでは拾わず、バニラの値を使う
+    // Forge 61 deprecates vanilla getFriction to steer toward its own position-aware extension. This layer must not
+    // depend on the loader, so it does not pick up modded blocks that vary friction by position and uses the vanilla value
     @SuppressWarnings("deprecation")
     private static float travelSpeedFactor(BlockState state) {
         Block block = state.getBlock();
@@ -300,7 +302,7 @@ public final class CellData {
         return block.getFriction() >= SLIPPERY_FRICTION ? ICE_SPEED_FACTOR : 1.0f;
     }
 
-    /** レッドストーンを使わず手で開け閉めできるドア・フェンスゲート・トラップドアか。 */
+    /** Whether this is a door, fence gate, or trapdoor that can be opened and closed by hand without redstone. */
     private static boolean openableByHand(BlockState state) {
         Block block = state.getBlock();
         if (block instanceof DoorBlock door) {
@@ -311,12 +313,12 @@ public final class CellData {
             *///?}
         }
         if (block instanceof FenceGateBlock) {
-            // レッドストーン専用のフェンスゲートは存在しない
+            // There are no redstone-only fence gates
             return true;
         }
         if (block instanceof TrapDoorBlock) {
-            // TrapDoorBlock#getType()がprotectedなのでBlockSetTypeを直接見られない。
-            // バニラでレッドストーンでしか開かないトラップドアは鉄製だけ
+            // TrapDoorBlock#getType() is protected, so BlockSetType cannot be read directly.
+            // In vanilla, the only trapdoor that opens only with redstone is the iron one
             return !state.is(Blocks.IRON_TRAPDOOR);
         }
         return false;
@@ -326,7 +328,7 @@ public final class CellData {
         return flags | (Integer.toUnsignedLong(Float.floatToRawIntBits((float) digTicks)) << 32);
     }
 
-    /** 速度倍率を差し込む。実データは{@link #flagsOf}が詰めるので、これはテストの地形記述用。 */
+    /** Injects a speed multiplier. Real data is packed by {@link #flagsOf}, so this is for describing test terrain. */
     static long withSpeedFactor(long flags, float factor) {
         return flags | speedFactorBits(factor);
     }
@@ -355,42 +357,43 @@ public final class CellData {
         return (cell & FALLING_BLOCK) != 0L;
     }
 
-    /** ワーカースレッドから形状を評価できなかったブロックか。掘削対象にしてはならない。 */
+    /** Whether this block's shape could not be evaluated from a worker thread. Must not be a dig target. */
     public static boolean unresolvedShape(long cell) {
         return (cell & UNRESOLVED_SHAPE) != 0L;
     }
 
     /**
-     * 蜘蛛の巣か。当たり判定が無いので{@link #passableEmpty}としては空気と区別がつかないが、
-     * 実際には移動量に0.25が掛かる（{@code WebBlock#entityInside} → {@code Entity#move}）。
+     * Whether this is a cobweb. It has no collision, so as {@link #passableEmpty} it is indistinguishable from air,
+     * but movement is actually multiplied by 0.25 ({@code WebBlock#entityInside} → {@code Entity#move}).
      */
     public static boolean cobweb(long cell) {
         return (cell & COBWEB) != 0L;
     }
 
-    /** 梯子・ツタ・足場など、掴んで上下できるか。 */
+    /** Whether it can be grabbed to move up and down: ladders, vines, scaffolding, etc. */
     public static boolean climbable(long cell) {
         return (cell & CLIMBABLE) != 0L;
     }
 
     /**
-     * 入ると害があるセルか（炎・マグマ・パウダースノー・ウィザーローズ・ポータルなど）。
-     * 進入も足場も不可で、掘削もできない（{@code ChunkView}が掘削コストを無限大にする）。
+     * Whether the cell is harmful to enter (fire, magma, powder snow, wither roses, portals, etc.).
+     * Cannot be entered or stood on, and cannot be dug ({@code ChunkView} sets the dig cost to infinity).
      */
     public static boolean hazard(long cell) {
         return (cell & HAZARD) != 0L;
     }
 
     /**
-     * このセルの上を進むときの速度倍率（1.0で等速。ソウルサンド・蜂蜜ブロックは0.4、氷は1.2）。
-     * バニラは足元のセルの係数を使い、それが1.0なら1つ下のブロックを見る（{@code Entity#getBlockSpeedFactor}）。
+     * Speed multiplier for moving on this cell (1.0 = normal speed; soul sand and honey blocks are 0.4, ice is 1.2).
+     * Vanilla uses the factor of the cell at your feet, and if that is 1.0 it looks at the block below
+     * ({@code Entity#getBlockSpeedFactor}).
      */
-    /** ここへブロックを置けるか。{@link #REPLACEABLE}参照。 */
+    /** Whether a block can be placed here. See {@link #REPLACEABLE}. */
     public static boolean replaceable(long cell) {
         return (cell & REPLACEABLE) != 0;
     }
 
-    /** その上を進むにはスニークが要る床か（マグマブロック）。 */
+    /** Whether this floor requires sneaking to walk on (magma blocks). */
     public static boolean sneakRequired(long cell) {
         return (cell & SNEAK_REQUIRED) != 0;
     }
@@ -400,12 +403,12 @@ public final class CellData {
         return raw == 0L ? 1.0 : raw / 100.0;
     }
 
-    /** 閉じているが手で開けて通れるか（ドア・フェンスゲート・トラップドア）。壊す対象ではない。 */
+    /** Whether it is closed but can be opened by hand to pass (doors, fence gates, trapdoors). Not something to break. */
     public static boolean openable(long cell) {
         return (cell & OPENABLE) != 0L;
     }
 
-    /** 掘削なしでプレイヤーの体が占有できるか（空気、当たり判定を持たない水、梯子・ツタ）。 */
+    /** Whether the player's body can occupy it without digging (air, water without collision, ladders, vines). */
     public static boolean occupiableWithoutDigging(long cell) {
         return (cell & OCCUPIABLE) != 0L;
     }

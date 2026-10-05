@@ -37,22 +37,23 @@ import net.minecraft.client.renderer.RenderType;
 //?}
 
 /**
- * 地形に遮られていても見える描画レイヤー。
+ * Render layers that stay visible even when blocked by terrain.
  *
- * <p>{@code RenderType.debugQuads()}などの標準レイヤーは深度テストが有効なので、描いたものは
- * 必ず手前のブロックに隠れる。水の中の経路（水面が深度を書く）や、地形の向こうへ続く空中経路・目的地への
- * 点線は、隠れている部分も薄く重ねたいので、深度テストだけを切った同等のレイヤーを用意する。
+ * <p>Standard layers like {@code RenderType.debugQuads()} have depth testing enabled, so anything drawn is
+ * always hidden by blocks in front. Routes underwater (the water surface writes depth), and aerial routes and the dotted
+ * line to the destination continuing beyond terrain, should show their hidden parts faintly too, so equivalent layers with
+ * only the depth test turned off are provided.
  *
- * <p>深度は書かない（{@code COLOR_WRITE}）。書いてしまうと、この後に描かれる半透明の地形が
- * 経路の向こう側で欠ける。
+ * <p>Depth isn't written ({@code COLOR_WRITE}). Writing it would make translucent terrain drawn afterwards
+ * go missing behind the route.
  */
 final class NavRenderTypes {
 
     //? if >=1.21.11 {
     /*static final RenderType DEBUG_QUADS = RenderTypes.debugQuads();
 
-    // 深度テストはRenderPipelineが持つ。標準のパイプラインから深度テストだけを外したものを作る
-    // （深度を書かないのは元のdebug_quadsも同じ）
+    // Depth testing is owned by the RenderPipeline. Build one from the standard pipeline with only the depth test removed
+    // (the original debug_quads doesn't write depth either)
     private static final RenderPipeline OCCLUDED_QUADS_PIPELINE = RenderPipeline.builder(RenderPipelines.DEBUG_FILLED_SNIPPET)
             .withLocation(ResourceLocation.fromNamespaceAndPath(XaeroNav.MOD_ID, "pipeline/occluded_quads"))
             .withCull(false)
@@ -65,21 +66,21 @@ final class NavRenderTypes {
 
     static final RenderType OCCLUDED_QUADS = RenderType.create("xaeronav_occluded_quads",
             RenderSetup.builder(OCCLUDED_QUADS_PIPELINE).sortOnUpload().createRenderSetup());
-    // 線はバニラ（RenderTypes.lines()）と違ってitem_entityではなくmainへ描く。Forgeは追加の描画パスを
-    // Fabulous!の合成より後に置くので、item_entityへ描いても画面へ合成されない
+    // Unlike vanilla (RenderTypes.lines()), lines are drawn to main rather than item_entity. Forge places its extra render pass
+    // after Fabulous! compositing, so drawing to item_entity never gets composited onto the screen
     static final RenderType LINES = RenderType.create("xaeronav_lines",
             RenderSetup.builder(RenderPipelines.LINES)
                     .setLayeringTransform(LayeringTransform.VIEW_OFFSET_Z_LAYERING)
                     .createRenderSetup());
 
-    /^* 深度テストはパイプラインが切るので、ここでは描くだけ。 ^/
+    /^* The pipeline turns off the depth test, so this just draws. ^/
     static void endOccludedBatch(MultiBufferSource.BufferSource bufferSource, RenderType type) {
         bufferSource.endBatch(type);
     }
     *///?} else if >=1.21.5 {
     /*static final RenderType DEBUG_QUADS = RenderType.debugQuads();
     //? if >=1.21.6 {
-    /^// Forgeの追加パスはFabulous!の合成後なので、線もitem_entityではなくmainへ描く。
+    /^// Forge's extra pass runs after Fabulous! compositing, so lines are also drawn to main rather than item_entity.
     static final RenderType LINES = createRenderType("xaeronav_lines", RenderPipelines.LINES,
             RenderType.CompositeState.builder()
                     .setLineState(new RenderStateShard.LineStateShard(java.util.OptionalDouble.empty()))
@@ -187,8 +188,8 @@ final class NavRenderTypes {
                     .setWriteMaskState(RenderStateShard.COLOR_WRITE)
                     .createCompositeState(false));
     //?} else if >=1.17 {
-    /*// 1.20より前のFabric APIはRenderStateShardの定数を開放しておらず、protectedのままではここから読めない。
-    // サブクラスの中からなら継承したprotected定数を読めるので、それだけの内部クラスを挟む
+    /*// Fabric API before 1.20 doesn't widen the RenderStateShard constants, and while protected they can't be read from here.
+    // From inside a subclass the inherited protected constants can be read, so an inner class exists just for that
     private static final class Shards extends RenderStateShard {
         static final ShaderStateShard POSITION_COLOR = POSITION_COLOR_SHADER;
         static final TransparencyStateShard TRANSLUCENT = TRANSLUCENT_TRANSPARENCY;
@@ -215,11 +216,11 @@ final class NavRenderTypes {
     *///?}
 
     /**
-     * 深度テストを切ってから描く。{@code NO_DEPTH_TEST}（関数"always"）は、バニラの実装では
-     * 深度テストの状態に<b>触らない</b>という意味で、切ってはくれない。NeoForge/Forgeの
-     * {@code AFTER_TRANSLUCENT_BLOCKS}は半透明の地形を描いた後片付けの<b>前</b>に呼ばれるので、
-     * 深度テストが有効なまま残っている。切らないと水の中の線がそのまま隠れる。
-     * 後始末は要らない——次に描くレイヤーが自分の深度テストを設定する。
+     * Draws after turning off the depth test. {@code NO_DEPTH_TEST} (function "always") means, in vanilla's implementation,
+     * <b>don't touch</b> the depth test state; it doesn't turn it off. NeoForge/Forge's
+     * {@code AFTER_TRANSLUCENT_BLOCKS} is called <b>before</b> the cleanup after drawing translucent terrain, so
+     * the depth test is still enabled. Without turning it off, lines underwater stay hidden.
+     * No cleanup is needed; the next layer drawn sets its own depth test.
      */
     static void endOccludedBatch(MultiBufferSource.BufferSource bufferSource, RenderType type) {
         RenderSystem.disableDepthTest();

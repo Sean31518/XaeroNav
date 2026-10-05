@@ -19,7 +19,7 @@ val xaeroModules = xaeroModuleCoordinates(
 
 loom {
     silentMojangMappingsLicense()
-    // 本番のForge 1.16.5はSRG名で動く。mixinの注入先の記述（MatrixStack等の型）をSRGへ引くrefmapを作る
+    // Production Forge 1.16.5 runs on SRG names. Generate a refmap that resolves the mixin target descriptors (types like MatrixStack) to SRG
     mixin {
         useLegacyMixinAp.set(true)
         defaultRefmapName.set("${modProperty("mod_id")}.refmap.json")
@@ -29,17 +29,17 @@ loom {
     }
 }
 
-// Forge 1.16.5がバンドルするASM/LWJGLはJava 21で動かない。JDK 21で実際に動く版へ強制する
-// （https://github.com/architectury/architectury-loom/issues/320のコメント参照）。
+// The ASM/LWJGL bundled with Forge 1.16.5 don't run on Java 21. Force versions that actually work on JDK 21
+// (see the comments on https://github.com/architectury/architectury-loom/issues/320).
 configurations.all {
     resolutionStrategy.eachDependency {
         if (requested.group == "org.ow2.asm") {
             useVersion("9.6")
-            because("Java 21で動くASMへ強制する")
+            because("Force an ASM that runs on Java 21")
         }
         if (requested.group == "org.lwjgl") {
             useVersion("3.3.3")
-            because("Java 21で動くLWJGLへ強制する")
+            because("Force an LWJGL that runs on Java 21")
         }
     }
 }
@@ -47,7 +47,7 @@ configurations.all {
 val mixinExtrasPlugin = "net.prason.xaeronav.mixin.MixinExtrasBootstrapPlugin"
 val shadedMixinExtras: Configuration by configurations.creating { isTransitive = false }
 
-// Xaeroを開発実行（runClient）へ載せるか。`./gradlew runClient -Pwith_xaero=false` で外せる。
+// Whether to put Xaero on the dev run (runClient). Can be left out with `./gradlew runClient -Pwith_xaero=false`.
 val withXaero = withXaeroProperty()
 
 val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
@@ -56,36 +56,36 @@ dependencies {
     minecraft("com.mojang:minecraft:$minecraftVersion")
     mappings(loom.officialMojangMappings())
     forge("net.minecraftforge:forge:$minecraftVersion-${dep("forge")}")
-    // Xaero's Minimap / World MapのPOMはXaeroLibの`dev`分類子（MCP名でビルドされた開発用jar）に依存している。
-    // 同じモジュールを分類子あり・なしで両方引くと、Loomが変換した分類子なしのjarが空（22バイト）になる。
-    // XaeroLibは分類子なしの配布jarを自分で足すので、推移的な依存はコンパイル時も実行時も切る
+    // The POMs of Xaero's Minimap / World Map depend on XaeroLib's `dev` classifier (a dev jar built with MCP names).
+    // Pulling the same module both with and without a classifier makes the classifier-less jar remapped by Loom empty (22 bytes).
+    // XaeroLib's classifier-less distribution jar is added explicitly, so transitive dependencies are cut at both compile time and runtime
     xaeroModules.forEach { modCompileOnly(it) { isTransitive = false } }
-    // stageRuntimeTestModsには配布時と同じ未変換jarを渡す
+    // stageRuntimeTestMods gets the same unremapped jars as distribution
     xaeroModules.forEach { xaeroRuntimeMods(it) }
     if (withXaero) {
-        // 公開jarはSRG名なので、run/modsへ生のまま置くと開発環境（Mojang名）のクラスが見えない。
-        // Loomのmod remapを通して開発環境の名前へ変換したものを載せる（coremodの中身はfixXaeroCoremodsが直す）
+        // The published jars use SRG names, so placing them raw in run/mods hides the classes from the dev environment (Mojang names).
+        // Load them after converting to dev-environment names through Loom's mod remap (fixXaeroCoremods fixes the coremod contents)
         xaeroModules.forEach { modLocalRuntime(it) { isTransitive = false } }
     }
     compileOnly("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
-    // @WrapOperation・@ModifyReturnValueはMixin本体のAPが知らない注入なので、これが無いとrefmapへ載らない
+    // @WrapOperation and @ModifyReturnValue are injections Mixin's own AP doesn't know, so without this they don't make it into the refmap
     annotationProcessor("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
     shadedMixinExtras("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
-    // 開発実行では移し替える前のMixinExtrasをそのまま使う（MixinExtrasBootstrapPluginが起動する）
+    // Dev runs use MixinExtras as-is, before relocation (MixinExtrasBootstrapPlugin bootstraps it)
     "localRuntime"("io.github.llamalad7:mixinextras-common:${dep("mixinextras")}")
 }
 
-// Forge 1.16.5はMixinExtrasを同梱せず、jar-in-jarも無い。他のMODが別の版を同梱していてもぶつからないよう、
-// 自分のパッケージへ移して配布jarへ入れる（起動はMixinExtrasBootstrapPlugin）。
+// Forge 1.16.5 doesn't bundle MixinExtras and has no jar-in-jar. So that it doesn't clash with other mods bundling a different version,
+// relocate it into our own package and put it in the distribution jar (bootstrapped by MixinExtrasBootstrapPlugin).
 val shadowJar = tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
     configurations.set(listOf(shadedMixinExtras))
     relocate("com.llamalad7.mixinextras", "net.prason.xaeronav.shadow.mixinextras")
     mergeServiceFiles()
-    // MixinExtras自身の注釈処理器の登録。配布jarに入れるとこのjarをクラスパスに置いたビルドで勝手に動く
+    // MixinExtras's own annotation processor registration. Left in the distribution jar, it runs uninvited in builds that put this jar on the classpath
     exclude("META-INF/services/javax.annotation.processing.Processor")
     archiveClassifier.set("dev-shadow")
 }
-// 配布するのはJava 8へ変換した方（java8Jar）。変換前のjarは名前をずらして残す
+// The distributed jar is the one converted to Java 8 (java8Jar). The pre-conversion jar is kept under a shifted name
 tasks.named<net.fabricmc.loom.task.RemapJarTask>("remapJar") {
     inputFile.set(shadowJar.flatMap { it.archiveFile })
     archiveClassifier.set("java21")
@@ -107,14 +107,14 @@ val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     into(rootProject.layout.buildDirectory.dir("runtime-test/${stonecutter.current.project}/mods"))
 }
 
-// 専用サーバーのproduction smoke testにはXaeroを入れず、利用者へ配るjarだけを渡す。
+// The dedicated-server production smoke test gets only the jar distributed to users, without Xaero.
 tasks.register<Sync>("stageServerTestMod") {
     from(java8Jar)
     into(rootProject.layout.buildDirectory.dir("server-test/${stonecutter.current.project}/mods"))
 }
 
-// Loomのremapはクラスの参照しか変換しないので、Xaeroが文字列で持つSRG名（coremodのJavaScript・リフレクションの
-// Class.forName）が残り、開発実行が落ちる。変換済みのjarの中身を起動前に直す（ForgeCoremodNames.kt）
+// Loom's remap only converts class references, so SRG names that Xaero holds as strings (the coremods' JavaScript, reflective
+// Class.forName) remain and dev runs crash. Fix the contents of the remapped jar before launch (ForgeCoremodNames.kt)
 val fixXaeroCoremods = tasks.register("fixXaeroCoremods") {
     val runtimeJars = configurations.named("runtimeClasspath").map { classpath ->
         classpath.files.filter { it.name.startsWith("xaero") }
@@ -124,7 +124,7 @@ val fixXaeroCoremods = tasks.register("fixXaeroCoremods") {
         runtimeJars.get().forEach { jar ->
             val count = rewriteForgeCoremodNames(jar.toPath(), tiny)
             if (count > 0) {
-                logger.lifecycle("${jar.name}: ${count}ファイルのSRG名を開発環境の名前へ書き換えた")
+                logger.lifecycle("${jar.name}: rewrote SRG names in ${count} files to dev-environment names")
             }
         }
     }
@@ -133,9 +133,9 @@ tasks.matching { it.name == "runClient" }.configureEach {
     dependsOn(fixXaeroCoremods)
 }
 
-// これが無いと配布jarの META-INF/mods.toml・xaeronav-xaero.mixins.json が
-// `${'$'}{mod_id}` 等の未展開プレースホルダーのまま入り、Forgeがmod定義を読めず起動しない
-// （compileJava/assembleは通るのでビルドだけでは気付けない。runClientで発覚）。
+// Without this, META-INF/mods.toml and xaeronav-xaero.mixins.json in the distribution jar
+// go in with unexpanded placeholders like `${'$'}{mod_id}`, and Forge can't read the mod definition and won't start
+// (compileJava/assemble still pass, so the build alone won't reveal it; it surfaces in runClient).
 tasks.named<ProcessResources>("processResources").configure {
     val replaceProperties = commonNodeResourceProperties(
         minecraftVersion, dep("xaero_worldmap_min"), dep("xaero_minimap_min"), mixinCompatibilityLevel, packFormat) + mapOf(

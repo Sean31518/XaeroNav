@@ -13,24 +13,24 @@ class ElytraTriggerTest {
     private final ElytraTrigger trigger = new ElytraTrigger();
 
     /**
-     * 1マス橋の上で跳ねたときのように、滑空判定が数tickだけ立っても飛行モードにはしない。
+     * Like bouncing on a one-block bridge, a glide check that holds for only a few ticks doesn't enter flight mode.
      *
-     * <p>高さは十分ある（橋の上＝真下は奈落）状態で見るのが要点——高さのヒステリシスでは
-     * この場合を止められないので、時間で止まっていなければ通ってしまう。
+     * <p>The point is checking with plenty of height (on a bridge = void directly below): height hysteresis can't
+     * stop this case, so if time doesn't stop it, it gets through.
      */
     @Test
     void ignoresBriefGlidesFromJumping() {
         for (int tick = 0; tick < ElytraTrigger.SUSTAIN_TICKS - 1; tick++) {
             assertFalse(trigger.update(true, HIGH_ABOVE_GROUND, REQUIRED_CLEARANCE),
-                    "継続tick " + tick + " で早々に飛行モードへ入った");
+                    "Sustained tick " + tick + ": entered flight mode too early");
         }
-        // 着地すればカウントは振り出しに戻る
+        // Landing resets the count
         assertFalse(trigger.update(false, 0, REQUIRED_CLEARANCE));
         assertFalse(trigger.update(true, HIGH_ABOVE_GROUND, REQUIRED_CLEARANCE),
-                "跳ね直した1tick目で入った＝継続の数え直しができていない");
+                "Entered on the first tick after bouncing again = the sustained count isn't being reset");
     }
 
-    /** 本物の滑空（継続して高さもある）は飛行モードになる。 */
+    /** A real glide (sustained, with height) enters flight mode. */
     @Test
     void turnsOnForASustainedGlide() {
         for (int tick = 0; tick < ElytraTrigger.SUSTAIN_TICKS - 1; tick++) {
@@ -39,27 +39,27 @@ class ElytraTriggerTest {
         assertTrue(trigger.update(true, HIGH_ABOVE_GROUND, REQUIRED_CLEARANCE));
     }
 
-    /** 継続していても地面すれすれなら入らない。 */
+    /** Even if sustained, it doesn't enter when skimming the ground. */
     @Test
     void staysOffWhileHuggingTheGround() {
         for (int tick = 0; tick < ElytraTrigger.SUSTAIN_TICKS * 2; tick++) {
             assertFalse(trigger.update(true, REQUIRED_CLEARANCE - 1, REQUIRED_CLEARANCE),
-                    "継続tick " + tick + " で入った");
+                    "Sustained tick " + tick + ": entered");
         }
     }
 
-    /** 入った後は閾値が下がる。境界の上を滑空している間ずっと往復しないため。 */
+    /** After entering, the threshold drops, so it doesn't flip back and forth while gliding over the boundary. */
     @Test
     void keepsGlidingBelowTheEntryClearance() {
         for (int tick = 0; tick < ElytraTrigger.SUSTAIN_TICKS; tick++) {
             trigger.update(true, HIGH_ABOVE_GROUND, REQUIRED_CLEARANCE);
         }
         assertTrue(trigger.update(true, REQUIRED_CLEARANCE - 1, REQUIRED_CLEARANCE),
-                "入るのと同じ高さで抜けている");
-        assertFalse(trigger.update(true, 0, REQUIRED_CLEARANCE), "地面に着くほど下がっても抜けない");
+                "Exits at the same height it enters");
+        assertFalse(trigger.update(true, 0, REQUIRED_CLEARANCE), "Doesn't exit even when dropping down to the ground");
     }
 
-    /** 滑空が終わったら即座に抜ける（着地）。 */
+    /** Exits immediately when the glide ends (landing). */
     @Test
     void turnsOffAsSoonAsTheGlideEnds() {
         for (int tick = 0; tick < ElytraTrigger.SUSTAIN_TICKS; tick++) {
@@ -68,7 +68,7 @@ class ElytraTriggerTest {
         assertFalse(trigger.update(false, HIGH_ABOVE_GROUND, REQUIRED_CLEARANCE));
     }
 
-    /** 高さを問わない設定（0）でも、継続の条件だけは残る。 */
+    /** Even with the height-agnostic setting (0), the sustain condition remains. */
     @Test
     void stillRequiresSustainWhenClearanceIsNotChecked() {
         assertFalse(trigger.update(true, 0, 0));

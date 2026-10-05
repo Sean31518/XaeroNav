@@ -16,7 +16,7 @@ class FlightProgressTest {
 
     private static final double THRESHOLD = 24.0;
 
-    /** 頂点が100ブロック離れた、水平にまっすぐな2区間の経路。 */
+    /** A route of two straight, level segments with vertices 100 blocks apart. */
     private static FlightRoute straight() {
         return new FlightRoute(List.of(
                 new Vec3(0.0, 64.0, 0.0),
@@ -31,7 +31,7 @@ class FlightProgressTest {
 
     @Test
     void onTheLineBetweenTwoDistantPointsCountsAsZeroOffset() {
-        // 頂点で測っていたらここは50ブロックのずれになる。線分で測るからこそ0になる
+        // Measured at vertices, this would be off by 50 blocks. It's 0 precisely because it's measured against the segment
         FlightProgress progress = at(straight(), new Vec3(50.0, 64.0, 0.0));
 
         assertEquals(0.0, progress.horizontalOffset(), 1.0e-6);
@@ -51,7 +51,7 @@ class FlightProgressTest {
 
     @Test
     void verticalDriftIsAllowedFurtherThanHorizontal() {
-        // 高度のぶれは水平より大きい。水平で外れる幅でも垂直なら許す
+        // Altitude wobbles more than horizontal position. Allow vertically what would be off-route horizontally
         double justOverHorizontal = THRESHOLD * 1.2;
 
         assertTrue(at(straight(), new Vec3(50.0, 64.0, justOverHorizontal)).deviated(THRESHOLD));
@@ -60,7 +60,7 @@ class FlightProgressTest {
 
     @Test
     void combinedHorizontalAndVerticalDriftAddUp() {
-        // 楕円体で見る理由。どちらの軸でも単独では許容内なのに、合わせると外れている
+        // Why an ellipsoid: within tolerance on either axis alone, but off-route when combined
         FlightRoute route = straight();
 
         assertFalse(at(route, new Vec3(50.0, 64.0, 20.0)).deviated(THRESHOLD));
@@ -78,8 +78,8 @@ class FlightProgressTest {
 
     @Test
     void theSegmentIndexFollowsTheRouteNotTheStartOfTheList() {
-        // 点線の切り詰めはこの添字を使う。プレイヤーではなく太線の末端を渡す側の責任だが、
-        // ここが「常に0」だと切り詰めが一切効かず、点線が末端から後ろへ戻って2本に見える
+        // The dotted line's trimming uses this index. Passing the thick line's end rather than the player is the caller's
+        // responsibility, but if this were "always 0" trimming would never work and the dotted line would run back from the end, looking like two lines
         FlightRoute route = straight();
 
         assertEquals(0, at(route, new Vec3(0.0, 64.0, 0.0)).segmentFor(route));
@@ -88,8 +88,8 @@ class FlightProgressTest {
 
     @Test
     void carryingOverKeepsTheSegmentWhenTheRouteIsExtended() {
-        // 継ぎ足しは手前の点の添字を変えないので、対応づけはそのまま通用する。
-        // 引き継がないと添字が0へ戻り、伸ばした瞬間だけ通過済みの区間が描き直される
+        // Extending doesn't change the indices of earlier points, so the mapping stays valid.
+        // Without carrying it over, the index would reset to 0 and already-passed segments would be redrawn just at the moment of extension
         FlightRoute route = straight();
         at(route, new Vec3(150.0, 64.0, 0.0));
         assertEquals(1, FlightProgress.INSTANCE.segmentFor(route));
@@ -99,9 +99,9 @@ class FlightProgressTest {
                 PathResult.Termination.REACHED_GOAL, 1, 4));
         FlightProgress.INSTANCE.carryOver(extended);
 
-        assertEquals(4, extended.points().size(), "継ぎ足しで点が重複している");
+        assertEquals(4, extended.points().size(), "Extension duplicated points");
         assertEquals(1, FlightProgress.INSTANCE.segmentFor(extended),
-                "継ぎ足しで対応づけが先頭へ戻っている");
+                "Extension reset the mapping to the start");
     }
 
     @Test

@@ -15,13 +15,13 @@ import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * 1つの目的地に対する航法グラフ。読み込み済みの範囲をセクション（16³）ごとに、探索と同じ移動生成で組んで覚える。
+ * The nav graph for one destination. Builds and stores the loaded range per section (16³), using the same move generation as the search.
  *
- * <p><b>目的地の列ごとに作り直すこと。</b>奈落の上の橋は目的地へ近づく向きにしか張られないので
- * （{@code BuildMoves#addBridge}）、辺そのものが目的地の列(x, z)に依存する。高さは辺に効かない（{@link #retarget}）。
+ * <p><b>Rebuild it per destination column.</b> Bridges over the void are only built in the direction approaching the destination
+ * ({@code BuildMoves#addBridge}), so the edges themselves depend on the destination column (x, z). Height doesn't affect edges ({@link #retarget}).
  *
- * <p>セクションの構築（{@link #build}）はワーカースレッドから並行に呼んでよい。ただし{@link CellSource}は
- * 呼び出しごとに、そのスレッドが占有するものを渡すこと。
+ * <p>Section construction ({@link #build}) may be called concurrently from worker threads. However, each call must be
+ * passed a {@link CellSource} owned exclusively by that thread.
  */
 public final class NavGraph {
 
@@ -33,21 +33,21 @@ public final class NavGraph {
     private final ConcurrentHashMap<Long, SectionEdges> sections = new ConcurrentHashMap<>();
 
     /**
-     * 読み込み範囲の縁で、周りが欠けたまま組んだセクションと、組んだときに読めていた列の数。
-     * 今の読み込み範囲の方が多く読めるなら組み直す。
+     * Sections built at the edge of the loaded range with their surroundings missing, and the number of columns readable
+     * when they were built. Rebuilt if more can be read in the current loaded range.
      *
-     * <p><b>縁を組まずに空けておいてはいけない。</b>空けた帯ではガイドが外の値（無ければ幾何下限）へ落ち、
-     * 内側の正確な値より低くなって探索と部分経路の終点選びを吸い寄せる（実測: エンド1.009→1.068倍）。
+     * <p><b>Don't leave the edge unbuilt.</b> In an empty band the guide falls to the outside value (or the geometric lower bound if none),
+     * lower than the accurate values inside, attracting the search and partial-path endpoint selection (measured: End 1.009 -> 1.068x).
      *
-     * <p><b>「完全に読めるまで組み直さない」でもいけない。</b>窓が近づいて半分読めるようになったセクションが、
-     * 端の数列しか読めなかった頃の辺のまま残り、目的地の周りに穴が空く（実測: 本物48に対して1308）。
+     * <p><b>"Don't rebuild until fully readable" doesn't work either.</b> A section that became half readable as the window
+     * approached keeps the edges from when only a few edge columns were readable, leaving a hole around the destination (measured: 1308 vs. the real 48).
      */
     private final ConcurrentHashMap<Long, Integer> provisional = new ConcurrentHashMap<>();
 
-    /** セクションの外を読む幅（ブロック）。殻の水平幅と、移動が隣のセルを読む数ブロック。 */
+    /** Width (blocks) read outside the section: the shell's horizontal width, plus the few blocks moves read in neighboring cells. */
     static final int READ_MARGIN = SectionShell.HORIZONTAL + 4;
 
-    /** @param minY グラフに入れる最小の高さ（世界の底）。{@code maxY}まで含む */
+    /** @param minY the lowest height included in the graph (the world bottom). Includes up to {@code maxY} */
     public NavGraph(BlockPos goal, int minY, int maxY) {
         this.goal = goal.immutable();
         this.minSectionY = Math.floorDiv(minY, SectionMoves.SIZE);
@@ -61,20 +61,20 @@ public final class NavGraph {
     }
 
     /**
-     * プレイヤーと目的地の低い方から、この深さより下はグラフに入れない（{@link #floorBelow}）。
-     * 地上を行く経路が下る谷・峡谷・水底はこの幅に収まる（実機の海沿い・地上の広域で、切らないときと経路の値段が全ルート一致）。
+     * Below this depth from the lower of the player and the destination, nothing goes into the graph ({@link #floorBelow}).
+     * Valleys, canyons, and water beds that surface routes descend into fit in this width (in the real game's coastal and wide surface areas, path costs matched on every route with and without the cut).
      */
     public static final int FLOOR_DEPTH_BLOCKS = 24;
 
-    /** グラフに入れる最も低いセクション。{@link #floorBelow}で上げ下げする。 */
+    /** The lowest section included in the graph. Raised and lowered by {@link #floorBelow}. */
     private volatile int lowSectionY;
 
     /**
-     * プレイヤーの高さ{@code playerY}と目的地の低い方から{@link #FLOOR_DEPTH_BLOCKS}より下のセクションを組まない。
+     * Doesn't build sections more than {@link #FLOOR_DEPTH_BLOCKS} below the lower of the player height {@code playerY} and the destination.
      *
-     * <p>現世は地下に洞窟が何層も続き、窓224のノードの約4分の3が地表より下の洞窟とその周りの掘れる岩になる（実機の海沿いで
-     * ノード1480万・グラフ約900MB、ガイド1回4〜5秒）。地上の2点を結ぶ経路がはるか下の洞窟を通ることはまず無い。
-     * プレイヤーが洞窟に降りれば、下端もそこまで下がる。
+     * <p>In the Overworld, caves continue for many layers underground, and about three quarters of the nodes in a 224 window are caves below the surface and the diggable rock around them
+     * (on a real-game coast: 14.8 million nodes, a graph of about 900MB, 4-5 seconds per guide). A route between two surface points almost never goes through caves far below.
+     * If the player descends into a cave, the lower bound drops with them.
      */
     public void floorBelow(int playerY) {
         int low = Math.max(minSectionY,
@@ -92,12 +92,12 @@ public final class NavGraph {
     }
 
     /**
-     * 同じ列の中で目的地の高さだけ差し替える。組んだセクションはそのまま使える。{@link #build}・{@link #refresh}と
-     * 並行に呼ばないこと。
+     * Swaps only the destination height within the same column. Built sections remain usable. Don't call concurrently with
+     * {@link #build} or {@link #refresh}.
      */
     public void retarget(BlockPos goal) {
         if (goal.getX() != this.goal.getX() || goal.getZ() != this.goal.getZ()) {
-            throw new IllegalArgumentException("目的地の列が違う: " + this.goal.toShortString() + " → "
+            throw new IllegalArgumentException("destination column differs: " + this.goal.toShortString() + " → "
                     + goal.toShortString());
         }
         this.goal = goal.immutable();
@@ -108,8 +108,8 @@ public final class NavGraph {
     }
 
     /**
-     * 窓（中心から水平{@code radius}の正方形）に掛かるセクションのうち、組む必要があるものの鍵。
-     * まだ組んでいないものと、周りが欠けたまま組んだが今の方が多く読める（{@link #readableColumns}）もの。
+     * Keys of sections overlapping the window (a square of horizontal {@code radius} around the center) that need building:
+     * those not built yet, and those built with surroundings missing that can now be read more ({@link #readableColumns}).
      */
     public long[] missingSections(int centerX, int centerZ, int radius, LoadedArea loaded) {
         LongArrayList missing = new LongArrayList();
@@ -124,7 +124,7 @@ public final class NavGraph {
                 return;
             }
             int now = readableColumns(sx, sz, loaded);
-            // 読める列が少し増えるたびに組み直すと、窓が動くたびに縁の帯を丸ごと組み直すことになる
+            // Rebuilding every time a few more columns become readable would mean rebuilding the whole edge band every time the window moves
             if (now >= FULLY_READABLE || now - readable >= FULLY_READABLE / REBUILD_STEPS) {
                 missing.add(key);
             }
@@ -132,23 +132,23 @@ public final class NavGraph {
         return missing.toLongArray();
     }
 
-    /** セクションの列とその外を読む幅のうち、読める列の数。全部読めれば{@link #FULLY_READABLE}。 */
+    /** Number of readable columns in the section's columns plus the outside read width. {@link #FULLY_READABLE} if all are readable. */
     static int readableColumns(int sectionX, int sectionZ, LoadedArea loaded) {
         return loaded.columns(sectionX * SectionMoves.SIZE - READ_MARGIN,
                 (sectionX + 1) * SectionMoves.SIZE - 1 + READ_MARGIN, sectionZ * SectionMoves.SIZE - READ_MARGIN,
                 (sectionZ + 1) * SectionMoves.SIZE - 1 + READ_MARGIN);
     }
 
-    /** 仮のセクションを組み直す刻み。読める列がこの割合ぶん増えるか、全部読めるようになったら組み直す。 */
+    /** Step for rebuilding provisional sections. Rebuilt when readable columns increase by this fraction, or when all become readable. */
     private static final int REBUILD_STEPS = 4;
 
     static final int FULLY_READABLE = (SectionMoves.SIZE + 2 * READ_MARGIN) * (SectionMoves.SIZE + 2 * READ_MARGIN);
 
     /**
-     * {@code keys[from..to)}のセクションを組む。{@code cells}はこの呼び出しのスレッドが占有するビュー。
-     * 周り{@link #READ_MARGIN}の列が全部は読めないセクションは、周りが欠けた仮のものとして覚える。
+     * Builds sections {@code keys[from..to)}. {@code cells} is a view owned exclusively by this call's thread.
+     * Sections whose surrounding {@link #READ_MARGIN} columns aren't all readable are stored as provisional, with surroundings missing.
      *
-     * @return 打ち切られたら{@code false}（組み終えたセクションは覚えている）
+     * @return {@code false} if cut off (sections already built are kept)
      */
     public boolean build(CellSource cells, long[] keys, int from, int to, LoadedArea loaded,
                          BooleanSupplier cancelled) {
@@ -163,7 +163,7 @@ public final class NavGraph {
             int sx = BlockPos.getX(key);
             int sy = BlockPos.getY(key);
             int sz = BlockPos.getZ(key);
-            // 殻は列（sx, sz）ごとに同じ。鍵は列ごとに並んでいることが多いので直前のものを使い回す
+            // The shell is the same per column (sx, sz). Keys are often ordered by column, so reuse the previous one
             if (shell == null || sx != shellX || sz != shellZ) {
                 shell = SectionShell.of(naturals, cells, sx, sz, goal.getX(), goal.getZ());
                 shellX = sx;
@@ -185,9 +185,9 @@ public final class NavGraph {
     }
 
     /**
-     * チャンクの中身が変わった。そのチャンクと周りのチャンクの列のセクションを捨てる——殻は水平
-     * {@link SectionShell#HORIZONTAL}ブロック先の立てる点で決まり、移動もセクションの外を読むので、
-     * 変わったチャンクだけを捨てても隣の辺が古いまま残る。
+     * A chunk's contents changed. Drops the sections in the columns of that chunk and the surrounding chunks: the shell is
+     * determined by standable points up to {@link SectionShell#HORIZONTAL} blocks horizontally away, and moves read outside
+     * the section, so dropping only the changed chunk would leave neighboring edges stale.
      */
     public void invalidateChunk(int chunkX, int chunkZ) {
         naturals.invalidateChunk(chunkX, chunkZ);
@@ -201,7 +201,7 @@ public final class NavGraph {
         }
     }
 
-    /** 中心から水平{@code radius}より遠いセクションを捨てる。 */
+    /** Drops sections farther than horizontal {@code radius} from the center. */
     public void retainWithin(int centerX, int centerZ, int radius) {
         int minX = Math.floorDiv(centerX - radius, SectionMoves.SIZE);
         int maxX = Math.floorDiv(centerX + radius, SectionMoves.SIZE);
@@ -219,7 +219,7 @@ public final class NavGraph {
         });
     }
 
-    /** 覚えているセクションと、ガイドの組み立て用の配列のおおよそのバイト数。 */
+    /** Approximate byte size of the stored sections and the guide-construction arrays. */
     public long bytes() {
         long total;
         synchronized (this) {
@@ -231,7 +231,7 @@ public final class NavGraph {
         return total;
     }
 
-    /** 覚えている辺の総数。 */
+    /** Total number of stored edges. */
     public long edgeCount() {
         long total = 0;
         for (SectionEdges edges : sections.values()) {
@@ -240,23 +240,23 @@ public final class NavGraph {
         return total;
     }
 
-    /** {@link #refresh}の結果と、実機のログに出す内訳。 */
+    /** The result of {@link #refresh} and the breakdown printed to the real-game log. */
     public record Refreshed(WindowField field, int sectionsBuilt, long buildMillis) {
     }
 
-    /** 窓からこれより離れたセクションは捨てる。窓が少し戻っただけで縁の帯を組み直さずに済む幅。 */
+    /** Sections farther than this from the window are dropped. A width that avoids rebuilding the edge band when the window moves back a little. */
     static final int RETAIN_MARGIN = 32;
 
-    /** 1つのビューで続けて組むセクションの数。セルを覚えるビューを渡されても、窓全体ぶん膨らまないように小分けで取り直す。 */
+    /** Number of sections built consecutively with one view. Even when given a view that caches cells, re-acquire in small batches so it doesn't grow to the whole window. */
     private static final int SECTIONS_PER_VIEW = 16;
 
     /**
-     * 窓の中の足りないセクションを並列に組み、ガイドを作り直す。
+     * Builds the missing sections in the window in parallel and rebuilds the guide.
      *
-     * @param views    呼ぶたびに、そのスレッドが占有してよいビューを返す
-     * @param pool     {@code null}なら呼び出し元のスレッドだけで組む。プールのスレッドから呼んではいけない
-     * @param workers  呼び出し元を含めた並列度
-     * @return 打ち切られたら{@code null}
+     * @param views    on each call, returns a view the calling thread may own exclusively
+     * @param pool     if {@code null}, builds on the calling thread only. Must not be called from a pool thread
+     * @param workers  parallelism including the calling thread
+     * @return {@code null} if cut off
      */
     public @Nullable Refreshed refresh(Supplier<CellSource> views, int centerX, int centerZ, int radius,
                                        LoadedArea loaded, FarField far, @Nullable Executor pool, int workers,
@@ -277,9 +277,9 @@ public final class NavGraph {
     }
 
     /**
-     * 窓の中を逆Dijkstraしてガイドを作る。窓の外・まだ組んでいないセクションへ出る辺の先には{@code far}の値を置く。
+     * Builds the guide by running reverse Dijkstra in the window. Puts {@code far}'s values at the far ends of edges leading outside the window or into sections not built yet.
      *
-     * @return 打ち切られたら{@code null}
+     * @return {@code null} if cut off
      */
     public @Nullable WindowField field(int centerX, int centerZ, int radius, FarField far,
                                        BooleanSupplier cancelled) {
@@ -291,7 +291,7 @@ public final class NavGraph {
         return WindowField.build(this, fieldBuffers, centerX, centerZ, radius, far, parallel, cancelled);
     }
 
-    /** {@link #field}の組み立て用の配列。{@code field}は同期しているので1組でよい。 */
+    /** Construction arrays for {@link #field}. {@code field} is synchronized, so one set is enough. */
     private final WindowField.Buffers fieldBuffers = new WindowField.Buffers();
 
     MoveTable moves() {

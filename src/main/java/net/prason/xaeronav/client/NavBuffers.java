@@ -18,10 +18,10 @@ import net.minecraft.client.renderer.StagedVertexBuffer;
 import net.minecraft.client.renderer.rendertype.RenderType;
 
 /^*
- * 26.2で{@code MultiBufferSource}が無くなったので、{@code getBuffer}→{@code endBatch}の流れを
- * {@link StagedVertexBuffer}の上に作り直したもの。{@code endBatch}で頂点を転送してその場で描く。
+ * {@code MultiBufferSource} is gone in 26.2, so this rebuilds the {@code getBuffer} -> {@code endBatch}
+ * flow on top of {@link StagedVertexBuffer}. {@code endBatch} uploads the vertices and draws them on the spot.
  *
- * <p>1回の{@code render}の最後に{@link #endFrame}を呼ぶこと。GPUバッファの回収はそこで進む。
+ * <p>Call {@link #endFrame} at the end of each {@code render}. GPU buffers are reclaimed there.
  ^/
 final class NavBuffers {
 
@@ -44,7 +44,7 @@ final class NavBuffers {
         StagedVertexBuffer.ExecuteInfo info = STAGED.getExecuteInfo(currentDraw);
         if (info != null) {
             //? if >=26.3 {
-            /^// 描画先のレンダーパスを自分で開く必要がある（26.2までのPreparedRenderTypeは自分で開いていた）
+            /^// We have to open the target render pass ourselves (up to 26.2, PreparedRenderType opened it itself)
             RenderTarget target = Minecraft.getInstance().gameRenderer.mainRenderTarget();
             try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
                     () -> "XaeroNav path", target.getColorTextureView(), Optional.empty(),

@@ -8,8 +8,8 @@ import java.util.function.Supplier;
 import net.minecraftforge.common.ForgeConfigSpec;
 
 /^*
- * Forge側の保存先。読み書き・ファイル監視・不正値の補正はすべてFMLが持つ
- * {@code ForgeConfigSpec}に任せる。
+ * Forge-side storage. Reading, writing, file watching and correcting invalid values are all left to FML's
+ * {@code ForgeConfigSpec}.
  ^/
 public final class ForgeConfigSpecStore implements NavConfigStore, NavConfigSpec {
 
@@ -31,7 +31,7 @@ public final class ForgeConfigSpecStore implements NavConfigStore, NavConfigSpec
         built.save();
     }
 
-    /^* {@code ModLoadingContext#registerConfig}へ渡すためのもの。 ^/
+    /^* For passing to {@code ModLoadingContext#registerConfig}. ^/
     public ForgeConfigSpec forgeConfigSpec() {
         return built;
     }
@@ -92,9 +92,9 @@ public final class ForgeConfigSpecStore implements NavConfigStore, NavConfigSpec
         return value::get;
     }
 
-    // Forgeの`defineListAllowEmpty`にはNeoForgeが持つ4引数版（新規要素のSupplierを取る）が無い。
-    // GUIの「要素を追加」ボタンが作る初期値をForgeだけ持てないだけで、既定値・保存形式は変わらない。
-    // 1.21未満はList<String>とSupplierを取る版に揃える（Forge 46には(String, List, Predicate)版が無い）
+    // Forge's `defineListAllowEmpty` lacks the 4-argument version NeoForge has (taking a Supplier for new elements).
+    // It only means Forge can't hold the initial value created by the GUI's "add element" button; the defaults and storage format don't change.
+    // Below 1.21, align on the version taking List<String> and a Supplier (Forge 46 has no (String, List, Predicate) version)
     @Override
     public StringListValue defineStringList(String path, List<String> defaultValue,
             Supplier<String> newElement, Predicate<Object> elementValidator) {

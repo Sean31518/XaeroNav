@@ -17,12 +17,12 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import org.junit.jupiter.api.Test;
 
 /**
- * 層1のcost-to-goガイド（{@link CoarseRouter#costToGo}）が詳細探索の経路をゆがめないこと。
+ * Layer 1's cost-to-go guide ({@link CoarseRouter#costToGo}) must not distort the detail search's paths.
  *
- * <p>ガイドは幾何学的な{@code Heuristic}とのmaxで使われるので、<b>実コストを上回った瞬間に
- * 経路の形が変わる</b>。表はチャンク（16ブロック）単位でしか値を持たないため、素のまま引くと
- * セルの中のどこにいても同じ値になり、hに16ブロック周期の鋸歯が乗る——ユーザー報告
- * 「直角にカクカクした挙動が多い」「経路が直感的ではない」の正体。
+ * <p>The guide is used as a max with the geometric {@code Heuristic}, so <b>the moment it exceeds actual cost,
+ * the path's shape changes</b>. The table only holds values per chunk (16 blocks), so a raw lookup gives the
+ * same value anywhere in the cell, putting a 16-block-period sawtooth on h: the real cause of the user reports
+ * "lots of jerky right-angle behaviour" and "the path isn't intuitive".
  */
 class CostToGoGuideTest {
 
@@ -67,12 +67,12 @@ class CostToGoGuideTest {
     }
 
     /**
-     * <b>開けた平地では、ガイドの有無で経路が1手も変わらないこと。</b>地形に理由が無いのだから、
-     * 層1が経路の形に口を出す余地は無い。
+     * <b>On open flat ground, the path doesn't change by a single move with or without the guide.</b> The terrain
+     * gives no reason, so layer 1 has no business shaping the path.
      *
-     * <p>ガイドがセル境界で実コストを上回っていた頃は、45度の目的地へ<b>斜め40手で足りる区間が
-     * 60手（斜め22・直進38）</b>になっていた——チャンク境界へ吸い寄せられ、10ブロック以上の
-     * 直進と直角だけで進んでいた。
+     * <p>Back when the guide exceeded actual cost at cell borders, a stretch toward a 45-degree destination that
+     * <b>needs 40 diagonal moves took 60 (22 diagonal, 38 straight)</b>: it was pulled to chunk borders and
+     * advanced only by straights of 10+ blocks and right angles.
      */
     @Test
     void theGuideDoesNotBendThePathOnOpenGround() {
@@ -84,18 +84,18 @@ class CostToGoGuideTest {
             PathResult plain = search(cells, start, goal, null);
             PathResult guided = search(cells, start, goal, guideFor(cells, start, goal));
             assertEquals(plain.steps().size(), guided.steps().size(),
-                    "ガイドが経路を伸ばしている: goal=" + goal.toShortString());
+                    "the guide lengthens the path: goal=" + goal.toShortString());
             assertEquals(diagonalSteps(start, plain), diagonalSteps(start, guided),
-                    "ガイドが斜めを直角に置き換えている: goal=" + goal.toShortString());
+                    "the guide replaces diagonals with right angles: goal=" + goal.toShortString());
         }
     }
 
     /**
-     * ガイドが幾何学的な下限（{@link Heuristic}）を上回らないこと。開けた平地では
-     * {@code Heuristic}が実コストそのものなので、上回った時点でA*は非許容になる。
+     * The guide must not exceed the geometric lower bound ({@link Heuristic}). On open flat ground
+     * {@code Heuristic} is the actual cost itself, so exceeding it makes A* inadmissible.
      *
-     * <p>経路の形で見る{@link #theGuideDoesNotBendThePathOnOpenGround}より手前の性質を直接見る。
-     * こちらだけが落ちるなら、ゆがみが出るほどではないが下限は壊れている、と切り分けられる。
+     * <p>Checks directly a property upstream of {@link #theGuideDoesNotBendThePathOnOpenGround}, which looks at path shape.
+     * If only this one fails, it isolates the case where the lower bound is broken but not yet enough to cause distortion.
      */
     @Test
     void theGuideStaysUnderTheGeometricLowerBound() {
@@ -107,8 +107,8 @@ class CostToGoGuideTest {
             for (int z = 0; z <= 40; z++) {
                 double lowerBound = Heuristic.estimate(x, STAND_Y, z, goal.getX(), goal.getY(), goal.getZ());
                 assertTrue(guide.estimate(x, STAND_Y, z) <= lowerBound + 1.0e-9,
-                        "ガイドが実コストを上回っている: " + x + "," + z
-                                + " guide=" + guide.estimate(x, STAND_Y, z) + " 下限=" + lowerBound);
+                        "the guide exceeds actual cost: " + x + "," + z
+                                + " guide=" + guide.estimate(x, STAND_Y, z) + " lowerBound=" + lowerBound);
             }
         }
     }

@@ -16,18 +16,18 @@ repositories {
 }
 
 dependencies {
-    // ModDevGradleが使うidea-extをbuildSrcの親クラスローダーから一度だけ適用する。
-    // Stonecutterの各NeoForgeノードが個別にロードすると、IntelliJ同期時に同じ`settings`拡張を
-    // 重複登録してしまう。
+    // Apply the idea-ext used by ModDevGradle once, from buildSrc's parent class loader.
+    // If each Stonecutter NeoForge node loaded it separately, the same `settings` extension would be
+    // registered twice during IntelliJ sync.
     implementation("gradle.plugin.org.jetbrains.gradle.plugin.idea-ext:gradle-idea-ext:1.2")
 
-    // ノード名とノード別プロパティ（stonecutter.properties.toml）を規約プラグインから読むため
+    // So the convention plugins can read node names and per-node properties (stonecutter.properties.toml)
     implementation("dev.kikugie:stonecutter:0.9.7")
 
-    // Javaの@Mixinをコンパイル時に検出し、mixin configへ自動登録する。
-    // まだalpha公開のみなので、再現可能性のため動的版ではなく検証済みの版へ固定する。
+    // Detects Java @Mixin classes at compile time and registers them in the mixin config automatically.
+    // Only alpha releases exist so far, so pin a verified version rather than a dynamic one for reproducibility.
     implementation("dev.kikugie.fletching-table:fletching-table:0.2.0-alpha.9")
 
-    // 1.16.5-forgeの開発実行で、Xaeroのクラスファイルに文字列で書かれたクラス名を書き換えるため（ForgeCoremodNames.kt）
+    // For rewriting class names written as strings in Xaero's class files in 1.16.5-forge dev runs (ForgeCoremodNames.kt)
     implementation("org.ow2.asm:asm:9.10.1")
 }

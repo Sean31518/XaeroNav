@@ -25,15 +25,15 @@ import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * 3D粗層（{@link VoxelCostToGo}）の見積もりが真値からどうずれるかを、ずれの原因ごとに分けて測る。
+ * Measures how the 3D coarse layer's ({@link VoxelCostToGo}) estimate deviates from the true value, broken down by cause.
  *
- * <p>真値は、地形全体を1つの窓で覆った航法グラフの値。3D粗層の表を下った道筋をセルごとにたどり、隣り合う2点の間で
- * 「真値の差 − 表の差」を足していくと、始点での「真値 − 表」が区間ごとの寄与に分かれる（途中は打ち消し合う）。
- * 区間を「床から床へ上る・下る・平ら」「床の無いセルを渡る」に分けて合計する。
+ * <p>The true value is the nav graph's value with a single window covering the whole terrain. Following the path down the 3D coarse layer's table cell by cell and
+ * summing "difference in true value − difference in table" between each pair of adjacent points splits the start's "true − table" into per-segment contributions (the middle cancels out).
+ * Segments are summed by category: "climb/descend/level from floor to floor" and "crossing cells with no floor".
  *
- * <p>{@code ./gradlew --offline :1.21.1-neoforge:bench --tests '*VoxelEstimateErrorBenchTest' -Pxaeronav.heap=8g}（全部で約2分）。
- * {@code -Pxaeronav.navGraphVerbose=true}で差の大きい区間を座標つきで出す。
- * {@code -Pxaeronav.alongPoints="罠:3,78,345 45,93,380"}で、歩いた道筋などの点の比を並べる（{@code ;}区切りで複数）。
+ * <p>{@code ./gradlew --offline :1.21.1-neoforge:bench --tests '*VoxelEstimateErrorBenchTest' -Pxaeronav.heap=8g} (about 2 minutes in total).
+ * {@code -Pxaeronav.navGraphVerbose=true} prints segments with large differences, with coordinates.
+ * {@code -Pxaeronav.alongPoints="trap:3,78,345 45,93,380"} lists ratios at points such as a walked path (multiple separated by {@code ;}).
  */
 @Tag("bench")
 class VoxelEstimateErrorBenchTest {
@@ -51,7 +51,7 @@ class VoxelEstimateErrorBenchTest {
     @Test
     void trap() throws IOException {
         FakeCells cells = load("/nether_trap.txt.gz");
-        measure("罠", cells, new BlockPos(-12, 64, 349), new BlockPos(-53, 68, 716), List.of(
+        measure("trap", cells, new BlockPos(-12, 64, 349), new BlockPos(-53, 68, 716), List.of(
                 new BlockPos(-65, 47, 521), new BlockPos(72, 69, 439), new BlockPos(-12, 44, 483),
                 new BlockPos(-2, 59, 444), new BlockPos(-12, 64, 349), new BlockPos(-99, 90, 559),
                 new BlockPos(-43, 66, 618)));
@@ -60,16 +60,16 @@ class VoxelEstimateErrorBenchTest {
     @Test
     void lavaSea() throws IOException {
         FakeCells cells = load("/nether_wide.txt.gz");
-        measure("溶岩の海", cells, new BlockPos(-212, 48, 553), new BlockPos(-333, 59, 694), List.of(
+        measure("lava sea", cells, new BlockPos(-212, 48, 553), new BlockPos(-333, 59, 694), List.of(
                 new BlockPos(-212, 48, 553), new BlockPos(-271, 64, 395), new BlockPos(-261, 66, 448)));
     }
 
-    /** 溶岩の海と同じ地形の、別の目的地2つ（ネザー4本の目的地）。上の2つに合わせすぎていないかを見る。 */
+    /** Same terrain as the lava sea, two other destinations (destinations of the 4 Nether routes). Checks we aren't overfitting to the two above. */
     @Test
     void wide() throws IOException {
         FakeCells cells = load("/nether_wide.txt.gz");
-        measure("広域(北の目的地)", cells, new BlockPos(-447, 74, 525), new BlockPos(-259, 65, 379), List.of());
-        measure("広域(西の目的地)", cells, new BlockPos(-505, 71, 836), new BlockPos(-538, 67, 496), List.of());
+        measure("wide (north goal)", cells, new BlockPos(-447, 74, 525), new BlockPos(-259, 65, 379), List.of());
+        measure("wide (west goal)", cells, new BlockPos(-505, 71, 836), new BlockPos(-538, 67, 496), List.of());
     }
 
     private static void measure(String name, FakeCells cells, BlockPos rawStart, BlockPos rawGoal, List<BlockPos> points) {
@@ -84,14 +84,14 @@ class VoxelEstimateErrorBenchTest {
         WindowField truth = new NavGraph(goal, world.minY(), world.maxY()).refresh(() -> window, centerX, centerZ,
                 radius, LoadedArea.square(centerX, centerZ, radius), FarField.of((x, y, z) -> 0.0),
                 ForkJoinPool.commonPool(), Runtime.getRuntime().availableProcessors(), () -> false).field();
-        System.out.printf(Locale.ROOT, "%s: 真値の窓 中心%d,%d 半径%d %dms%n", name, centerX, centerZ, radius,
+        System.out.printf(Locale.ROOT, "%s: truth window center %d,%d radius %d %dms%n", name, centerX, centerZ, radius,
                 System.currentTimeMillis() - began);
 
         VoxelTerrain terrain = VoxelTerrain.of(XaeroMapModel.guideBox(start, goal, NETHER_MIN_Y, NETHER_MAX_Y), true);
         XaeroMapModel.fill(terrain, cells);
         VoxelCostToGo voxel = VoxelCostToGo.build(terrain, goal, () -> false);
         Probe probe = new Probe(terrain, voxel, truth);
-        System.out.printf(Locale.ROOT, "  3D粗層 辺%d %s 届いた%d/%d%n", terrain.cellBlocks(), terrain.breakdown(),
+        System.out.printf(Locale.ROOT, "  3D coarse layer cell %d %s reached %d/%d%n", terrain.cellBlocks(), terrain.breakdown(),
                 voxel.reachableCells(), voxel.cellCount());
 
         for (BlockPos point : points) {
@@ -99,12 +99,12 @@ class VoxelEstimateErrorBenchTest {
             Breakdown one = new Breakdown();
             one.verbose = Boolean.getBoolean("xaeronav.navGraphVerbose");
             probe.decompose(at, one);
-            System.out.printf(Locale.ROOT, "  %s 真%.0f 表%.0f 比%.2f  %s%n", at.toShortString(), truth.exact(at.getX(), at.getY(), at.getZ()),
+            System.out.printf(Locale.ROOT, "  %s true %.0f table %.0f ratio %.2f  %s%n", at.toShortString(), truth.exact(at.getX(), at.getY(), at.getZ()),
                     probe.value(at), probe.value(at) / truth.exact(at.getX(), at.getY(), at.getZ()), one);
         }
 
-        // 始点からの最適な道筋の上で、表/真の比がどう動くか。窓の外の推定が道筋の途中で安く見える回廊へ
-        // 引かれるなら、ここで比が下がる区間がある
+        // How the table/true ratio moves along the optimal path from the start. If the estimate outside the window gets
+        // pulled toward a corridor that looks cheap partway along, there will be a segment where the ratio drops here
         List<BlockPos> optimal = new ArrayList<>();
         truth.descend(start.getX(), start.getY(), start.getZ(), (x, y, z) -> optimal.add(new BlockPos(x, y, z)));
         StringBuilder along = new StringBuilder();
@@ -116,7 +116,7 @@ class VoxelEstimateErrorBenchTest {
                 last = at;
             }
         }
-        System.out.printf(Locale.ROOT, "  最適な道筋の比:%s%n", along);
+        System.out.printf(Locale.ROOT, "  ratio along the optimal path:%s%n", along);
         for (String spec : System.getProperty("xaeronav.alongPoints", "").split(";")) {
             if (spec.isBlank() || !spec.startsWith(name + ":")) {
                 continue;
@@ -127,9 +127,9 @@ class VoxelEstimateErrorBenchTest {
                 BlockPos at = StanceFinder.resolveStart(cells,
                         new BlockPos(Integer.parseInt(xyz[0]), Integer.parseInt(xyz[1]), Integer.parseInt(xyz[2])));
                 double exact = truth.exact(at.getX(), at.getY(), at.getZ());
-                path.append(String.format(Locale.ROOT, " %s 真%.0f 比%.2f", at.toShortString(), exact, probe.value(at) / exact));
+                path.append(String.format(Locale.ROOT, " %s true %.0f ratio %.2f", at.toShortString(), exact, probe.value(at) / exact));
             }
-            System.out.printf(Locale.ROOT, "  指定の道筋の比:%s%n", path);
+            System.out.printf(Locale.ROOT, "  ratio along the given path:%s%n", path);
         }
 
         List<BlockPos> nodes = new ArrayList<>();
@@ -157,7 +157,7 @@ class VoxelEstimateErrorBenchTest {
             probe.decompose(at, all);
         }
         ratios.sort(Double::compare);
-        // 同じ真値の差がある2点を、表が同じ順に並べるか。窓の外の分かれ道で効くのはこの順序だけ
+        // Whether the table orders two points with the same true-value difference in the same order. Only this ordering matters at forks outside the window
         int agree = 0;
         int compared = 0;
         for (int a = 0; a < pairs.size(); a++) {
@@ -172,14 +172,14 @@ class VoxelEstimateErrorBenchTest {
                 }
             }
         }
-        System.out.printf(Locale.ROOT, "  無作為%d点 表/真 p10=%.2f p50=%.2f p90=%.2f 幅p90/p10=%.2f 順序一致(真の差300超)=%.3f%n",
+        System.out.printf(Locale.ROOT, "  %d random points table/true p10=%.2f p50=%.2f p90=%.2f spread p90/p10=%.2f order agreement (true diff >300)=%.3f%n",
                 ratios.size(), ratios.get(ratios.size() / 10), ratios.get(ratios.size() / 2),
                 ratios.get(ratios.size() * 9 / 10), ratios.get(ratios.size() * 9 / 10) / ratios.get(ratios.size() / 10),
                 (double) agree / compared);
-        System.out.printf(Locale.ROOT, "  内訳（真−表の合計、正＝表が安すぎる）%s%n", all);
+        System.out.printf(Locale.ROOT, "  breakdown (sum of true − table, positive = table too cheap)%s%n", all);
     }
 
-    /** 区間の種類ごとの「真値の差 − 表の差」の合計と、区間の数。 */
+    /** Per segment kind, the sum of "difference in true value − difference in table" and the number of segments. */
     private static final class Breakdown {
         private final Map<String, double[]> sums = new TreeMap<>();
         boolean verbose;
@@ -213,7 +213,7 @@ class VoxelEstimateErrorBenchTest {
             this.openRate = ActionCosts.PLACE_BLOCK_OVERHEAD_TICKS + ActionCosts.SPRINT_ONE_BLOCK;
         }
 
-        /** 表の生の値（{@link VoxelCostToGo#estimate}は{@code slack}を引いてある）。 */
+        /** Raw table value ({@link VoxelCostToGo#estimate} has {@code slack} subtracted). */
         double value(BlockPos at) {
             return voxel.estimate(at.getX(), at.getY(), at.getZ()) + slack;
         }
@@ -226,7 +226,7 @@ class VoxelEstimateErrorBenchTest {
             return estimate > 0 ? estimate + slack : Double.NaN;
         }
 
-        /** セルの中の航法グラフのノードのうち、いちばん安い真値。1つも無ければNaN。 */
+        /** The cheapest true value among nav graph nodes in the cell. NaN if there are none. */
         private double cellTruth(int index) {
             int x0 = terrain.box().minX() + terrain.cellX(index) * terrain.cellBlocks();
             int y0 = terrain.box().minY() + terrain.cellY(index) * terrain.cellBlocks();
@@ -245,7 +245,7 @@ class VoxelEstimateErrorBenchTest {
             return best;
         }
 
-        /** 逆向きDijkstraでこのセルへ値を渡したセル。表が尽きた（目的地の近く）なら-1。 */
+        /** The cell that passed its value to this cell in the reverse Dijkstra. -1 if the table ran out (near the destination). */
         private int parent(int index) {
             double here = cellCost(index);
             if (Double.isNaN(here)) {
@@ -308,16 +308,16 @@ class VoxelEstimateErrorBenchTest {
                 double nextValue = cellCost(next);
                 String kind;
                 if (crossedOpen) {
-                    kind = "床無しを渡る";
+                    kind = "cross no-floor";
                 } else {
                     int dy = terrain.cellY(next) - terrain.cellY(anchor);
                     boolean adjacent = Math.abs(terrain.cellX(next) - terrain.cellX(anchor)) <= 1
                             && Math.abs(terrain.cellZ(next) - terrain.cellZ(anchor)) <= 1 && Math.abs(dy) <= 1;
-                    kind = !adjacent ? "床→床(離れ)" : dy > 0 ? "床→床(上り)" : dy < 0 ? "床→床(下り)" : "床→床(平ら)";
+                    kind = !adjacent ? "floor→floor (apart)" : dy > 0 ? "floor→floor (up)" : dy < 0 ? "floor→floor (down)" : "floor→floor (level)";
                 }
                 double delta = (anchorTruth - nextTruth) - (anchorValue - nextValue);
                 if (out.verbose && Math.abs(delta) > 25) {
-                    System.out.printf(Locale.ROOT, "      %s %s→%s 真%.0f→%.0f 表%.0f→%.0f 差%.0f%n", kind, corner(anchor),
+                    System.out.printf(Locale.ROOT, "      %s %s→%s true %.0f→%.0f table %.0f→%.0f diff %.0f%n", kind, corner(anchor),
                             corner(next), anchorTruth, nextTruth, anchorValue, nextValue, delta);
                 }
                 out.add(kind, delta);
@@ -326,7 +326,7 @@ class VoxelEstimateErrorBenchTest {
                 anchorValue = nextValue;
                 crossedOpen = false;
             }
-            out.add("終点の残り", anchorTruth - anchorValue);
+            out.add("remaining at end", anchorTruth - anchorValue);
         }
     }
 }

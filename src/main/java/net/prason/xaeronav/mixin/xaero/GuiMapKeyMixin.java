@@ -25,16 +25,16 @@ import net.prason.xaeronav.xaero.XaeroHookProbe;
 import xaero.map.gui.GuiMap;
 
 /**
- * 世界地図画面でマウスカーソルが指す座標へ経路探索を設定するキー（{@link XaeroNavKeys#GOTO_MAP_CURSOR}）。
- * Xaero自身の地図内ショートカット（B=ウェイポイント作成 等）と同じくGuiMap#keyPressedの中でだけ
- * 効かせる必要があるため、通常プレイ中のキー処理（{@code XaeroNavKeys#handleInput}）とは別に、
- * ここへの{@code @Inject}で直接判定する。
+ * Key that sets pathfinding to the coordinates under the mouse cursor on the world map screen ({@link XaeroNavKeys#GOTO_MAP_CURSOR}).
+ * Like Xaero's own in-map shortcuts (B = create waypoint, etc.), it must only work inside GuiMap#keyPressed,
+ * so instead of the normal in-game key handling ({@code XaeroNavKeys#handleInput}), it's checked directly
+ * through an {@code @Inject} here.
  *
- * <p>{@code isUsingTextField()}のチェックを先頭に置くのは、地図内の座標入力欄などにフォーカスが
- * あるときはXaero側の想定通りテキスト入力を優先させるため（Xaero自身の{@code keyPressed}も
- * 同じ順序でこのチェックを最初に行っている）。
+ * <p>The {@code isUsingTextField()} check comes first so that when focus is on something like the map's coordinate
+ * input field, text input takes priority as Xaero intends (Xaero's own {@code keyPressed} also does this check
+ * first, in the same order).
  *
- * <p>required=falseの専用mixin configに属し、対象メソッドが見つからない場合はこの機能だけが無効化される。
+ * <p>Belongs to a dedicated required=false mixin config, so if the target method isn't found only this feature is disabled.
  */
 @Mixin(GuiMap.class)
 public abstract class GuiMapKeyMixin {
@@ -56,10 +56,10 @@ public abstract class GuiMapKeyMixin {
         throw new UnsupportedOperationException();
     }
 
-    // Forge 1.20.4は配布先のXaeroがSRG名、Renamerを通す開発環境ではnamed名になる。
-    // 外部クラスのoverrideはMixin APがrefmapへ引けないため、両方を候補にして実環境で片方を選ぶ。
+    // On Forge 1.20.4 the shipped Xaero uses SRG names, while the dev environment that goes through Renamer uses named names.
+    // The Mixin AP can't resolve an override of an external class into the refmap, so both are candidates and the real environment picks one.
     //? if >=1.21.9 {
-    /*// 1.21.9以降はキー入力が1つのKeyEventにまとまった
+    /*// From 1.21.9 on, key input is bundled into a single KeyEvent
     @Inject(method = "keyPressed(Lnet/minecraft/client/input/KeyEvent;)Z", at = @At("HEAD"), cancellable = true, remap = false)
     private void xaeronav$onKeyPressed(KeyEvent event, CallbackInfoReturnable<Boolean> cir) {
         XaeroHookProbe.record(XaeroHookProbe.Point.WORLD_MAP_KEY);

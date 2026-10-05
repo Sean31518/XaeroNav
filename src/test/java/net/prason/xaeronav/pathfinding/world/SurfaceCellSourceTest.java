@@ -18,9 +18,9 @@ import net.prason.xaeronav.pathfinding.corridor.SurfaceGrid;
 import net.prason.xaeronav.pathfinding.corridor.SurfaceGridBuilder;
 
 /**
- * 長距離ルート層2（{@link SurfaceCellSource}）の振る舞い。列(x,z)ごとの地表高さだけから
- * 既存の{@link AStarPathfinder}が正しい移動を生成するかを見る——新しい探索ロジックは無いので、
- * ここで確かめるのは{@link SurfaceGrid}から{@code CellData}のビットへの合成が正しいかだけ。
+ * Behavior of long-range route layer 2 ({@link SurfaceCellSource}). Checks whether the existing {@link AStarPathfinder} generates
+ * correct moves from just the surface height per column (x,z). There's no new search logic, so all
+ * this verifies is that the composition from {@link SurfaceGrid} into {@code CellData} bits is correct.
  */
 class SurfaceCellSourceTest {
 
@@ -46,14 +46,14 @@ class SurfaceCellSourceTest {
 
         PathResult result = search(builder.build(), new BlockPos(0, 65, 0), new BlockPos(10, 65, 0));
 
-        assertTrue(result.complete(), "平坦な陸は必ず到達できる");
-        assertTrue(result.steps().stream().noneMatch(PathStep::digging), "層2は掘削を扱わない");
+        assertTrue(result.complete(), "flat land is always reachable");
+        assertTrue(result.steps().stream().noneMatch(PathStep::digging), "layer 2 does not handle digging");
     }
 
     @Test
     void cannotCrossASheerCliffWithoutADetour() {
-        // 幅5だけの帯。x=5で高さが64→20へ44ブロック落ちる。落下は3ブロックまでしか繋がらないので、
-        // 帯の外に迂回できないここでは経路が伸びない
+        // A strip only 5 wide. At x=5 the height drops 44 blocks from 64 to 20. Falls connect only up to 3 blocks,
+        // so with no detour outside the strip the path can't continue
         SurfaceGridBuilder builder = new SurfaceGridBuilder(-2, -2, 20, 5);
         for (int x = -2; x < 18; x++) {
             for (int z = -2; z < 3; z++) {
@@ -64,7 +64,7 @@ class SurfaceCellSourceTest {
         PathResult result = new AStarPathfinder(new SurfaceCellSource(builder.build(), bounds, true, 0))
                 .search(new BlockPos(0, 65, 0), new BlockPos(15, 21, 0), () -> false);
 
-        assertFalse(result.complete(), "44ブロックの崖は迂回路が無ければ越えられない");
+        assertFalse(result.complete(), "a 44-block cliff can't be crossed without a detour");
     }
 
     @Test
@@ -73,9 +73,9 @@ class SurfaceCellSourceTest {
         for (int x = -RADIUS; x < RADIUS; x++) {
             for (int z = -RADIUS; z < RADIUS; z++) {
                 if (x >= 5 && x <= 9) {
-                    // 水底55・水面64。水面は隣接する陸の地面(64)と同じYにする——addDescend/addAscendは
-                    // どちらも1段分の移動で、陸のfeet(65)から1下がった64がそのまま水面と一致して初めて
-                    // 「陸→水→陸」が繋がる（水面をこれより低く取ると、陸側へ上がる着地先が地中に埋まる）
+                    // Water bottom 55, surface 64. The surface is at the same Y as the adjacent land's ground (64): addDescend/addAscend
+                    // are both one-step moves, and "land -> water -> land" only connects when 64, one below the land's
+                    // feet (65), matches the water surface (with a lower surface, the landing spot going up to land is buried)
                     builder.put(x, z, CoarseMap.WATER, 55, 64);
                 } else {
                     builder.put(x, z, CoarseMap.LAND, 64);
@@ -86,12 +86,12 @@ class SurfaceCellSourceTest {
         PathResult result = search(builder.build(), new BlockPos(0, 65, 0), new BlockPos(15, 65, 0));
 
         assertTrue(result.complete());
-        assertTrue(movements(result).contains(MovementType.SWIM), "水の区間は泳ぎとして出す: " + movements(result));
+        assertTrue(movements(result).contains(MovementType.SWIM), "water legs come out as swimming: " + movements(result));
     }
 
     @Test
     void neverEntersLava() {
-        // 幅5だけの帯。溶岩は迂回路が無ければ越えられない（層2は掘削も設置も扱わない）
+        // A strip only 5 wide. Lava can't be crossed without a detour (layer 2 handles neither digging nor placing)
         SurfaceGridBuilder builder = new SurfaceGridBuilder(-2, -2, 20, 5);
         for (int x = -2; x < 18; x++) {
             for (int z = -2; z < 3; z++) {
@@ -103,9 +103,9 @@ class SurfaceCellSourceTest {
         PathResult result = new AStarPathfinder(new SurfaceCellSource(builder.build(), bounds, true, 0))
                 .search(new BlockPos(0, 65, 0), new BlockPos(15, 65, 0), () -> false);
 
-        assertFalse(result.complete(), "溶岩は迂回路が無ければ越えられない");
+        assertFalse(result.complete(), "lava can't be crossed without a detour");
         assertTrue(result.steps().stream().noneMatch(step -> step.pos().getX() >= 5 && step.pos().getX() <= 9),
-                "溶岩帯に踏み込んだ: " + result.steps());
+                "stepped into the lava strip: " + result.steps());
     }
 
     @Test

@@ -14,11 +14,11 @@ import net.prason.xaeronav.pathfinding.astar.PathResult;
 import net.prason.xaeronav.pathfinding.astar.PathResult.Termination;
 
 /**
- * {@link StuckTracker}の単体テスト。
+ * Unit tests for {@link StuckTracker}.
  *
- * <p>{@code noteOutcome}の最初の呼び出しは必ず「前進した」扱いになる（比較対象となる
- * 最接近距離がまだ無いため）。詰みの連続をテストするときは、まず1回ベースラインを
- * 作ってから、同じ地点・進んでいない結果を繰り返す。
+ * <p>The first call to {@code noteOutcome} always counts as "made progress" (there's no closest distance
+ * to compare against yet). When testing a streak of being stuck, first build a baseline once,
+ * then repeat no-progress results from the same spot.
  */
 class StuckTrackerTest {
 
@@ -36,7 +36,7 @@ class StuckTrackerTest {
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false,
                 new NetherVoxelGuide()::noteStalled);
 
-        assertFalse(tracker.stranded(), "比較対象がまだ無い最初の探索は前進扱いになる");
+        assertFalse(tracker.stranded(), "the first search, with nothing to compare against yet, counts as progress");
         assertNull(tracker.reason());
     }
 
@@ -44,21 +44,21 @@ class StuckTrackerTest {
     void repeatedNonProgressFromTheSameSpotEventuallyGetsStuck() {
         StuckTracker tracker = new StuckTracker();
         NetherVoxelGuide voxelGuide = new NetherVoxelGuide();
-        // 1回目でベースライン(1000ブロック)を作る
+        // The first one builds the baseline (1000 blocks)
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
 
-        // 同じ地点・同じ距離のまま3回はまだ詰みと判断しない（SEARCH_STREAK=4回目で確定）
+        // Three times at the same spot and distance is not yet judged stuck (confirmed on the SEARCH_STREAK=4th)
         for (int i = 0; i < 3; i++) {
             tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
-            assertNull(tracker.reason(), "streak " + i + "回目ではまだ確定しない");
+            assertNull(tracker.reason(), "not confirmed yet at streak " + i);
             assertTrue(tracker.stranded());
         }
 
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         assertEquals(PathfindingState.StuckReason.NO_WAY_THROUGH, tracker.reason());
         assertEquals(PathfindingState.StuckReason.NO_WAY_THROUGH, tracker.takePendingNotice(),
-                "詰みが確定した回はチャット通知も一緒に立つ");
-        assertNull(tracker.takePendingNotice(), "通知は1度取り出したら消える（2回出さない）");
+                "the round that confirms being stuck also raises the chat notice");
+        assertNull(tracker.takePendingNotice(), "the notice disappears once taken (not shown twice)");
     }
 
     @Test
@@ -70,7 +70,7 @@ class StuckTrackerTest {
             tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.NODE_BUDGET), true, voxelGuide::noteStalled);
         }
         assertEquals(PathfindingState.StuckReason.UNMAPPED, tracker.reason(),
-                "層1が目的地まで届いていないなら、打ち切り理由に関わらずUNMAPPEDを優先する");
+                "if layer 1 doesn't reach the destination, UNMAPPED takes priority regardless of the cutoff reason");
     }
 
     @Test
@@ -93,7 +93,7 @@ class StuckTrackerTest {
             tracker.noteOutcome(START, START, GOAL, false, held, false, voxelGuide::noteStalled);
         }
         assertEquals(PathfindingState.StuckReason.LIMITS_HELD, tracker.reason(),
-                "上限が捨てた手を試していないのに「道が無い」と言わない");
+                "don't say \"no path\" without having tried the moves the caps discarded");
     }
 
     @Test
@@ -105,11 +105,11 @@ class StuckTrackerTest {
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         assertTrue(tracker.stranded());
 
-        // 遠く離れた地点からの失敗は「別の実験」なので連続に数えない
+        // Failures from a far-away spot are "a different experiment", so they don't count toward the streak
         tracker.noteOutcome(FAR_START, FAR_START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         tracker.noteOutcome(FAR_START, FAR_START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         tracker.noteOutcome(FAR_START, FAR_START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
-        assertNull(tracker.reason(), "同じ地点で4連続にならない限り確定しない");
+        assertNull(tracker.reason(), "not confirmed unless 4 in a row at the same spot");
     }
 
     @Test
@@ -121,10 +121,10 @@ class StuckTrackerTest {
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         assertTrue(tracker.stranded());
 
-        // 目的地に10ブロック（PROGRESS_BLOCKS=8を超える）近づいた地点からの探索は前進とみなす
+        // A search from a spot 10 blocks closer to the destination (more than PROGRESS_BLOCKS=8) counts as progress
         BlockPos closer = new BlockPos(10, 64, 0);
         tracker.noteOutcome(closer, closer, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
-        assertFalse(tracker.stranded(), "意味のある前進で連続カウントが戻る");
+        assertFalse(tracker.stranded(), "meaningful progress resets the streak count");
     }
 
     @Test
@@ -138,7 +138,7 @@ class StuckTrackerTest {
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         assertEquals(PathfindingState.StuckReason.NO_WAY_THROUGH, tracker.reason());
 
-        // 完走した地上経路が出ている間は、詰みの探索がその先で何回失敗しても詰みではない
+        // While a completed surface route is shown, it's not stuck no matter how many times stuck searches fail beyond it
         tracker.noteOutcome(START, START, GOAL, true, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         assertNull(tracker.reason());
         assertFalse(tracker.stranded());
@@ -160,9 +160,9 @@ class StuckTrackerTest {
         assertFalse(tracker.stranded());
         assertNull(tracker.takePendingNotice());
 
-        // resetの後は最接近距離もリセットされているので、遠い目的地からでもまたベースラインを作り直す
+        // After reset the closest distance is reset too, so the baseline is rebuilt even from a far destination
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
-        assertFalse(tracker.stranded(), "reset後の最初の探索はまた前進扱いになる");
+        assertFalse(tracker.stranded(), "the first search after reset counts as progress again");
     }
 
     @Test
@@ -174,11 +174,11 @@ class StuckTrackerTest {
         tracker.noteOutcome(START, START, GOAL, false, incomplete(Termination.EXHAUSTED), false, voxelGuide::noteStalled);
         assertTrue(tracker.stranded());
 
-        // 到着時はclearReason()だけを呼ぶ（reason判定は無いのでこの時点で影響は無いが、
-        // 到着後にすぐ同じ座標へ再度向かう場合を想定した継続性の確認）
+        // On arrival only clearReason() is called (there's no reason check, so no effect at this point, but this
+        // confirms continuity for the case of heading to the same coordinates again right after arriving)
         tracker.clearReason();
         assertNull(tracker.reason());
-        assertTrue(tracker.stranded(), "clearReasonは連続カウントまでは戻さない（PathfindingState#arrive参照）");
+        assertTrue(tracker.stranded(), "clearReason doesn't reset the streak count (see PathfindingState#arrive)");
     }
 
     @Test
@@ -186,10 +186,10 @@ class StuckTrackerTest {
         StuckTracker tracker = new StuckTracker();
         BlockPos lastStart = new BlockPos(0, 64, 0);
 
-        assertTrue(tracker.retryDue(null, lastStart, false), "始点が無ければいつでも再挑戦してよい");
-        assertTrue(tracker.retryDue(lastStart, new BlockPos(20, 64, 0), false), "16ブロック以上動けば再挑戦してよい");
+        assertTrue(tracker.retryDue(null, lastStart, false), "with no start point, retrying is always fine");
+        assertTrue(tracker.retryDue(lastStart, new BlockPos(20, 64, 0), false), "moving 16+ blocks makes retrying fine");
         assertFalse(tracker.retryDue(lastStart, new BlockPos(5, 64, 0), false),
-                "動いておらず間隔もまだなら再挑戦しない");
-        assertTrue(tracker.retryDue(lastStart, new BlockPos(5, 64, 0), true), "間隔が経てば動いていなくても再挑戦する");
+                "no retry if not moved and the interval hasn't passed");
+        assertTrue(tracker.retryDue(lastStart, new BlockPos(5, 64, 0), true), "once the interval passes, retry even without moving");
     }
 }

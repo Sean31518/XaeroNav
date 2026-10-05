@@ -14,21 +14,21 @@ import net.prason.xaeronav.pathfinding.coarse.CoarseMapBuilder;
 import net.prason.xaeronav.pathfinding.coarse.CoarseRouter;
 
 /**
- * 空中の長距離ルート。地形はXaero非依存の{@link CoarseMapBuilder}で直接組める。
+ * Long-range route in the air. Terrain can be built directly with the Xaero-independent {@link CoarseMapBuilder}.
  *
- * <p>ネザーを想定して、床(y=32)と岩盤天井(y=120)のあいだを飛ぶ形で書く。
+ * <p>Written for the Nether, flying between the floor (y=32) and the bedrock ceiling (y=120).
  */
 class CoarseFlightRouterTest {
 
     private static final int MIN_CHUNK = -20;
     private static final int CHUNKS = 41;
     private static final int MIN_Y = 34;
-    /** 岩盤天井の下。天井そのものは不透明なので床としては記録されない。 */
+    /** Below the bedrock ceiling. The ceiling itself is opaque, so it isn't recorded as a floor. */
     private static final int MAX_Y = 118;
 
     private static final int FLOOR = 32;
 
-    /** 全セルに床を1枚だけ置いた、開けたネザー。 */
+    /** An open Nether with a single floor in every cell. */
     private static CoarseMapBuilder openNether() {
         CoarseMapBuilder builder = new CoarseMapBuilder(MIN_CHUNK, MIN_CHUNK, CHUNKS, CHUNKS);
         for (int x = MIN_CHUNK; x < MIN_CHUNK + CHUNKS; x++) {
@@ -52,39 +52,39 @@ class CoarseFlightRouterTest {
         CoarseAirMap map = air(openNether());
 
         assertEquals(1, map.bandCount(0, 0));
-        assertTrue(map.bandBottom(0, 0, 0) > FLOOR, "床のすぐ上を帯に含めている");
-        assertEquals(MAX_Y, map.bandTop(0, 0, 0), "最上段の帯が天井まで伸びていない");
+        assertTrue(map.bandBottom(0, 0, 0) > FLOOR, "the band includes the space right above the floor");
+        assertEquals(MAX_Y, map.bandTop(0, 0, 0), "the topmost band doesn't extend to the ceiling");
     }
 
     @Test
     void dropsBandsThatAreTooThinToFlyThrough() {
-        // 床32のすぐ上、y=44 に天井（＝次の床）。あいだは薄すぎて飛べない
+        // A ceiling (i.e. the next floor) at y=44, just above floor 32. The gap is too thin to fly through
         CoarseMapBuilder builder = openNether();
         builder.putFloor(0, 0, CoarseMap.LAND, 44);
         CoarseAirMap map = air(builder);
 
-        // 32の上の帯は 36..40 で薄いので捨てられ、44の上の帯だけが残る
+        // The band above 32 is 36..40, thin, so it's discarded and only the band above 44 remains
         assertEquals(1, map.bandCount(0, 0));
-        assertTrue(map.bandBottom(0, 0, 0) > 44, "薄い帯の方が残っている");
+        assertTrue(map.bandBottom(0, 0, 0) > 44, "the thin band remains");
     }
 
     @Test
     void routesStraightAcrossOpenNether() {
         CoarseRouter.Route route = route(openNether(), new BlockPos(-300, 70, 0), new BlockPos(300, 70, 0));
 
-        assertTrue(route.reachedGoal(), "開けた地形で届いていない");
+        assertTrue(route.reachedGoal(), "doesn't reach on open terrain");
         assertFalse(route.isEmpty());
         assertTrue(route.waypoints().stream().allMatch(point -> Math.abs(point.getZ()) < 64),
-                "まっすぐ行ける所で横に振れている: " + route.waypoints());
+                "swerves sideways where it could go straight: " + route.waypoints());
     }
 
     /**
-     * 粗い層が「壁」を表現できる唯一の形——床が天井近くまで詰まっていて、飛べる厚みの帯が
-     * 1つも残らないセル。逆に言えば、床が4層までしか無い以上、低い所から天井まで完全に
-     * 塞がった列はこの層では表現しきれない（層3の担当）。
+     * The only shape in which the coarse layer can represent a "wall": a cell whose floors are packed up near the ceiling
+     * so that no band thick enough to fly through remains. Conversely, since there are at most 4 floors, a column fully
+     * blocked from low down to the ceiling can't be fully represented in this layer (that's layer 3's job).
      */
     private static void sealColumn(CoarseMapBuilder builder, int chunkX, int chunkZ) {
-        // 天井直下に床を置くと最上段の帯が消え、その下の帯も薄くして潰す
+        // A floor just below the ceiling removes the topmost band, and the band below is also thinned out
         builder.putFloor(chunkX, chunkZ, CoarseMap.LAND, MAX_Y - 2);
         builder.putFloor(chunkX, chunkZ, CoarseMap.LAND, MAX_Y - 14);
     }
@@ -102,15 +102,15 @@ class CoarseFlightRouterTest {
             }
         }
         CoarseAirMap map = air(builder);
-        assertTrue(map.blocked(0, 0), "塞いだ列が壁になっていない");
-        assertFalse(map.blocked(0, 8), "壁でない列まで塞がっている");
+        assertTrue(map.blocked(0, 0), "the blocked column didn't become a wall");
+        assertFalse(map.blocked(0, 8), "columns that aren't walls are blocked too");
 
         CoarseRouter.Route route = CoarseFlightRouter.findRoute(map,
                 new BlockPos(-300, 110, 0), new BlockPos(300, 110, 0), true);
 
-        assertTrue(route.reachedGoal(), "壁を回り込めていない");
+        assertTrue(route.reachedGoal(), "didn't go around the wall");
         assertTrue(route.waypoints().stream().anyMatch(point -> point.getZ() > 70),
-                "壁の端（チャンクz>4）を回っていない: " + route.waypoints());
+                "didn't go around the end of the wall (chunk z>4): " + route.waypoints());
     }
 
     @Test
@@ -119,16 +119,16 @@ class CoarseFlightRouterTest {
         sealColumn(builder, 0, 0);
         CoarseAirMap map = air(builder);
 
-        assertTrue(map.blocked(0, 0), "床が詰まったセルが壁と判定されていない");
-        assertFalse(map.unknown(0, 0), "データがあるのに未訪問扱いになっている");
-        assertTrue(map.unknown(5, 5), "何も書いていないセルが未訪問扱いになっていない");
-        assertFalse(map.blocked(5, 5), "未訪問のセルが壁になっている");
+        assertTrue(map.blocked(0, 0), "a cell packed with floors isn't judged a wall");
+        assertFalse(map.unknown(0, 0), "treated as unvisited despite having data");
+        assertTrue(map.unknown(5, 5), "a cell with nothing written isn't treated as unvisited");
+        assertFalse(map.blocked(5, 5), "an unvisited cell became a wall");
     }
 
     @Test
     void staysInTheLowerBandWhenTheUpperOneIsSealedOff() {
-        // 全域に2層。下の層(32)の上と、上の層(80)の上に帯ができる。
-        // 上の層は x=0 の列で天井まで塞ぐので、上の帯を通る道は無い
+        // Two layers everywhere. Bands form above the lower layer (32) and above the upper layer (80).
+        // The upper layer blocks up to the ceiling at column x=0, so there's no way through the upper band
         CoarseMapBuilder builder = openNether();
         for (int x = MIN_CHUNK; x < MIN_CHUNK + CHUNKS; x++) {
             for (int z = MIN_CHUNK; z < MIN_CHUNK + CHUNKS; z++) {
@@ -136,25 +136,25 @@ class CoarseFlightRouterTest {
             }
         }
         CoarseAirMap map = air(builder);
-        assertEquals(2, map.bandCount(0, 0), "2層の床から帯が2つできていない");
+        assertEquals(2, map.bandCount(0, 0), "two floor layers didn't produce two bands");
 
         CoarseRouter.Route route = CoarseFlightRouter.findRoute(map,
                 new BlockPos(-300, 40, 0), new BlockPos(300, 40, 0), true);
 
         assertTrue(route.reachedGoal());
         assertTrue(route.waypoints().stream().allMatch(point -> point.getY() < 80),
-                "下の帯から出発したのに上の帯へ飛び移っている（床＝岩を突き抜けている）: "
+                "started from the lower band but jumped to the upper band (floor = going through rock): "
                         + route.waypoints());
     }
 
     @Test
     void treatsUnmappedGroundAsPassable() {
-        // 何も書かれていない地図＝未訪問。飛行では「行けないと決まった」わけではない
+        // A map with nothing written = unvisited. For flight this doesn't mean "known to be impassable"
         CoarseMapBuilder builder = new CoarseMapBuilder(MIN_CHUNK, MIN_CHUNK, CHUNKS, CHUNKS);
 
         CoarseRouter.Route route = route(builder, new BlockPos(-300, 70, 0), new BlockPos(300, 70, 0));
 
-        assertTrue(route.reachedGoal(), "未訪問領域が壁になっている");
+        assertTrue(route.reachedGoal(), "the unvisited area became a wall");
     }
 
     @Test
@@ -166,7 +166,7 @@ class CoarseFlightRouterTest {
             double spacing = Math.hypot(waypoints.get(i).getX() - waypoints.get(i - 1).getX(),
                     waypoints.get(i).getZ() - waypoints.get(i - 1).getZ());
             assertTrue(spacing >= 32.0 && spacing <= 128.0,
-                    "中間目標の間隔が想定（64ブロック前後）から外れている: " + spacing);
+                    "waypoint spacing is off from the expected (around 64 blocks): " + spacing);
         }
     }
 

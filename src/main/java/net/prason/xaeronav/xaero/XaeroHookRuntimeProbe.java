@@ -30,10 +30,10 @@ import xaero.map.gui.dropdown.rightclick.RightClickOption;
 import xaero.map.mods.gui.WaypointReader;
 
 /**
- * {@code mc-runtime-test}専用のUI driver。{@link XaeroHookProbe#PROPERTY}が明示された起動でだけロードする。
+ * UI driver dedicated to {@code mc-runtime-test}. Loaded only on launches where {@link XaeroHookProbe#PROPERTY} is set explicitly.
  *
- * <p>Xaero自身のmap-open処理と、変換後の公開メソッドを通してprobeを駆動する。mixin callbackを直接
- * 呼ばないので、注入点が外れた場合は成功マーカーが出ない。
+ * <p>Drives the probe through Xaero's own map-open handling and the public methods after transformation. It doesn't call the mixin callback
+ * directly, so if an injection point misses, the success marker isn't emitted.
  */
 public final class XaeroHookRuntimeProbe {
 
@@ -147,8 +147,8 @@ public final class XaeroHookRuntimeProbe {
                 throw new IllegalStateException("world-map key hook did not set a goal");
             }
         } finally {
-            // このdriverが動くのはCIだけで、GOTO_MAP_CURSORの既定値は未割り当て。
-            // FabricではKeyMapping#getKeyが公開されていないため、既定値を明示して戻す。
+            // This driver runs only in CI, and GOTO_MAP_CURSOR is unbound by default.
+            // On Fabric, KeyMapping#getKey isn't public, so the default is restored explicitly.
             mapping.setKey(InputConstants.Type.KEYSYM.getOrCreate(GLFW.GLFW_KEY_UNKNOWN));
             KeyMapping.resetMapping();
         }
@@ -166,8 +166,8 @@ public final class XaeroHookRuntimeProbe {
     }
 
     /**
-     * 更新の止まった版のXaero（1.21.6・1.21.7・1.21.9向けのWorld Map 1.39系）には、座標などを個別に受け取る
-     * 12引数のコンストラクタしか無い。どちらの版でも動かすので、直接呼ばずに引数の数で選ぶ。
+     * Xaero versions that stopped receiving updates (World Map 1.39.x for 1.21.6, 1.21.7, and 1.21.9) only have a 12-argument
+     * constructor taking coordinates and such individually. It must work on both versions, so it picks by argument count instead of calling directly.
      */
     private static xaero.map.mods.gui.Waypoint mapWaypoint(Waypoint source, int x, int y, int z)
             throws ReflectiveOperationException {

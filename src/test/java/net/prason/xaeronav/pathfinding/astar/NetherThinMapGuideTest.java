@@ -17,17 +17,17 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>実機のXaeroが実際に持っている薄さの地図</b>で歩き通せることの番人。
+ * Guard ensuring a path can be walked end to end on <b>a map as thin as the one real in-game Xaero actually has</b>.
  *
- * <p>他のネザーの回帰（{@code NetherVoxelReachTest}・{@code NetherLiveWalkTest}）は
+ * <p>The other Nether regressions ({@code NetherVoxelReachTest}, {@code NetherLiveWalkTest}) have
  * {@link XaeroMapModel#fill(VoxelTerrain, net.prason.xaeronav.pathfinding.world.CellSource,
- * double, long)}が<b>柱ごとに最大8枚の床</b>を流す。実際のXaeroの保存はもっと薄い——洞窟レイヤーは
- * <b>プレイヤーが実際にいた高さ帯にしか書かれない</b>ので、ネザーを一定の高さで歩けば1枚しか
- * 埋まらない。実機ログ（2026-09-09）のレイヤー別内訳が{@code L4=3408}・他は全部0だった。
+ * double, long)} feed <b>up to 8 floors per column</b>. Real Xaero saves are much thinner: cave layers are
+ * <b>only written for the height bands where the player actually was</b>, so walking the Nether at a constant height fills
+ * only one. The per-layer breakdown in an in-game log (2026-09-09) was {@code L4=3408} with all others 0.
  *
- * <p>薄い地図では格子の「床以外」の割合が上がり、見積もりが直線距離の5.84倍まで膨らむ。
- * <b>それ自体は正常</b>（この経路の実コストは直線距離の約5.7倍）。膨らみを抑えようと表を
- * 縮めると<b>逆に歩けなくなる</b>ので、ここは「膨らみの大きさ」ではなく<b>歩き通せること</b>で守る。
+ * <p>On a thin map the grid's "non-floor" share rises, and the estimate swells to 5.84x the straight-line distance.
+ * <b>That in itself is normal</b> (this path's real cost is about 5.7x the straight-line distance). Shrinking the table to suppress the swelling
+ * <b>makes it unwalkable instead</b>, so this guards <b>being able to walk it end to end</b>, not "the amount of swelling".
  */
 @Tag("slow")
 class NetherThinMapGuideTest {
@@ -35,13 +35,13 @@ class NetherThinMapGuideTest {
     private static final BlockPos START = new BlockPos(-328, 64, 696);
     private static final BlockPos GOAL = new BlockPos(-259, 64, 379);
 
-    /** 実機の保存が持っていた唯一の洞窟レイヤー。 */
+    /** The only cave layer the in-game save had. */
     private static final int[] LAYERS = {4};
 
-    /** 実機ログの「既知セル=4410/6486」＝訪問済み68%。 */
+    /** The in-game log's "known cells=4410/6486" = 68% visited. */
     private static final double VISITED = 0.68;
 
-    /** {@code PathfindingState}の既定の描画距離相当。 */
+    /** Equivalent to {@code PathfindingState}'s default render distance. */
     private static final int WINDOW = 240;
 
     private static FakeCells terrain() throws Exception {
@@ -53,16 +53,16 @@ class NetherThinMapGuideTest {
     }
 
     private void walk(String name, VoxelTerrain grid, FakeCells cells) {
-        assertNotNull(grid, name + ": 格子を組めなかった");
+        assertNotNull(grid, name + ": could not build the grid");
         VoxelCostToGo guide = VoxelCostToGo.build(grid, GOAL, () -> false);
-        assertNotNull(guide, name + ": ガイドを組めなかった");
+        assertNotNull(guide, name + ": could not build the guide");
         ProgressiveWalk.Trace trace = ProgressiveWalk.trace(cells, START, GOAL, WINDOW,
                 ProgressiveWalk.Mode.REPAIR, ProgressiveWalk.Aim.GOAL, guide);
-        System.out.printf(Locale.ROOT, "%-22s セル=%d 辺=%d %s -> %s 手=%d%n", name,
+        System.out.printf(Locale.ROOT, "%-22s cells=%d edges=%d %s -> %s moves=%d%n", name,
                 grid.cellCount(), grid.cellBlocks(), grid.breakdown(),
-                trace.stopped().isEmpty() ? "到達" : "未到達: " + trace.stopped(),
+                trace.stopped().isEmpty() ? "reached" : "not reached: " + trace.stopped(),
                 trace.steps().size());
-        assertTrue(!trace.steps().isEmpty(), name + "で歩き通せなくなった: " + trace.stopped());
+        assertTrue(!trace.steps().isEmpty(), name + ": can no longer be walked end to end: " + trace.stopped());
     }
 
     @Test
@@ -71,27 +71,27 @@ class NetherThinMapGuideTest {
         VoxelTerrain grid = VoxelTerrain.of(XaeroMapModel.guideBox(START, GOAL,
                 NetherLiveWalkTest.NETHER_MIN_Y, NetherLiveWalkTest.NETHER_MAX_Y), true);
         XaeroMapModel.fill(grid, cells, LAYERS, VISITED, 1L);
-        walk("洞窟レイヤー1枚・訪問68%", grid, cells);
+        walk("1 cave layer, 68% visited", grid, cells);
     }
 
     /**
-     * <b>次元の高さが歩ける高さより広くても歩けること。</b>実機ログのセル数
-     * （276318と229405）の共通の約数は43しかなく、辺=6と併せると箱のYの幅は<b>256</b>——
-     * ネザーの歩ける高さの2倍だった。岩盤天井より上の空きが格子の半分を占めると、
-     * ガイドが「天井の上を橋で走る」道を描き、探索がそちらへ引きずられる。
+     * <b>Walkable even when the dimension's height is larger than the walkable height.</b> The only common divisor of the in-game log's cell counts
+     * (276318 and 229405) is 43, and together with edge=6 the box's Y extent is <b>256</b>,
+     * twice the Nether's walkable height. When the space above the bedrock ceiling takes up half the grid,
+     * the guide draws a road "running on bridges above the ceiling", and the search is dragged toward it.
      *
-     * <p>実測（箱のYを次元の全高に取っていた頃）: 0..255の箱では歩き通せず、探索が
-     * y=95・経路から100ブロック西で止まった——実機ログの「繋ぎ目の大回り(x=-416)」と同じ形。
-     * {@code VoxelTerrain#boxFor}が床のある範囲へ絞るようになって直っている。
+     * <p>Measured (back when the box's Y spanned the dimension's full height): with a 0..255 box it couldn't be walked end to end, and the search
+     * stopped at y=95, 100 blocks west of the path; the same shape as the in-game log's "big seam detour (x=-416)".
+     * Fixed now that {@code VoxelTerrain#boxFor} narrows the box to the range that has floors.
      *
-     * <p>実機の保存と同じ薄さ（洞窟レイヤー1枚）で測る。柱ごとに8枚拾う濃いモデルは
-     * 格子が2倍になって{@code ProgressiveWalk.trace}の歩き通しが遅い実行機で
-     * 時間切れになるうえ、{@code boxFor}のクランプはレイヤー数に依らない。
+     * <p>Measured at the same thinness as the in-game save (1 cave layer). The dense model that picks up 8 per column
+     * doubles the grid, so the {@code ProgressiveWalk.trace} walk-through times out on slow
+     * machines, and in any case the {@code boxFor} clamp doesn't depend on the layer count.
      */
     @Test
     void walksWhenTheDimensionIsTallerThanTheGroundItHas() throws Exception {
         FakeCells cells = terrain();
-        walk("全高256・レイヤー1枚",
+        walk("full height 256, 1 layer",
                 XaeroMapModel.grid(cells, START, GOAL, XaeroMapModel.height(0, 255),
                         LAYERS, VISITED, 1L),
                 cells);

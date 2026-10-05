@@ -18,10 +18,10 @@ import org.junit.jupiter.api.io.TempDir;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 
 /**
- * Fabric側の保存先が、NeoForgeの{@code ModConfigSpec}と同じ設定ファイルを作ることを見る。
+ * Checks that the Fabric-side store produces the same config file as NeoForge's {@code ModConfigSpec}.
  *
- * <p>設定の定義（{@link XaeroNavConfig}の37項目）は1箇所にしか無いので、ずれるとしたら
- * 保存先の実装同士。ゴールデン（NeoForge側の実物から採った）と突き合わせる。
+ * <p>The config definition (the 37 entries in {@link XaeroNavConfig}) lives in only one place, so any drift
+ * would come from the store implementations. Compared against a golden (taken from the real NeoForge side).
  */
 class NightConfigStoreTest {
 
@@ -36,13 +36,13 @@ class NightConfigStoreTest {
         written.load();
         for (Map.Entry<String, Golden> entry : golden().entrySet()) {
             List<String> path = List.of(entry.getKey().split("\\."));
-            // Objectで受けてから文字列にする。直接String.valueOfへ渡すと、
-            // night-configのget()が総称型なのでchar[]のオーバーロードに推論されてClassCastになる
+            // Take it as Object first, then stringify. Passing it straight to String.valueOf makes
+            // night-config's generic get() resolve to the char[] overload and throw a ClassCastException
             Object value = written.get(path);
             assertEquals(entry.getValue().defaultValue(), String.valueOf(value),
-                    entry.getKey() + " の既定値");
+                    entry.getKey() + " default value");
             assertEquals(entry.getValue().comment(), String.valueOf(written.getComment(path)).strip(),
-                    entry.getKey() + " のコメント");
+                    entry.getKey() + " comment");
         }
     }
 
@@ -52,7 +52,7 @@ class NightConfigStoreTest {
         Files.writeString(file, """
                 [pathfinding]
                 blockBudgetReserve = 9999
-                heuristicWeight = "ではない数"
+                heuristicWeight = "not a number"
                 diggingEnabled = false
                 """, StandardCharsets.UTF_8);
 
@@ -60,7 +60,7 @@ class NightConfigStoreTest {
         XaeroNavConfig config = new XaeroNavConfig(store.spec());
         store.build();
 
-        // レンジ外は丸める・型違いは既定値へ戻す・正しい値はそのまま残す
+        // Out-of-range values are clamped, wrong types fall back to the default, valid values are kept as-is
         assertEquals(512, config.blockBudgetReserve());
         assertEquals(1.5, config.heuristicWeight());
         assertEquals(false, config.diggingEnabled());
@@ -119,7 +119,7 @@ class NightConfigStoreTest {
     private record Golden(String defaultValue, String comment) {
     }
 
-    /** {@code ConfigSpecGoldenTest}が見ているのと同じ、NeoForge側の実物から採った定義の一覧。 */
+    /** The same definition list {@code ConfigSpecGoldenTest} checks, taken from the real NeoForge side. */
     private static Map<String, Golden> golden() throws IOException {
         Map<String, Golden> golden = new LinkedHashMap<>();
         try (InputStream in = NightConfigStoreTest.class.getResourceAsStream("/config-spec.golden")) {

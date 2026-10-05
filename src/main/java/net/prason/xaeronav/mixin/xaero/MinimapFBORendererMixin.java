@@ -27,20 +27,20 @@ import xaero.common.minimap.render.MinimapFBORenderer;
 import xaero.hud.render.util.RenderBufferUtil;
 
 /**
- * ミニマップ側のフック。{@code useWorldMap} true/false どちらの分岐で地形が
- * 描かれても、この直後の{@code endBatch()}に両分岐が収束するため、フックは1箇所で足りる。
+ * Minimap-side hook. Whichever branch of {@code useWorldMap} true/false draws the terrain,
+ * both branches converge on the {@code endBatch()} right after it, so one hook is enough.
  *
- * <p>{@code endBatch()}呼び出しのordinalはバージョンで違う。1.20+は対象の{@code renderTypeBuffers}
- * への1回目のflushがordinal 0。1.16.5〜1.19.2の{@code renderChunksToFBO}はその手前に
- * {@code this.mc.renderBuffers().bufferSource().endBatch()}（メインゲーム側の別バッファ）が
- * 先に1回あり、狙うべき{@code renderTypeBuffers}自身のflushはordinal 1になる
- * （Xaero 26.5.0のバイトコードで、1.18.2・1.19.2・1.20.1を比べて確認）。ordinal 0のままだと例外にはならないが
- * 別バッファへ描いてしまい、経路がミニマップに出ない。
+ * <p>The ordinal of the {@code endBatch()} call differs by version. On 1.20+, the first flush to the target {@code renderTypeBuffers}
+ * is ordinal 0. In 1.16.5-1.19.2, {@code renderChunksToFBO} has one
+ * {@code this.mc.renderBuffers().bufferSource().endBatch()} (a separate buffer on the main game side)
+ * before it, so the flush of {@code renderTypeBuffers} itself, which is the one to target, is ordinal 1
+ * (confirmed in Xaero 26.5.0 bytecode, comparing 1.18.2, 1.19.2 and 1.20.1). Leaving it at ordinal 0 throws no exception, but
+ * draws into the other buffer, and the path doesn't appear on the minimap.
  *
- * <p>何をどの色で描くかは{@link MapPathOverlay}が決める（世界地図側と共有）。ここが持つのは
- * Xaero固有の描画先と座標変換、そしてFBOに載らない遠方の切り捨てだけ。
+ * <p>What to draw in which color is decided by {@link MapPathOverlay} (shared with the world map side). All this holds is
+ * the Xaero-specific draw target and coordinate transform, plus culling of distant parts that don't fit on the FBO.
  *
- * <p>required=falseの専用mixin configに属し、対象メソッドの形が変わった場合はこの機能だけが無効化される。
+ * <p>Belongs to a dedicated required=false mixin config; if the target method's shape changes, only this feature is disabled.
  */
 @Mixin(MinimapFBORenderer.class)
 public abstract class MinimapFBORendererMixin implements XaeroHookMarker {
@@ -48,17 +48,17 @@ public abstract class MinimapFBORendererMixin implements XaeroHookMarker {
     private static final float DOT_ALPHA = 0.9f;
 
     /**
-     * ミニマップのFBOは512x512で、この描画では1単位が1ブロックにあたる。したがって中心から
-     * 256ブロックより先は原理的にFBOへ落ちない。余裕を取ってこの距離で切り、遠方まで伸びた経路が
-     * 毎フレーム丸ごと積まれるのを防ぐ。
+     * The minimap FBO is 512x512, and in this draw 1 unit is 1 block. So anything beyond 256 blocks
+     * from the center can't land on the FBO in principle. Cutting at this distance with some margin prevents a path
+     * extending far away from being queued in full every frame.
      */
     private static final int CULL_RADIUS_BLOCKS = 320;
 
     /**
-     * FBO上の1単位が画面上のおおよそ何ピクセルになるか。目的地の目印だけは画面上で一定の大きさに
-     * したいが、FBOはここでは1単位＝1ブロックで描かれ、画面への倍率は貼り付けるとき（この描画の
-     * 外側）に掛かるので行列からは読めない。既定の大きさ・ズームでの代表値を使う——ズーム設定まで
-     * 読みに行くとXaeroの設定クラスへの依存が増えるわりに、目印が数ピクセル変わるだけになる。
+     * Roughly how many on-screen pixels one FBO unit becomes. Only the destination marker should have a constant on-screen
+     * size, but here the FBO is drawn at 1 unit = 1 block, and the on-screen scale is applied when it's pasted (outside
+     * this draw), so it can't be read from the matrix. A representative value at the default size and zoom is used; reading
+     * the zoom setting too would add a dependency on Xaero's settings class only to change the marker by a few pixels.
      */
     private static final double SCREEN_PIXELS_PER_BLOCK = 2.0;
 
@@ -92,7 +92,7 @@ public abstract class MinimapFBORendererMixin implements XaeroHookMarker {
                 int z1 = blockZ1 - zFloored;
                 int x2 = blockX2 - xFloored;
                 int z2 = blockZ2 - zFloored;
-                // 矩形ごと外にあるものだけを捨てる。角が1つでも入っていれば描く
+                // Discard only those whose whole rectangle is outside. If even one corner is inside, draw it
                 if (x2 < -CULL_RADIUS_BLOCKS || x1 > CULL_RADIUS_BLOCKS
                         || z2 < -CULL_RADIUS_BLOCKS || z1 > CULL_RADIUS_BLOCKS) {
                     return;

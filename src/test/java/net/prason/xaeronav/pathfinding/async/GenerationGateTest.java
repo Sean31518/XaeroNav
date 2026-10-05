@@ -12,12 +12,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link GenerationGate}——世代を追い越された結果が静かに捨てられること、最新の結果は
- * 届くこと。ライブナビ（{@code PathfindingState}）が5箇所で共有する世代カウンタと同じ形を、
- * 実クライアント無しで検証する（TEST-01）。
+ * {@link GenerationGate}: results overtaken by a newer generation are silently dropped, and the latest result
+ * is delivered. Verifies, without a real client, the same shape as the generation counter the live navigation
+ * ({@code PathfindingState}) shares in five places (TEST-01).
  *
- * <p>{@code onMainThread}はテストでは{@code Runnable::run}を渡す
- * （{@link DiagnosticJobRunnerTest}と同じ理由——検証したいのは世代照合そのもの）。
+ * <p>Tests pass {@code Runnable::run} as {@code onMainThread}
+ * (same reason as {@link DiagnosticJobRunnerTest}: what we want to verify is the generation check itself).
  */
 class GenerationGateTest {
 
@@ -37,13 +37,13 @@ class GenerationGateTest {
             actionCalled.countDown();
         });
 
-        // 完了前に世代が進む（新しいリクエストへ置き換わった）
+        // The generation advances before completion (replaced by a new request)
         generation.incrementAndGet();
         staleFuture.complete("stale");
 
-        // actionは呼ばれないはず。時間制限つきで待って「呼ばれないこと」を確認する
+        // action should not be called. Wait with a timeout to confirm it is "not called"
         assertEquals(false, actionCalled.await(300, TimeUnit.MILLISECONDS),
-                "世代を追い越された結果のactionが呼ばれてしまっている");
+                "action for a result overtaken by a newer generation was called");
         assertNull(delivered.get());
     }
 
@@ -62,7 +62,7 @@ class GenerationGateTest {
 
         future.complete("fresh");
 
-        assertEquals(true, actionCalled.await(AWAIT_SECONDS, TimeUnit.SECONDS), "最新世代の結果が届かない");
+        assertEquals(true, actionCalled.await(AWAIT_SECONDS, TimeUnit.SECONDS), "result of the latest generation was not delivered");
         assertEquals("fresh", delivered.get());
     }
 
@@ -71,8 +71,8 @@ class GenerationGateTest {
         AtomicLong generation = new AtomicLong(1);
         AtomicReference<Thread> ranOnThread = new AtomicReference<>();
         CountDownLatch mainThreadInvoked = new CountDownLatch(1);
-        // onMainThreadが実際に経由されていることを見る——別スレッドから呼んでも
-        // ここに登録したConsumerを必ず通ることを確認する
+        // Check that onMainThread is actually used: even when called from another thread,
+        // it must always go through the Consumer registered here
         GenerationGate gate = new GenerationGate(generation, runnable -> {
             mainThreadInvoked.countDown();
             runnable.run();
@@ -82,7 +82,7 @@ class GenerationGateTest {
 
         future.complete("ok");
 
-        assertEquals(true, mainThreadInvoked.await(AWAIT_SECONDS, TimeUnit.SECONDS), "onMainThreadが呼ばれていない");
+        assertEquals(true, mainThreadInvoked.await(AWAIT_SECONDS, TimeUnit.SECONDS), "onMainThread was not called");
         assertEquals(Thread.currentThread(), ranOnThread.get());
     }
 }

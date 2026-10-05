@@ -6,13 +6,13 @@ import net.prason.xaeronav.pathfinding.coarse.CoarseMap;
 import net.prason.xaeronav.pathfinding.corridor.SurfaceGrid;
 
 /**
- * {@link SurfaceGrid}（廊下限定・ブロック解像度のXaero地表データ）を{@link CellSource}として
- * {@link net.prason.xaeronav.pathfinding.astar.AStarPathfinder}に渡すためのアダプタ（長距離ルート層2）。
+ * Adapter that passes a {@link SurfaceGrid} (corridor-only, block-resolution Xaero surface data) as a {@link CellSource}
+ * to {@link net.prason.xaeronav.pathfinding.astar.AStarPathfinder} (long-range route layer 2).
  *
- * <p>実ブロックの3D構造（洞窟・張り出し・建物）は見えないので、1列(x,z)につき地表高さ1つだけから
- * 「立てる／通れる／水／溶岩」を合成する。地表より下は実体不明として立てるが掘れない扱いにし、
- * 詳細探索（層3）が前提とする掘削は層2に持ち込まない——{@code CellData}のビットだけを共有するので、
- * 既存の{@code AStarPathfinder}の移動生成（Traverse/Ascend/Descend/Fall/Swim/JumpGap）が無改修で動く。
+ * <p>The real 3D block structure (caves, overhangs, buildings) is invisible, so "standable / passable / water / lava"
+ * is synthesized from just one surface height per column (x,z). Below the surface is treated as unknown matter that
+ * is standable but not diggable, and digging, which the detailed search (layer 3) assumes, isn't brought into layer 2.
+ * Since only the {@code CellData} bits are shared, the existing {@code AStarPathfinder} move generation (Traverse/Ascend/Descend/Fall/Swim/JumpGap) works unmodified.
  */
 public final class SurfaceCellSource implements CellSource {
 
@@ -46,7 +46,7 @@ public final class SurfaceCellSource implements CellSource {
         if (y == ground && kind == CoarseMap.LAVA) {
             return CellData.withDigTicks(CellData.PRESENT | CellData.LAVA, Double.POSITIVE_INFINITY);
         }
-        // 地表そのもの、または地表より下——どちらも「実体不明の固い地面」として同じ扱いにする
+        // The surface itself or below it; both are treated the same, as "solid ground of unknown matter"
         return solidGround();
     }
 
@@ -54,7 +54,7 @@ public final class SurfaceCellSource implements CellSource {
         return CellData.withDigTicks(CellData.PRESENT | CellData.PASSABLE_EMPTY, 0.0);
     }
 
-    /** 実体不明の地面。立てるが掘れない——層2は掘削を扱わない。 */
+    /** Ground of unknown matter. Standable but not diggable; layer 2 doesn't handle digging. */
     private static long solidGround() {
         return CellData.withDigTicks(CellData.PRESENT | CellData.STANDABLE, Double.POSITIVE_INFINITY);
     }
@@ -69,7 +69,7 @@ public final class SurfaceCellSource implements CellSource {
         return bounds;
     }
 
-    /** 層2はブロック設置による橋渡しを提案しない——実体不明の地形の上に何を置けるかは分からない。 */
+    /** Layer 2 doesn't propose bridging by placing blocks; it can't know what can be placed on terrain of unknown matter. */
     @Override
     public boolean canPlaceBlocks() {
         return false;
@@ -80,59 +80,59 @@ public final class SurfaceCellSource implements CellSource {
         return jumpGapEnabled;
     }
 
-    /** {@link #canPlaceBlocks()}がfalseなので橋自体を提示しない。 */
+    /** {@link #canPlaceBlocks()} is false, so bridges themselves aren't offered. */
     @Override
     public boolean lavaBridgingEnabled() {
         return false;
     }
 
-    /** 橋を提示しないので上限に意味は無い。 */
+    /** Bridges aren't offered, so the limit is meaningless. */
     @Override
     public int maxBridgeRunBlocks() {
         return 0;
     }
 
     /**
-     * 層2も潜水の上限を持つ。空気の量はプレイヤーの状態ではなくバニラの固定値なので、
-     * 層2が知らない情報（体力・持ち物）に依存しない——{@link #maxFallDamagePoints}のように
-     * 0で無効化する理由が無い。層2の水柱は{@code (水底, 水面]}として持っているので、
-     * ここで切らないと廊下の解が水底沿いに潜る経路を返し、層3と食い違う。
+     * Layer 2 also has a diving limit. Air supply is a fixed vanilla value, not player state, so it doesn't depend on
+     * information layer 2 doesn't know (health, inventory); unlike {@link #maxFallDamagePoints}, there's no reason to
+     * disable it with 0. Layer 2 holds water columns as {@code (bottom, surface]}, so without cutting here the corridor
+     * solution would return routes diving along the bottom, disagreeing with layer 3.
      */
     @Override
     public int maxSubmergedTicks() {
         return maxSubmergedTicks;
     }
 
-    /** 層2はプレイヤーの状態（体力・持ち物）を知らないので、痛い降下も水バケツMLGも提案しない。 */
+    /** Layer 2 doesn't know the player's state (health, inventory), so it proposes neither damaging drops nor water-bucket MLGs. */
     @Override
     public int maxFallDamagePoints() {
         return 0;
     }
 
     /**
-     * 層2の結果は<b>実際に歩く経路ではなく中間目標の座標</b>にしかならない（{@code CorridorLegSolver}）。
-     * 跳躍の危険を判断するのは層3の仕事なので、ここでは従来どおり跳ばせて経路の形だけを取る。
-     * 層2の2.5D格子は地表しか持たず「下に何があるか」を答えられないので、ここで避けさせると
-     * 判断材料の無いまま跳躍が丸ごと消え、廊下の精緻化が広く失敗する。
+     * Layer 2's result is only <b>coordinates of intermediate targets, not a route actually walked</b> ({@code CorridorLegSolver}).
+     * Judging jump risk is layer 3's job, so here jumps are allowed as before and only the route's shape is taken.
+     * Layer 2's 2.5D grid only has the surface and can't answer "what's below", so avoiding them here would erase
+     * jumps wholesale without any basis for the judgment, and corridor refinement would fail widely.
      */
     @Override
     public boolean avoidRiskyJumps() {
         return false;
     }
 
-    /** 層2の結果は中間目標にしかならないので、上限を守るかは層3の探索で決める。 */
+    /** Layer 2's result is only intermediate targets, so whether to hold the limits is decided by layer 3's search. */
     @Override
     public boolean strictLimits() {
         return false;
     }
 
-    /** {@link #avoidRiskyJumps()}がfalseなので参照されない。 */
+    /** {@link #avoidRiskyJumps()} is false, so this isn't referenced. */
     @Override
     public int fatalFallBlocks() {
         return Integer.MAX_VALUE;
     }
 
-    /** 層2は次元も水の有無も知らないので、どこでも安全な終端速度の下限に留める。 */
+    /** Layer 2 knows neither the dimension nor the presence of water, so it stays at the terminal-velocity lower bound, safe anywhere. */
     @Override
     public double minDescentTicksPerBlock() {
         return ActionCosts.FALL_ASYMPTOTIC_MIN_PER_BLOCK;
@@ -143,7 +143,7 @@ public final class SurfaceCellSource implements CellSource {
         return false;
     }
 
-    /** 層2は持ち物を知らないので、ボートも提示しない。 */
+    /** Layer 2 doesn't know the inventory, so it doesn't offer boats either. */
     @Override
     public boolean boatAvailable() {
         return false;

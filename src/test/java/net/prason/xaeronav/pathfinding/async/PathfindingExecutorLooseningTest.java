@@ -15,44 +15,44 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * 上限（橋の連続長・潜水・落下ダメージ）を段階的に緩める梯子が、<b>予算切れで終わった探索でも</b>
- * 走ることの検証。
+ * Verifies that the ladder that loosens caps step by step (bridge run length, diving, fall damage) runs <b>even for searches
+ * that ended by running out of budget</b>.
  *
- * <p>以前は{@code EXHAUSTED}（範囲内の到達可能セルを舐め尽くした）でしか緩めていなかった。
- * それだと「舐め尽くせるほど狭い地形」でしか緩和が発動せず、広い地形では上限のせいで道が
- * 無いのに上限を緩めないまま失敗し続ける。
+ * <p>Previously it only loosened on {@code EXHAUSTED} (all reachable cells in bounds were scoured).
+ * That way loosening only kicked in on "terrain small enough to scour", and on large terrain the search kept failing
+ * without loosening the caps even though the caps were why there was no way.
  */
 @Tag("slow")
 class PathfindingExecutorLooseningTest {
 
-    /** 橋の連続長の上限（実機の既定値）。 */
+    /** Cap on bridge run length (the in-game default). */
     private static final int BRIDGE_RUN_CAP = 30;
 
-    /** 上限のままでは絶対に渡れない幅の奈落。 */
+    /** A void too wide to ever cross at the cap. */
     private static final int VOID_GAP = 45;
 
     /**
-     * 到達可能セルだけで展開ノード数の上限を使い切る大きさの島。ジ・エンドの島はこちら側で、
-     * この違いだけで緩和が走ったり走らなかったりしていた。
+     * An island large enough that its reachable cells alone use up the expanded-node cap. End islands are on this side,
+     * and this difference alone decided whether loosening ran or not.
      */
     private static final int LARGE_ISLAND_RADIUS = 80;
 
     /**
-     * 時間上限は実機（2秒）より緩く取る。ここで測りたいのは「緩和の段が走るか」であって
-     * 実行速度ではなく、CIの速度差で結果が変わるテストにしたくない。
+     * The time limit is looser than in-game (2 seconds). What we want to measure here is "whether the loosening steps run",
+     * not execution speed, and we don't want a test whose result depends on CI speed differences.
      *
-     * <p><b>展開ノード数の上限は削らない。</b>速くしようと下げてみたが、
-     * {@link #crossesTheSameVoidThroughTheCoarseGuidedChain}は区間ごとに予算を割るので
-     * 190,000を切ると渡れなくなる（160,000で失敗）。崖から1.2倍しか離れていない値に座らせると、
-     * コストモデルを触るたびにここが落ちる。遅さは{@code @Tag("slow")}で引き受ける。
+     * <p><b>Don't reduce the expanded-node cap.</b> We tried lowering it for speed, but
+     * {@link #crossesTheSameVoidThroughTheCoarseGuidedChain} splits the budget per leg, so below
+     * 190,000 it can't cross (fails at 160,000). Sitting at a value only 1.2x from the cliff means
+     * this fails every time the cost model is touched. The slowness is absorbed by {@code @Tag("slow")}.
      */
     private static final SearchLimits LIMITS =
             new SearchLimits(300_000, 20_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
 
     /**
-     * <b>実機で踏んだ形</b>（ジ・エンド、2026-08-27）。大きい島の崖ぎわから、上限より広い奈落の
-     * 向こうを目指す。予算は到達可能セルだけで尽きるので探索は{@code NODE_BUDGET}で終わり、
-     * 梯子が{@code EXHAUSTED}限定だった頃は<b>ステップ数0＝線が1本も出ない</b>で終わっていた。
+     * <b>The shape hit in-game</b> (the End, 2026-08-27). From the cliff edge of a large island, aim across a void wider
+     * than the cap. The budget runs out on reachable cells alone, so the search ends with {@code NODE_BUDGET}, and
+     * when the ladder was limited to {@code EXHAUSTED} it ended with <b>0 steps, i.e. not a single line shown</b>.
      */
     @Test
     void crossesAVoidWiderThanTheBridgeCapFromTheEdgeOfALargeIsland() throws Exception {
@@ -60,24 +60,24 @@ class PathfindingExecutorLooseningTest {
         BlockPos start = new BlockPos(LARGE_ISLAND_RADIUS, 61, LARGE_ISLAND_RADIUS);
         BlockPos goal = new BlockPos(LARGE_ISLAND_RADIUS + VOID_GAP + 5, 61, LARGE_ISLAND_RADIUS);
 
-        // 対照。この島が予算切れで終わることがこのテストの前提そのもので、EXHAUSTEDへ倒れると
-        // 「舐め尽くせる地形」を検証するだけの空振りになる（島の大きさか予算が動いたとき）
+        // Control. That this island ends by running out of budget is the very premise of this test; if it tips to EXHAUSTED,
+        // it becomes a no-op that only verifies "scourable terrain" (when the island size or budget changes)
         PathResult bare = new PathfindingExecutor().submitRaw(cells, start, goal, LIMITS).get();
         assertEquals(PathResult.Termination.NODE_BUDGET, bare.termination(),
-                "大きい島の探索が予算切れで終わっていない＝この地形が対照になっていない");
+                "the large island's search did not end by running out of budget, so this terrain isn't a valid control");
 
         PathResult result = new PathfindingExecutor().submit(cells, start, goal, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "崖ぎわからでも渡れるはず: " + result.termination());
+        assertTrue(result.complete(), "should cross even from the cliff edge: " + result.termination());
         assertTrue(longestBridgeRun(result) > BRIDGE_RUN_CAP,
-                "上限を超える橋が架かっている＝緩和の段が走った: " + longestBridgeRun(result));
+                "a bridge beyond the cap was built, so the loosening steps ran: " + longestBridgeRun(result));
     }
 
     /**
-     * <b>実機で実際に走っているのはこちら</b>。粗い経由地チェーンの区間探索は
-     * {@code COARSE_GUIDED_LEG_TIME_LIMIT_MILLIS}(800ms)しか持っていないので、緩和の期限を
-     * 区間の時間上限で取ると最初の探索がそれを使い切って<b>緩和の段が一度も走らない</b>。
-     * 緩和はチェーン全体の期限で縛る。
+     * <b>This is what actually runs in-game.</b> Leg searches of the coarse waypoint chain only get
+     * {@code COARSE_GUIDED_LEG_TIME_LIMIT_MILLIS} (800ms), so if the loosening deadline were taken from the
+     * leg's time limit, the first search would use it all up and <b>the loosening steps would never run</b>.
+     * Loosening is bounded by the deadline of the whole chain.
      */
     @Test
     void crossesTheSameVoidThroughTheCoarseGuidedChain() throws Exception {
@@ -88,29 +88,29 @@ class PathfindingExecutorLooseningTest {
         PathResult result = new PathfindingExecutor()
                 .submitCoarseGuided(cells, cells.bounds(), start, goal, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "区間探索からでも渡れるはず: " + result.termination());
+        assertTrue(result.complete(), "should cross even from a leg search: " + result.termination());
         assertTrue(longestBridgeRun(result) > BRIDGE_RUN_CAP,
-                "上限を超える橋が架かっている＝緩和の段が走った: " + longestBridgeRun(result));
+                "a bridge beyond the cap was built, so the loosening steps ran: " + longestBridgeRun(result));
     }
 
-    /** 島が小さいうち（{@code EXHAUSTED}に届く側）も従来どおり渡れる。 */
+    /** While the island is small (the side that reaches {@code EXHAUSTED}), it still crosses as before. */
     @Test
     void stillCrossesFromASmallIslandWhereTheSearchExhaustsInstead() throws Exception {
         FakeCells cells = twoIslands(20);
         BlockPos start = new BlockPos(20, 61, 20);
         BlockPos goal = new BlockPos(20 + VOID_GAP + 5, 61, 20);
 
-        // 対照。上の大きい島と分かれるのはここ——両方NODE_BUDGETになったら差が消えている
+        // Control. This is where it splits from the large island above: if both became NODE_BUDGET, the difference is gone
         PathResult bare = new PathfindingExecutor().submitRaw(cells, start, goal, LIMITS).get();
         assertEquals(PathResult.Termination.EXHAUSTED, bare.termination(),
-                "小さい島の探索が舐め尽くしで終わっていない＝大小の対照が崩れている");
+                "the small island's search did not end by scouring, so the large/small control is broken");
 
         PathResult result = new PathfindingExecutor().submit(cells, start, goal, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "小さい島からは元から渡れていた: " + result.termination());
+        assertTrue(result.complete(), "should have crossed from the small island already: " + result.termination());
     }
 
-    /** 上限を厳守する設定では、緩めれば渡れる奈落でも渡らず、上限のせいだと結果に残す。 */
+    /** With caps strictly enforced, it doesn't cross a void that loosening would cross, and records that the cap was the reason. */
     @Test
     void strictLimitsNeverLoosenAndSayWhy() throws Exception {
         FakeCells cells = twoIslands(20).strictLimits(true);
@@ -119,13 +119,13 @@ class PathfindingExecutorLooseningTest {
 
         PathResult result = new PathfindingExecutor().submit(cells, start, goal, LIMITS, true, 0).get();
 
-        assertFalse(result.complete(), "上限を超える橋を架けて渡ってしまった");
-        assertTrue(longestBridgeRun(result) <= BRIDGE_RUN_CAP, "上限を超える橋: " + longestBridgeRun(result));
+        assertFalse(result.complete(), "crossed by building a bridge beyond the cap");
+        assertTrue(longestBridgeRun(result) <= BRIDGE_RUN_CAP, "bridge beyond the cap: " + longestBridgeRun(result));
         assertEquals(PathResult.Termination.EXHAUSTED, result.termination());
-        assertTrue(result.limitsHeld(), "上限が手を捨てたことが結果に残っていない");
+        assertTrue(result.limitsHeld(), "the result doesn't record that the cap discarded moves");
     }
 
-    /** 上限の内側で届くなら、厳守の設定でも普通に届き、上限のせいとは言わない。 */
+    /** If reachable within the cap, it reaches normally even with strict caps and doesn't blame the cap. */
     @Test
     void strictLimitsStillReachWhatFitsWithinThem() throws Exception {
         int narrowGap = BRIDGE_RUN_CAP - 10;
@@ -145,11 +145,11 @@ class PathfindingExecutorLooseningTest {
 
         PathResult result = new PathfindingExecutor().submit(cells, start, goal, LIMITS, true, 0).get();
 
-        assertTrue(result.complete(), "上限の内側で渡れるはず: " + result.termination());
+        assertTrue(result.complete(), "should cross within the cap: " + result.termination());
         assertFalse(result.limitsHeld());
     }
 
-    /** 出発の島 → 奈落{@link #VOID_GAP}マス → 同じ高さの島。始点は出発の島の崖ぎわに置く。 */
+    /** Start island -> {@link #VOID_GAP} blocks of void -> island at the same height. The start is at the cliff edge of the start island. */
     private static FakeCells twoIslands(int islandRadius) {
         SearchBounds bounds = new SearchBounds(-8, 20, -8,
                 islandRadius * 2 + VOID_GAP + 16, 93, islandRadius * 2 + 8);

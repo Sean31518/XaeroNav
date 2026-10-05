@@ -1,6 +1,6 @@
 package net.prason.xaeronav.platform.forge;
 
-// 1.21.6以降（Forge 56以降）はForgeMod・ForgeClientSetupが受け持つ
+// From 1.21.6 (Forge 56) on, ForgeMod and ForgeClientSetup handle this
 //? if forge && <1.21.6 {
 /*import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -30,7 +30,7 @@ import net.prason.xaeronav.client.NavCommandSink;
 import net.prason.xaeronav.client.XaeroNavClient;
 import net.prason.xaeronav.client.XaeroNavCommands;
 
-/^* Forgeのゲームイベントを、ローダー非依存の処理へ繋ぐだけの層。 ^/
+/^* Just a layer that connects Forge game events to loader-independent handling. ^/
 public final class ForgeEvents {
 
     // Forge 54 (1.21.4) and 55 (1.21.5) have no RenderLevelStageEvent while the frame-graph renderer
@@ -50,16 +50,16 @@ public final class ForgeEvents {
         }
         //?}
         //? if >=1.20.5 {
-        // Forge 1.20.6以降のRenderLevelStageEventはPoseStackではなくMatrix4fを持つ（Mojang側がGUI描画で
-        // PoseStackの受け渡しをやめたため）。PathRendererはPoseStackのpush/pop APIに依存しているので、
-        // 単体のPoseStackへ積み直して渡す（回転・並進が乗った行列を1回複製するだけ、毎フレームの負荷は軽い）。
-        // event.getPoseStack()はforRemoval=trueで削除予定（Forge 1.21〜）。同じ値は
-        // RenderSystem.getModelViewMatrix()からも読める（Mojangがレンダリングパイプラインの
-        // 引数からPoseStackを外した際、Forge側は値をイベントへ残しつつ取得口だけ非推奨にした）
+        // From Forge 1.20.6, RenderLevelStageEvent carries a Matrix4f instead of a PoseStack (because Mojang stopped
+        // passing PoseStack around for GUI rendering). PathRenderer depends on PoseStack's push/pop API, so
+        // it's loaded into a standalone PoseStack and passed on (just one copy of the matrix with rotation/translation; per-frame cost is light).
+        // event.getPoseStack() is forRemoval=true and slated for removal (Forge 1.21+). The same value can also be read from
+        // RenderSystem.getModelViewMatrix() (when Mojang removed PoseStack from the rendering pipeline's
+        // arguments, Forge kept the value on the event but deprecated only the accessor)
         PoseStack poseStack = new PoseStack();
         poseStack.last().pose().set(RenderSystem.getModelViewMatrix());
         //?} else {
-        /^// 1.20.4以前のRenderLevelStageEventはPoseStackをそのまま持っている（1.20.5のMatrix4f化以前）
+        /^// Before 1.20.4, RenderLevelStageEvent carries the PoseStack directly (before 1.20.5 switched to Matrix4f)
         //? if >=1.17 {
         PoseStack poseStack = event.getPoseStack();
         //?} else {
@@ -76,8 +76,8 @@ public final class ForgeEvents {
     }
     //?}
 
-    // Forge 49.1.10（1.20.4）より前のTickEvent.ClientTickEventはPost/Preのネストクラスに分かれておらず、
-    // phaseフィールド（START/END）で前後を区別する旧い形
+    // Before Forge 49.1.10 (1.20.4), TickEvent.ClientTickEvent wasn't split into Post/Pre nested classes;
+    // it's the old form that distinguishes before/after with the phase field (START/END)
     @SubscribeEvent
     public void onClientTick(
             //? if >=1.20.4 {
@@ -94,7 +94,7 @@ public final class ForgeEvents {
         XaeroNavClient.TICK_HANDLER.onClientTick();
     }
 
-    // ClientPlayerNetworkEvent.LoggingIn/LoggingOutはForge 41（1.19）から。それより前はLoggedInEvent/LoggedOutEvent
+    // ClientPlayerNetworkEvent.LoggingIn/LoggingOut exist from Forge 41 (1.19). Before that it's LoggedInEvent/LoggedOutEvent
     @SubscribeEvent
     public void onLoggingIn(
             //? if >=1.19 {
@@ -125,13 +125,13 @@ public final class ForgeEvents {
                 ctx -> sink(ctx.getSource()), BlockPosArgument::getBlockPos));
                 //?} else {
                 /^ctx -> sink(ctx.getSource()),
-                // 1.20より前のBlockPosArgumentにはgetBlockPos(CommandContext, String)が無い（getLoadedBlockPosはサーバー用）
+                // Before 1.20, BlockPosArgument has no getBlockPos(CommandContext, String) (getLoadedBlockPos is for servers)
                 (context, name) -> context.getArgument(name, Coordinates.class).getBlockPos(context.getSource())));
                 ^///?}
     }
     //?}
 
-    // Forgeのオーバーレイ登録イベント（RegisterGuiOverlaysEvent）は1.19から。1.18.2以前はここで描く
+    // Forge's overlay registration event (RegisterGuiOverlaysEvent) exists from 1.19. In 1.18.2 and earlier, drawing happens here
     //? if <1.19 {
     /^@SubscribeEvent
     public void onOverlay(RenderGameOverlayEvent.Post event) {

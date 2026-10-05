@@ -28,18 +28,18 @@ class LiveCoarseSamplerTest {
     }
 
     /**
-     * 1セルに{@link CoarseMap#MAX_FLOORS}を超える階層があるとき、残すのは参照Yに近い床。
-     * 参照Yを見ずに{@code CoarseMapBuilder}へそのまま渡すと、あちらは常に「最も高い床」を
-     * 追い出すので、プレイヤーが立っている一番上の回廊がそのまま消える。
+     * When a cell has more than {@link CoarseMap#MAX_FLOORS} levels, the floors kept are those nearest the reference Y.
+     * Passing them straight to {@code CoarseMapBuilder} without looking at the reference Y makes it always evict
+     * the "highest floor", so the topmost corridor the player is standing in simply disappears.
      */
     @Test
     void keepsTheFloorsNearestTheReferenceYWhenACellHasTooMany() {
-        // 1列あたりの走査はMAX_FLOORSで打ち切られるので、列ごとに違う階層を見せて
-        // チャンク全体では上限+1クラスタになるようにする（ネザーでは普通に起きる形）
+        // Per-column scanning is capped at MAX_FLOORS, so show a different level in each column
+        // so that the chunk as a whole has limit+1 clusters (a shape that occurs routinely in the Nether)
         SearchBounds bounds = new SearchBounds(0, 0, 0, 15, 127, 15);
         FakeCells cells = FakeCells.empty(bounds);
-        // 階層の間隔はFLOOR_CLUSTER_THRESHOLD_BLOCKS(12)より広く取る。これより詰めると
-        // 同じ床としてまとめられてしまう
+        // Space the levels wider than FLOOR_CLUSTER_THRESHOLD_BLOCKS (12). Any tighter and
+        // they get merged as the same floor
         int top = 118;
         int spacing = 18;
         int farthest = top - spacing * CoarseMap.MAX_FLOORS;
@@ -64,9 +64,9 @@ class LiveCoarseSamplerTest {
 
         assertEquals(CoarseMap.MAX_FLOORS, map.floorCount(0, 0));
         assertEquals(top, map.heightAtFloor(0, 0, CoarseMap.MAX_FLOORS - 1),
-                "参照Yの床（プレイヤーが立っている回廊）が残っていない");
+                "The floor at the reference Y (the corridor the player is standing in) was not kept");
         assertEquals(top - spacing * (CoarseMap.MAX_FLOORS - 1), map.heightAtFloor(0, 0, 0),
-                "参照Yから最も遠い床が捨てられているはず");
+                "The floor farthest from the reference Y should be the one discarded");
     }
 
     @Test
@@ -86,8 +86,8 @@ class LiveCoarseSamplerTest {
 
     @Test
     void lavaMixedChunkHeightIgnoresTheLavaSurface() {
-        // 溶岩の海の縁: 1/4が溶岩面(Y=31、LAVA_MIXEDの下限)、残りがそれより高い地面(Y=40)。
-        // 代表高さが溶岩面へ引っ張られると、waypointが立てない場所に落ちる
+        // Edge of a lava sea: 1/4 is lava surface (Y=31, the lower bound of LAVA_MIXED), the rest is higher ground (Y=40).
+        // If the representative height is pulled toward the lava surface, waypoints land where you cannot stand
         SearchBounds bounds = new SearchBounds(0, 20, 0, 15, 80, 15);
         FakeCells cells = FakeCells.empty(bounds);
         for (int x = 0; x < 16; x++) {
@@ -107,9 +107,9 @@ class LiveCoarseSamplerTest {
     }
 
     /**
-     * ネザーの形。岩盤天井があるので{@code openSkyY}は天井（ここでは探索範囲の遥か上）を指すが、
-     * 地図に載せたいのは範囲内にある足元の地形。走査開始を範囲上端で頭打ちにしないと、
-     * 範囲外を読んで全列がABSENTになり、地図が1セルも埋まらない。
+     * The Nether shape. With a bedrock ceiling, {@code openSkyY} points at the ceiling (here far above the search range),
+     * but what belongs on the map is the terrain underfoot within the range. Unless scanning starts capped at the top of the range,
+     * it reads outside the range, every column becomes ABSENT, and not a single cell of the map is filled.
      */
     @Test
     void samplesTheGroundInsideBoundsWhenTheCeilingIsAboveThem() {
@@ -120,17 +120,17 @@ class LiveCoarseSamplerTest {
                 cells.set(x, 42, z, FakeCells.STONE);
             }
         }
-        // 探索範囲の外にある岩盤天井。openSkyYはこれを指す
+        // Bedrock ceiling outside the search range. openSkyY points at this
         cells.openSkyYOverride(200);
 
         CoarseMap map = LiveCoarseSampler.sample(cells, bounds);
 
-        assertEquals(1, map.knownCells(), "天井の下にある地形が地図に載らなければならない");
+        assertEquals(1, map.knownCells(), "Terrain below the ceiling must be put on the map");
         assertEquals(CoarseMap.LAND, map.kindAtFloor(0, 0, 0));
         assertEquals(42, map.heightAtFloor(0, 0, 0));
     }
 
-    /** 範囲の上端から遠く下にある溶岩の海も拾う（走査が浅すぎると海そのものが地図に載らない）。 */
+    /** Also picks up a lava sea far below the top of the range (if scanning is too shallow, the sea itself never reaches the map). */
     @Test
     void reachesLavaFarBelowTheTopOfBounds() {
         SearchBounds bounds = new SearchBounds(0, 10, 0, 15, 74, 15);
@@ -144,13 +144,13 @@ class LiveCoarseSamplerTest {
 
         CoarseMap map = LiveCoarseSampler.sample(cells, bounds);
 
-        assertEquals(CoarseMap.LAVA, map.kindAtFloor(0, 0, 0), "溶岩の海が地図に載らなければ迂回もできない");
+        assertEquals(CoarseMap.LAVA, map.kindAtFloor(0, 0, 0), "If the lava sea is not on the map, it cannot be avoided either");
     }
 
     /**
-     * ネザーの3D迷路。探索範囲の上端が岩の中に埋まっている列で、その上端を地面と report しては
-     * ならない。全列が同じ高さになって起伏0＝崖ペナルティ0の平坦な最安地形に見えるうえ、
-     * 足元の溶岩の海が地図から丸ごと消える。
+     * The Nether 3D maze. In columns where the top of the search range is buried in rock, that top must not be
+     * reported as ground. Every column would end up at the same height, looking like flat, cheapest terrain with zero relief = zero cliff penalty,
+     * and the lava sea underfoot would vanish from the map entirely.
      */
     @Test
     void doesNotReportTheTopOfBoundsAsGroundWhenItIsInsideRock() {
@@ -158,7 +158,7 @@ class LiveCoarseSamplerTest {
         FakeCells cells = FakeCells.empty(bounds);
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
-                // 範囲上端(72)から50までを岩で埋める。その下は空洞で、床は溶岩の海
+                // Fill with rock from the top of the range (72) down to 50. Below that is a cavity whose floor is a lava sea
                 for (int y = 50; y <= 72; y++) {
                     cells.set(x, y, z, FakeCells.STONE);
                 }
@@ -169,11 +169,11 @@ class LiveCoarseSamplerTest {
 
         CoarseMap map = LiveCoarseSampler.sample(cells, bounds);
 
-        assertEquals(CoarseMap.LAVA, map.kindAtFloor(0, 0, 0), "天井側の岩を地面と読むと溶岩の海が地図から消える");
+        assertEquals(CoarseMap.LAVA, map.kindAtFloor(0, 0, 0), "Reading ceiling-side rock as ground makes the lava sea vanish from the map");
         assertEquals(31, map.heightAtFloor(0, 0, 0));
     }
 
-    /** 上から下まで岩で詰まった列は「不明」。天井の岩を地面と読んではいけない。 */
+    /** A column packed with rock from top to bottom is "unknown". Ceiling rock must not be read as ground. */
     @Test
     void columnsFilledWithRockAreLeftUnknown() {
         SearchBounds bounds = new SearchBounds(0, 60, 0, 15, 72, 15);
@@ -193,9 +193,9 @@ class LiveCoarseSamplerTest {
     }
 
     /**
-     * ネザーの3D迷路の核心: 同じXZに上下2本の独立した通路が重なる場合、両方が別々の床として
-     * 地図に残らなければならない。潰して1つの高さにすると、垂直に分断された通路が
-     * 「安い段差」として繋がって見えたり、片方の通路が丸ごと消えたりする。
+     * The core of the Nether 3D maze: when two independent passages are stacked at the same XZ, both must remain on the map
+     * as separate floors. Collapsing them into one height makes vertically separated passages
+     * look connected by a "cheap step", or makes one passage vanish entirely.
      */
     @Test
     void capturesTwoIndependentFloorsStackedInTheSameColumn() {
@@ -203,8 +203,8 @@ class LiveCoarseSamplerTest {
         FakeCells cells = FakeCells.empty(bounds);
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
-                cells.set(x, 90, z, FakeCells.STONE); // 上の階（天井のすぐ下）
-                cells.set(x, 40, z, FakeCells.STONE); // 下の階
+                cells.set(x, 90, z, FakeCells.STONE); // upper level (just below the ceiling)
+                cells.set(x, 40, z, FakeCells.STONE); // lower level
             }
         }
         cells.openSkyYOverride(200);
@@ -212,15 +212,15 @@ class LiveCoarseSamplerTest {
         CoarseMap map = LiveCoarseSampler.sample(cells, bounds);
 
         assertEquals(2, map.floorCount(0, 0));
-        assertEquals(40, map.heightAtFloor(0, 0, 0), "床は高さ昇順");
+        assertEquals(40, map.heightAtFloor(0, 0, 0), "Floors are in ascending height order");
         assertEquals(90, map.heightAtFloor(0, 0, 1));
         assertEquals(CoarseMap.LAND, map.kindAtFloor(0, 0, 0));
         assertEquals(CoarseMap.LAND, map.kindAtFloor(0, 0, 1));
     }
 
     /**
-     * 片方の階が溶岩の海、もう片方が普通の陸のケース。層1が段階4以降で溶岩の海と
-     * 別の階層を正しく区別できるかは、そもそも両方が床として残っているかにかかっている。
+     * A case where one level is a lava sea and the other is ordinary land. Whether layer 1 can correctly tell the lava sea
+     * apart from another level from stage 4 onward depends on both being kept as floors in the first place.
      */
     @Test
     void capturesALavaFloorBelowALandFloor() {
@@ -243,7 +243,7 @@ class LiveCoarseSamplerTest {
         assertEquals(70, map.heightAtFloor(0, 0, 1));
     }
 
-    /** 地上・ジ・エンドと同じ「1列1床」の場合、床数は常に1に収まる（回帰防止）。 */
+    /** In the "one floor per column" case, as in the Overworld and the End, the floor count always stays at 1 (regression guard). */
     @Test
     void aSingleFloorColumnStillProducesExactlyOneFloor() {
         SearchBounds bounds = new SearchBounds(0, 50, 0, 15, 80, 15);
@@ -267,55 +267,55 @@ class LiveCoarseSamplerTest {
         CoarseMap map = LiveCoarseSampler.sample(cells, bounds);
 
         assertEquals(0, map.knownCells());
-        assertEquals(0, map.floorCount(0, 0), "データが無いセルは床を1つも持たない");
+        assertEquals(0, map.floorCount(0, 0), "A cell with no data has no floors at all");
     }
 
     /**
-     * <b>ジ・エンドの奈落そのもの。</b>床が1つも無い列では{@code MOTION_BLOCKING}が空なので、
-     * {@code ChunkView#openSkyY}は<b>ワールド最低Y+1</b>を返す——つまり探索帯の<b>下端より下</b>。
+     * <b>The End void itself.</b> In columns with no floor at all, {@code MOTION_BLOCKING} is empty, so
+     * {@code ChunkView#openSkyY} returns <b>the world's minimum Y+1</b>, i.e. <b>below the bottom</b> of the search band.
      *
-     * <p>走査の上端をそこから取ると`top < bottom`で<b>ループ本体が一度も実行されない</b>。
-     * 実機ログ（the_end、2026-08-27）で`既知セル=51/154`にしかならなかったのがこれで、
-     * 奈落の判定がエンドで一度も発火していなかった。
+     * <p>Taking the top of the scan from there gives `top < bottom`, so <b>the loop body never runs</b>.
+     * This is why the in-game log (the_end, 2026-08-27) only reached `known cells=51/154`,
+     * and void detection never fired once in the End.
      */
     @Test
     void detectsVoidWhenTheHeightmapIsBelowTheSearchBand() {
-        // プレイヤーはY=57、探索帯はY±32。奈落の列はMOTION_BLOCKINGが空なのでopenSkyY=1になる
+        // The player is at Y=57 and the search band is Y±32. Void columns have an empty MOTION_BLOCKING, so openSkyY=1
         SearchBounds bounds = new SearchBounds(0, 25, 0, 15, 89, 15);
         FakeCells cells = FakeCells.empty(bounds).fillWith(FakeCells.AIR).openSkyYOverride(1);
 
         CoarseMap map = LiveCoarseSampler.sample(cells, bounds);
 
         assertEquals(1, map.floorCount(0, 0),
-                "エンドの奈落が未知のままだと、層1が最安の通り道として突っ切る");
+                "If the End void stays unknown, layer 1 cuts straight through it as the cheapest path");
         assertEquals(CoarseMap.VOID, map.kindAtFloor(0, 0, 0));
     }
 
     /**
-     * <b>床0には3通りの意味がある。</b>空気しか無かった（奈落）・上から下まで固体だった（岩の内部）・
-     * 未ロードで読めなかった（分からない）。奈落だけが{@link CoarseMap#VOID}で、他の2つは未知のまま。
+     * <b>Floor count 0 has three meanings.</b> Only air (void), solid from top to bottom (inside rock), and
+     * unloaded and unreadable (unknown). Only the void is {@link CoarseMap#VOID}; the other two stay unknown.
      *
-     * <p>奈落を未知に倒すと、層1が未知セルの安さ（陸の1.6倍）でジ・エンドの島間をまっすぐ
-     * 突っ切る。しかも{@code CoarseRouter#calibratedUnknownMultiplier}は既知の奈落比から未知の
-     * 値段を上げる仕組みなので、奈落が未知へ倒れると<b>その較正の材料まで同時に消える</b>
-     * （安い未知が増え、上げる根拠が減る）。逆に岩や未ロードを奈落に倒すと、渡れるはずのない
-     * 所へ橋を架ける経路が出る。
+     * <p>Collapsing the void into unknown makes layer 1 cut straight between End islands at the cheap unknown-cell cost
+     * (1.6x land). Moreover, {@code CoarseRouter#calibratedUnknownMultiplier} raises the unknown cost from the
+     * known void ratio, so when the void collapses into unknown, <b>the material for that calibration disappears at the same time</b>
+     * (cheap unknowns increase while the grounds for raising them decrease). Conversely, collapsing rock or unloaded cells into void
+     * produces routes that build bridges where crossing should be impossible.
      */
     @Test
     void tellsVoidApartFromRockAndFromUnloaded() {
         SearchBounds bounds = new SearchBounds(0, 50, 0, 15, 80, 15);
 
         CoarseMap air = LiveCoarseSampler.sample(FakeCells.empty(bounds).fillWith(FakeCells.AIR), bounds);
-        assertEquals(1, air.floorCount(0, 0), "空気だけの列は「床が無い」と分かっている");
+        assertEquals(1, air.floorCount(0, 0), "An air-only column is known to have 'no floor'");
         assertEquals(CoarseMap.VOID, air.kindAtFloor(0, 0, 0));
         assertEquals(CoarseMap.UNKNOWN_HEIGHT, air.heightAtFloor(0, 0, 0),
-                "奈落に代表高さは無い。具体値を入れると層2・層3がそこを目指す");
+                "The void has no representative height. Putting a concrete value there makes layers 2 and 3 aim for it");
 
         CoarseMap rock = LiveCoarseSampler.sample(FakeCells.empty(bounds).fillWith(FakeCells.STONE), bounds);
-        assertEquals(0, rock.floorCount(0, 0), "岩で詰まった列は奈落ではない");
+        assertEquals(0, rock.floorCount(0, 0), "A column packed with rock is not void");
 
         CoarseMap unloaded =
                 LiveCoarseSampler.sample(FakeCells.empty(bounds).fillWith(FakeCells.ABSENT), bounds);
-        assertEquals(0, unloaded.floorCount(0, 0), "未ロードは「床が無い」と言い切れない");
+        assertEquals(0, unloaded.floorCount(0, 0), "Unloaded cannot be declared as having 'no floor'");
     }
 }

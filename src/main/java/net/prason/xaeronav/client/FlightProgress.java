@@ -7,24 +7,24 @@ import net.prason.xaeronav.pathfinding.flight.FlightRoute;
 import net.prason.xaeronav.util.MathSupport;
 
 /**
- * 「いま空中経路のどこにいるか」を1tickに1度だけ求めて共有する（歩行の{@link PathProgress}と同じ役目）。
+ * Computes "where on the aerial route am I now" once per tick and shares it (the same role as walking's {@link PathProgress}).
  *
- * <p><b>点ではなく線分への距離で測る</b>のが歩行との決定的な違い。歩行のステップは1ブロック刻みなので
- * 最寄りの点までの距離がそのまま経路までの距離になるが、空中経路は平滑化した後の折れ線で、頂点どうしが
- * 数十ブロック離れる。点で測ると、線の上をぴったり飛んでいても「20ブロック外れている」ことになり、
- * 広い許容を設けた意味がまるごと消える。
+ * <p>The decisive difference from walking is that <b>it measures distance to segments, not points</b>. Walking steps are
+ * one block apart, so the distance to the nearest point is the distance to the path, but an aerial route is a smoothed
+ * polyline whose vertices are tens of blocks apart. Measured against points, even flying exactly along the line would
+ * count as "20 blocks off", completely defeating the purpose of having a wide tolerance.
  *
- * <p>ずれは水平と垂直に分けて持つ。エリトラの上下のぶれは水平より大きいので、同じ幅で縛ると
- * 高度が数ブロック違うだけで引き直しが走り続ける。
+ * <p>The deviation is kept separately for horizontal and vertical. Elytra wobble more vertically than horizontally, so
+ * bounding both with the same width would keep triggering replans just for being a few blocks off in altitude.
  */
 final class FlightProgress {
 
     static final FlightProgress INSTANCE = new FlightProgress();
 
-    /** 垂直のずれを水平の何倍まで許すか。 */
+    /** How many times the horizontal tolerance the vertical deviation may be. */
     static final double VERTICAL_TOLERANCE_FACTOR = 1.5;
 
-    /** 直前の区間の周りだけを見る幅（区間数）。経路が自分の近くへ戻ってくる地形で遠くへ飛ばないため。 */
+    /** Width (in segments) around the previous segment that's looked at. So it doesn't jump far away in terrain where the route comes back near itself. */
     private static final int WINDOW_AHEAD = 4;
     private static final int WINDOW_BEHIND = 1;
 
@@ -53,7 +53,7 @@ final class FlightProgress {
         int from = Math.max(0, segment - WINDOW_BEHIND);
         int to = Math.min(last, segment + WINDOW_AHEAD);
         int best = nearest(points, position, from, to);
-        // 窓の中がどれも遠いなら、そもそも別の場所を飛んでいる。全体から取り直す
+        // If everything in the window is far, we're flying somewhere else entirely. Search the whole route again
         if (offsetOf(points, best, position).lengthSqr() > FULL_SCAN_DISTANCE * FULL_SCAN_DISTANCE) {
             best = nearest(points, position, 0, last);
         }
@@ -63,16 +63,16 @@ final class FlightProgress {
         vertical = Math.abs(offset.y);
     }
 
-    /** 窓の中に近い区間が無ければ全体を探し直す境界（ブロック）。 */
+    /** Threshold (blocks) beyond which, if no segment in the window is close, the whole route is searched again. */
     private static final double FULL_SCAN_DISTANCE = 48.0;
 
     /**
-     * 末尾に区間を継ぎ足しただけの経路へ、対応づけをそのまま引き継ぐ。継ぎ足しは手前の点の
-     * 添字を変えないので、いま指している区間はそのまま通用する。
+     * Carries the mapping over as-is to a route that only had segments appended at the end. Appending doesn't change
+     * the indices of earlier points, so the segment currently pointed at remains valid.
      *
-     * <p>これを呼ばずに新しい{@link FlightRoute}を渡すと、{@link #update}が別経路とみなして
-     * 添字を0に戻す。点線の切り詰めがその添字を使っているので、伸ばした瞬間だけ通過済みの区間が
-     * 描き直される（歩行の{@code PathProgress.carryOver}と同じ理由）。
+     * <p>Passing a new {@link FlightRoute} without calling this makes {@link #update} treat it as a different route and
+     * reset the index to 0. Trimming the dotted line uses that index, so at the moment of extending, already-passed
+     * segments would be redrawn (same reason as walking's {@code PathProgress.carryOver}).
      */
     void carryOver(FlightRoute extended) {
         if (source == null) {
@@ -81,11 +81,11 @@ final class FlightProgress {
         source = extended;
     }
 
-    /** {@code route}に対応づけ済みの区間。違う経路なら先頭。 */
+    /** The segment mapped for {@code route}. The first one if it's a different route. */
     /**
-     * プレイヤーに最も近い、経路の上の点（いる区間への射影）。線をここから描けば、線は経路に固定されたまま
-     * 自分の真横から始まる——プレイヤーの位置から描くと、線の手前が体に付いて動き、経路そのものが
-     * 揺れて見える。対応づけがまだ無ければ{@code null}。
+     * The point on the route closest to the player (the projection onto the current segment). Drawing the line from
+     * here keeps it fixed to the route while starting right beside you; drawing from the player's position makes the
+     * near end of the line stick to the body and move, so the route itself appears to wobble. {@code null} if there's no mapping yet.
      */
     Vec3 nearestOnRoute(FlightRoute route, Vec3 position) {
         if (route != source || route.points().size() < 2) {
@@ -98,19 +98,19 @@ final class FlightProgress {
         return route == source ? segment : 0;
     }
 
-    /** 直近に測った経路までの水平のずれ（ブロック）。 */
+    /** The most recently measured horizontal deviation from the route (blocks). */
     double horizontalOffset() {
         return horizontal;
     }
 
-    /** 直近に測った経路までの垂直のずれ（ブロック）。 */
+    /** The most recently measured vertical deviation from the route (blocks). */
     double verticalOffset() {
         return vertical;
     }
 
     /**
-     * 許容の外へ出たか。球ではなく<b>楕円体</b>で見る——垂直だけを別々の閾値で比べると、
-     * 水平にも垂直にも中途半端にずれている状態がどちらの判定にも掛からずに素通りする。
+     * Whether the player is outside the tolerance. Checked as an <b>ellipsoid</b>, not a sphere: comparing horizontal and
+     * vertical against separate thresholds lets a state that's moderately off both horizontally and vertically slip past both checks.
      */
     boolean deviated(double horizontalThreshold) {
         if (horizontal == Double.MAX_VALUE) {
@@ -135,7 +135,7 @@ final class FlightProgress {
         return best;
     }
 
-    /** 区間{@code index}上の最寄り点から見たプレイヤーの位置。 */
+    /** The player's position as seen from the nearest point on segment {@code index}. */
     private static Vec3 offsetOf(List<Vec3> points, int index, Vec3 position) {
         Vec3 from = points.get(index);
         Vec3 to = points.get(index + 1);

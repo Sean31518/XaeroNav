@@ -16,15 +16,15 @@ import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * 測定用プローブ（アサート無し）。実機run#2（2026-09-09）の停止地点から単発A\*を撃って、
- * 何手・どの向きへ出るかを print する。
+ * Measurement probe (no assertions). Fires a single A\* from the stop points of real-game run #2 (2026-09-09)
+ * and prints how many moves it makes and in which direction.
  *
- * <p>分かったこと（[[xaeronav-nether-3d-realmap-failure]] の「3回目のセッション」）:
+ * <p>Findings ("third session" in [[xaeronav-nether-3d-realmap-failure]]):
  * <ul>
- *   <li>{@code (-341,24,601)} は溶岩の柱の中で後継ゼロ＝EXHAUSTED 展開=1。A\*は正しい。</li>
- *   <li>{@code (-323,34,520)} の実機の「ステップ=0」は<b>オフラインでは再現しない</b>——
- *       ここは w=1.5 でも30手・目的地方向へ30ブロック出る。</li>
- *   <li>この地形は溶岩の大洋。溶岩際の床を割増する fix は貪欲重みで悪化した。</li>
+ *   <li>{@code (-341,24,601)} is inside a lava pillar with zero successors = EXHAUSTED, expanded=1. A\* is correct.</li>
+ *   <li>The real game's "steps=0" at {@code (-323,34,520)} <b>doesn't reproduce offline</b>:
+ *       here even w=1.5 makes 30 moves, 30 blocks toward the destination.</li>
+ *   <li>This terrain is a lava ocean. A fix surcharging floors at the lava's edge got worse with the greedy weight.</li>
  * </ul>
  */
 @Tag("slow")
@@ -52,7 +52,7 @@ class NetherBasinStallProbeTest {
                     .search(from, GOAL, () -> false, 0);
             BlockPos end = r.steps().isEmpty() ? from : r.steps().get(r.steps().size() - 1).pos();
             System.out.printf(Locale.ROOT,
-                    "%-26s w=%.1f -> %s 展開=%d ステップ=%d 末端=%s guide.est=%.0f%n",
+                    "%-26s w=%.1f -> %s expanded=%d steps=%d end=%s guide.est=%.0f%n",
                     label, weight, r.termination(), r.expandedNodes(), r.steps().size(),
                     end.toShortString(),
                     guide.estimate(from.getX(), from.getY(), from.getZ()));
@@ -72,12 +72,12 @@ class NetherBasinStallProbeTest {
         FakeCells cells = terrain();
         VoxelCostToGo original = thinGuide(cells, START, GOAL);
 
-        probe("y64 始点(正常確認)", cells, original, START);
-        probe("y34 (-323,520) 元ガイド", cells, original, new BlockPos(-323, 34, 520));
-        probe("y24 (-341,601) 元ガイド", cells, original, new BlockPos(-341, 24, 601));
+        probe("y64 start (sanity check)", cells, original, START);
+        probe("y34 (-323,520) original guide", cells, original, new BlockPos(-323, 34, 520));
+        probe("y24 (-341,601) original guide", cells, original, new BlockPos(-341, 24, 601));
 
-        // 実機は詰まると player を中心に組み直す
+        // When stuck, the real game rebuilds centered on the player
         VoxelCostToGo rebuilt = thinGuide(cells, new BlockPos(-323, 34, 520), GOAL);
-        probe("y34 (-323,520) 再組み", cells, rebuilt, new BlockPos(-323, 34, 520));
+        probe("y34 (-323,520) rebuilt", cells, rebuilt, new BlockPos(-323, 34, 520));
     }
 }

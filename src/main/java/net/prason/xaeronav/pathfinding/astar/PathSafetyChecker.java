@@ -10,9 +10,9 @@ import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * コスト計算はあくまで事前見積もりなので、経路を提示する直前に
- * 掘削区間の安全性を再チェックする（溶岩隣接・水の流入・深い縦穴への露出）。
- * A*の探索コストには影響させず、結果に対する事後アノテーションとして分離する。
+ * Cost calculation is only an advance estimate, so right before presenting a route
+ * the safety of dig stretches is re-checked (adjacent lava, water inflow, exposure to deep shafts).
+ * This does not affect A*'s search cost; it is kept separate as a post-hoc annotation on the result.
  */
 public final class PathSafetyChecker {
 
@@ -20,22 +20,23 @@ public final class PathSafetyChecker {
     private static final Direction[] DIRECTIONS = Direction.values();
 
     /**
-     * 設置区間の足元を溶岩まで見通す走査深さ。{@code AStarPathfinder#COLUMN_SCAN_DEPTH}と揃える——
-     * ここが浅いと、開けた空洞（ネザーの3D迷路）の遥か下が溶岩でも「足元は空気」としか見えず、
-     * 隣接判定（{@link #hasAdjacent}、足元1マス下しか見ない）をすり抜けて警告色が付かない。
+     * Scan depth for looking through to lava beneath a placement stretch. Kept in line with
+     * {@code AStarPathfinder#COLUMN_SCAN_DEPTH}: if this is shallow, lava far below an open cavern (the Nether's 3D maze)
+     * only looks like "air underfoot", slips past the adjacency check ({@link #hasAdjacent}, which only looks 1 cell
+     * below the feet), and gets no warning color.
      */
     private static final int BRIDGE_LAVA_SCAN_DEPTH = 128;
 
     /**
-     * 息継ぎなしで進んでよい水中の歩数。空気は{@code AIR_SUPPLY_TICKS}で尽き、そこからは1秒ごとに
-     * ダメージが入る。うつ伏せ泳ぎ（{@code SWIM_ONE_BLOCK}＝約5.6tick）なら約54マス、疾走しない
-     * 泳ぎ（約12.5tick）なら約24マス。
+     * Number of underwater steps allowed without a breath. Air runs out after {@code AIR_SUPPLY_TICKS}, and from then on
+     * damage is dealt every second. Prone swimming ({@code SWIM_ONE_BLOCK} = about 5.6 ticks) covers about 54 cells,
+     * swimming without sprinting (about 12.5 ticks) about 24 cells.
      *
-     * <p>{@code CellSource#maxSubmergedTicks}（既定250tick）より手前に置いてあるのは、
-     * こちらが<b>警告</b>だから。あちらが移動時間で数える（採掘の重さが効く）のに対し、
-     * こちらは歩数で数える粗い目安に留める。上限のほうは移動を生成しない硬い線で、
-     * 超える潜水は詰み回避のフォールバックでしか現れない——その区間には必ず色が付く一方、
-     * 上限の内側でも潜り始めに空気が満タンとは限らないので、手前から注意を出す。
+     * <p>It sits short of {@code CellSource#maxSubmergedTicks} (default 250 ticks) because this is a <b>warning</b>.
+     * That one counts in movement time (so heavy digging matters), while this stays a rough measure counted in steps.
+     * The limit is a hard line beyond which no moves are generated, and dives exceeding it only appear in the
+     * anti-stuck fallback. Those stretches always get a color, but even inside the limit your air is not necessarily
+     * full when you start diving, so the warning starts earlier.
      */
     private static final int SUBMERGED_STEP_LIMIT = 20;
 
@@ -52,7 +53,7 @@ public final class PathSafetyChecker {
             if (risk == PathRisk.NONE && drowning[i]) {
                 risk = PathRisk.DROWNING;
             }
-            // 大半の区間は危険なし＝入力のまま。作り直す必要があるものだけ差し替える
+            // Most stretches have no hazard = left as input. Only the ones that need rebuilding are replaced
             annotated.add(risk == step.risk() ? step
                     : new PathStep(step.pos(), step.movement(), step.cost(), step.bodyCells(), step.digCells(),
                             risk, step.placedBlockPos()));
@@ -62,10 +63,11 @@ public final class PathSafetyChecker {
     }
 
     /**
-     * 頭まで水に浸かったまま{@link #SUBMERGED_STEP_LIMIT}歩を超えて続く区間に印を付ける。
+     * Marks stretches that continue fully submerged for more than {@link #SUBMERGED_STEP_LIMIT} steps.
      *
-     * <p>1歩ずつ見ても分からない危険なので、連続する潜水区間の長さで判定する。短い潜水は
-     * 息継ぎで足りるし、水面を泳ぐ区間（足は水中でも頭は水面上）はいくら長くても溺れない。
+     * <p>A hazard you cannot see one step at a time, so it is judged by the length of consecutive submerged stretches.
+     * Short dives are fine with a breath, and swimming on the surface (feet underwater but head above) never drowns
+     * however long it is.
      */
     private static boolean[] drowningRuns(CellSource view, List<PathStep> steps) {
         boolean[] flagged = new boolean[steps.size()];
@@ -94,22 +96,22 @@ public final class PathSafetyChecker {
 
     private static PathRisk assessRisk(CellSource view, PathStep step) {
         if (step.bridging()) {
-            // 置いた足場は渡っている間ずっと身体の真下にある。1マスの溝の上を渡るだけなら警告は要らないが、
-            // 溶岩の上と底の無い空虚の上では、足場を1つ外した結末が死になる。
-            // 隣接だけでなく、開けた空洞の遥か下が溶岩の場合も見る
-            // （AStarPathfinder#addBridgeが同じ判定でペナルティと上限を決めているのと対になる）
+            // A placed block stays directly under your body the whole time you cross it. Crossing a 1-cell gap needs no warning,
+            // but over lava or a bottomless void, missing one block ends in death.
+            // Look not only at adjacency but also at lava far below an open cavern
+            // (the counterpart of AStarPathfinder#addBridge using the same check to set its penalty and limit)
             if (hasAdjacent(view, step.placedBlockPos(), CellData::lava)) {
                 return PathRisk.LAVA_ADJACENT;
             }
             return switch (footingUnder(view, step.placedBlockPos())) {
                 case LAVA -> PathRisk.LAVA_ADJACENT;
-                // 致死落差は奈落と同じ扱い。床が在るかどうかではなく「外したら死ぬか」が警告の基準
+                // A lethal drop is treated the same as the void. The warning criterion is "does missing it kill you", not whether a floor exists
                 case VOID, FATAL_DROP -> PathRisk.VOID_BELOW;
                 case GROUND -> PathRisk.NONE;
             };
         }
         if (CellData.sneakRequired(view.cell(step.pos().getX(), step.pos().getY() - 1, step.pos().getZ()))) {
-            // 足元がマグマブロック。通行可にした以上、スニークが要ることを伝えないと案内として不完全
+                // Magma block underfoot. Having made it passable, guidance is incomplete unless it says sneaking is needed
             return PathRisk.SNEAK_OVER_MAGMA;
         }
         if (step.movement() == MovementType.FALL_DAMAGE) {
@@ -119,8 +121,8 @@ public final class PathSafetyChecker {
             return PathRisk.MLG_REQUIRED;
         }
         if (step.movement() == MovementType.JUMP) {
-            // 跳ぶ区間は、失敗したときに落ちる先が問題になる。溶岩なら即死、深い縦穴なら大怪我なので、
-            // 掘削区間と同じように色を変えて「ここは落ちたら終わり」と分かるようにする
+            // For jump stretches, what matters is where you land if it fails. Lava is instant death, a deep shaft a serious injury,
+            // so change the color like dig stretches to show "falling here is the end"
             return assessJumpRisk(view, step.bodyCells());
         }
         return step.digging() ? assessDigRisk(view, step.digCells()) : PathRisk.NONE;
@@ -141,9 +143,9 @@ public final class PathSafetyChecker {
     }
 
     /**
-     * 到着地点だけでなく、この移動で掘る全セル（例: Traverseならbody上下2マス、Descendなら3マス、
-     * さらに頭上の落下ブロック連鎖）をチェックする。到着地点1マスだけを見ると、頭上側だけが
-     * 溶岩隣接、といったケースを見逃す。
+     * Checks not only the arrival cell but every cell dug by this move (e.g. the 2 cells above/below the body for a
+     * Traverse, 3 cells for a Descend, plus any falling-block chain overhead). Looking only at the single arrival cell
+     * misses cases where only the overhead side is next to lava.
      */
     private static PathRisk assessDigRisk(CellSource view, List<BlockPos> digCells) {
         for (BlockPos cell : digCells) {
@@ -174,29 +176,29 @@ public final class PathSafetyChecker {
         return false;
     }
 
-    /** 置いた足場を外したときに落ちる先。 */
+    /** Where you fall if you miss a placed block. */
     private enum Footing {
-        /** 遠くても構わず溶岩が見通せる。 */
+        /** Lava is visible below, however far. */
         LAVA,
-        /** 読めるセルだけを辿って何にも当たらなかった＝底が無い。 */
+        /** Following only readable cells hit nothing = no bottom. */
         VOID,
         /**
-         * 床は在るが、そこまでの落差が{@link CellSource#fatalFallBlocks()}以上＝外せば死ぬ。
-         * 「床が在るか」ではなく「外したときに死ぬか」が警告の基準なので、{@link #VOID}と同じ扱い。
+         * There is a floor, but the drop to it is at least {@link CellSource#fatalFallBlocks()} = missing it kills you.
+         * The warning criterion is "does missing it kill you", not "is there a floor", so it is treated like {@link #VOID}.
          */
         FATAL_DROP,
-        /** 溶岩でも空虚でもない、落ちても助かりうる床。読めなかった場合もここへ倒す。 */
+        /** A floor that is neither lava nor void, where a fall may be survivable. Also falls back to this when unreadable. */
         GROUND
     }
 
     /**
-     * この座標の真下に何があるか。空気が続く間だけ下へ辿る。
+     * What lies directly below this coordinate. Follows downward only while there is air.
      *
-     * <p>判定は{@code AStarPathfinder#addBridge}が上限とペナルティを決めるのに使う分類と揃えてある。
-     * ここが食い違うと、探索が架けた橋に警告色が付かない（あるいは付きすぎる）。
-     * 未ロードチャンクで走査が止まった場合だけは{@link Footing#GROUND}へ倒す——探索側はその橋を
-     * そもそも作らないので、ここへ来るのは「経路を作った後にチャンクが外れた」場合だけで、
-     * 分からないことを危険として描くと経路全体が警告色で埋まる。
+     * <p>The classification matches what {@code AStarPathfinder#addBridge} uses to set its limit and penalty.
+     * If they disagree, bridges the search built get no warning color (or too much of it).
+     * Only when the scan stops at an unloaded chunk does it fall back to {@link Footing#GROUND}: the search never builds
+     * such a bridge in the first place, so this is reached only when "a chunk unloaded after the route was built", and
+     * drawing the unknown as dangerous would fill the whole route with warning colors.
      */
     private static Footing footingUnder(CellSource view, BlockPos pos) {
         for (int depth = 1; depth <= BRIDGE_LAVA_SCAN_DEPTH; depth++) {
@@ -207,11 +209,11 @@ public final class PathSafetyChecker {
             }
             if (CellData.present(cell)) {
                 if (CellData.water(cell)) {
-                    // 着水はバニラが落下距離をリセットするので、どれだけ落ちても死なない
+                    // Landing in water resets fall distance in vanilla, so no fall height is fatal
                     return Footing.GROUND;
                 }
                 if (!CellData.passableEmpty(cell)) {
-                    // 床は在る。あとは<b>何マス下か</b>——致死落差なら足場を外した結末は奈落と同じ
+                    // There is a floor. What remains is <b>how many cells down</b>: if it is a lethal drop, missing the block ends the same as the void
                     return depth >= view.fatalFallBlocks() ? Footing.FATAL_DROP : Footing.GROUND;
                 }
                 continue;
@@ -223,8 +225,8 @@ public final class PathSafetyChecker {
 
     private static boolean isVoidBelow(CellSource view, BlockPos pos) {
         for (int depth = 1; depth <= VOID_SCAN_DEPTH; depth++) {
-            // 見るのは本当の空虚だけ。水も梯子も落下を止めてくれるので、
-            // occupiableWithoutDiggingで見ると水面の上を掘るたびに「下は奈落」と言い出す
+            // Only true void counts. Water and ladders also stop a fall, so
+            // checking with occupiableWithoutDigging would claim "void below" every time we dig above a water surface
             if (!CellData.passableEmpty(view.cell(pos.getX(), pos.getY() - depth, pos.getZ()))) {
                 return false;
             }

@@ -6,20 +6,21 @@ import net.minecraft.world.phys.Vec3;
 import net.prason.xaeronav.pathfinding.astar.PathResult;
 
 /**
- * 空中経路。始点を含む折れ線。
+ * An aerial route. A polyline that includes the start point.
  *
- * <p>歩行の{@code PathResult}とは別の型にしてある。{@code PathStep}は掘削セル・身体セル・
- * 遊泳・登坂・橋といった<b>足場のある移動</b>の概念でできていて、空中経路にはその1つも無い。
- * 無理に共有すると{@code PathValidator}（床が残っているかを見る）や{@code PathGeometry}
- * （危険と作業で色を決める）がどれも飛行では意味を成さなくなる。
+ * <p>Kept as a separate type from walking's {@code PathResult}. {@code PathStep} is built from concepts of
+ * <b>movement with footing</b>, such as dig cells, body cells, swimming, climbing, and bridges, and an aerial route
+ * has none of them. Forcing them to share would make {@code PathValidator} (which checks that the floor is still
+ * there) and {@code PathGeometry} (which picks colors by danger and work) meaningless for flight.
  *
- * @param points      折れ線の頂点。先頭は<b>計算した時点</b>のプレイヤー位置なので、描画側は
- *                    そこを捨てて今の位置から引き直すこと
- * @param termination 探索が終わった理由。歩行側と同じ区別（予算切れと「範囲内に道が無い」）が
- *                    そのまま要るので enum を共有する
- * @param expandedNodes 展開したセル数。診断コマンド用
- * @param cellBlocks  この経路を解いた格子の一辺（ブロック）。<b>設定値ではなく実際に使われた値</b>——
- *                    エスカレーションで細かい格子に落ちていれば、線の周りの余白もその分狭い
+ * @param points      the polyline's vertices. The first is the player position <b>at the time of computation</b>,
+ *                    so the renderer should drop it and redraw from the current position
+ * @param termination why the search ended. The same distinction as walking (out of budget vs. "no path within
+ *                    range") is needed as-is, so the enum is shared
+ * @param expandedNodes number of cells expanded. For the diagnostic command
+ * @param cellBlocks  edge length (blocks) of the grid that solved this route. <b>The value actually used, not the
+ *                    configured one</b>: if escalation fell back to a finer grid, the margin around the line is
+ *                    correspondingly narrower
  */
 public record FlightRoute(List<Vec3> points, PathResult.Termination termination, int expandedNodes,
                            int cellBlocks) {
@@ -35,14 +36,14 @@ public record FlightRoute(List<Vec3> points, PathResult.Termination termination,
         return points.size() < 2;
     }
 
-    /** 狙った先まで届いたか。届いていなければ末端の先は点線が引き受ける。 */
+    /** Whether it reached the target. If not, the dotted line takes over beyond the end. */
     public boolean complete() {
         return termination == PathResult.Termination.REACHED_GOAL;
     }
 
     /**
-     * 探索資源（ノード数・時間）を使い切って打ち切ったか。歩行の{@code PathResult#budgetExhausted}と
-     * 同じ判定で、細かい格子への解き直しが無駄になるのはこのとき。
+     * Whether it was cut off after using up search resources (nodes, time). The same check as walking's
+     * {@code PathResult#budgetExhausted}; this is when re-solving on a finer grid is wasted effort.
      */
     public boolean budgetExhausted() {
         return termination == PathResult.Termination.NODE_BUDGET
@@ -50,10 +51,10 @@ public record FlightRoute(List<Vec3> points, PathResult.Termination termination,
     }
 
     /**
-     * この経路の末端から続く{@code extension}を繋いだ新しい経路。
+     * A new route that attaches {@code extension}, which continues from this route's end.
      *
-     * <p>手前の点の添字は変わらない——{@code FlightProgress}の対応づけをそのまま引き継げるのは
-     * そのため。{@code extension}の先頭はこちらの末端と同じ点なので落とす。
+     * <p>The indices of the earlier points don't change, which is why {@code FlightProgress}'s mapping can be carried
+     * over as-is. The first point of {@code extension} is the same as this route's end, so it's dropped.
      */
     public FlightRoute append(FlightRoute extension) {
         if (extension.points().size() < 2) {
@@ -65,7 +66,7 @@ public record FlightRoute(List<Vec3> points, PathResult.Termination termination,
                 expandedNodes + extension.expandedNodes(), cellBlocks);
     }
 
-    /** 折れ線の末端。空なら{@code null}。 */
+    /** The end of the polyline. {@code null} if empty. */
     public Vec3 tail() {
         return points.isEmpty() ? null : points.get(points.size() - 1);
     }

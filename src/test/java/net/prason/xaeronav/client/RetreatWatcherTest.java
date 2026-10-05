@@ -24,7 +24,7 @@ class RetreatWatcherTest {
     void staysQuietWhileApproaching() {
         RetreatWatcher watcher = new RetreatWatcher();
         for (int distance = 400; distance >= 100; distance -= 20) {
-            assertNull(watcher.observe(northOf(distance), GOAL), "近づいている間は黙る: " + distance);
+            assertNull(watcher.observe(northOf(distance), GOAL), "Stays quiet while getting closer: " + distance);
         }
     }
 
@@ -32,7 +32,7 @@ class RetreatWatcherTest {
     void staysQuietForAnOrdinaryDetour() {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(100), GOAL);
-        // 溶岩の海や奈落の縁を回る迂回は、目的地から遠ざかりながら正しく進んでいる
+        // Detours around the edge of a lava sea or the void are progressing correctly while moving away from the destination
         assertNull(watcher.observe(northOf(160), GOAL));
     }
 
@@ -53,7 +53,7 @@ class RetreatWatcherTest {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(100), GOAL);
         assertNotNull(watcher.observe(northOf(200), GOAL));
-        assertNull(watcher.observe(northOf(210), GOAL), "同じ後退を刻むほど細かく書かない");
+        assertNull(watcher.observe(northOf(210), GOAL), "Doesn't write so finely that it slices up the same retreat");
         assertNotNull(watcher.observe(northOf(240), GOAL));
     }
 
@@ -62,7 +62,7 @@ class RetreatWatcherTest {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(100), GOAL);
         assertNotNull(watcher.observe(northOf(200), GOAL));
-        // 引き返した先で近づき直したら、そこが新しい最接近になる
+        // Getting closer again after turning back makes that the new closest approach
         watcher.observe(northOf(50), GOAL);
         assertNull(watcher.observe(northOf(120), GOAL));
         RetreatWatcher.Retreat again = watcher.observe(northOf(140), GOAL);
@@ -75,14 +75,14 @@ class RetreatWatcherTest {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(100), GOAL);
         watcher.reset();
-        assertNull(watcher.observe(northOf(200), GOAL), "リセット後の最初の位置は最接近そのもの");
+        assertNull(watcher.observe(northOf(200), GOAL), "The first position after a reset is the closest approach itself");
     }
 
     @Test
     void acceptsAGuideThatEndsWithinAnOrdinaryDetour() {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(100), GOAL);
-        // 溶岩の海の縁を回る迂回は模型実測で最悪67ブロック。ここは通す
+        // Detours around the edge of a lava sea measured at worst 67 blocks on the model. Let this through
         assertFalse(watcher.leadsAway(List.of(northOf(167)), GOAL));
     }
 
@@ -90,13 +90,13 @@ class RetreatWatcherTest {
     void refusesAGuideThatEndsFurtherThanTheClosestApproach() {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(197), GOAL);
-        // 実機2026-09-19: 197ブロックの地点から、末端が277ブロックの経路を案内された
+        // In-game 2026-09-19: at 197 blocks away, it was guided along a route whose end was 277 blocks away
         assertTrue(watcher.leadsAway(List.of(northOf(277)), GOAL));
     }
 
     @Test
     void hasNoBarBeforeTheFirstObservation() {
-        // 基準が無いうちに弾くと、最初の1本が出なくなる
+        // Rejecting before there's a reference would stop the first route from appearing
         assertFalse(new RetreatWatcher().leadsAway(List.of(northOf(9999)), GOAL));
     }
 
@@ -106,14 +106,14 @@ class RetreatWatcherTest {
         watcher.observe(northOf(300), GOAL);
         assertFalse(watcher.leadsAway(List.of(northOf(370)), GOAL));
         watcher.observe(northOf(100), GOAL);
-        assertTrue(watcher.leadsAway(List.of(northOf(370)), GOAL), "近づいたら基準もそこへ動く");
+        assertTrue(watcher.leadsAway(List.of(northOf(370)), GOAL), "Getting closer moves the reference there too");
     }
 
     @Test
     void looksAtEveryPointOnTheGuideNotJustItsEnd() {
         RetreatWatcher watcher = new RetreatWatcher();
         watcher.observe(northOf(197), GOAL);
-        // 実機2026-09-19: 末端は252(帯の内側)だが、途中で277まで遠ざかる案内だった
+        // In-game 2026-09-19: the end was at 252 (inside the band), but the guidance moved away to 277 partway
         assertTrue(watcher.leadsAway(List.of(northOf(230), northOf(277), northOf(252)), GOAL));
     }
 }

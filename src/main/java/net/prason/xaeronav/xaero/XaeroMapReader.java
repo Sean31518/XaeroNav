@@ -27,96 +27,96 @@ import xaero.map.region.MapTileChunk;
 import xaero.map.region.Overlay;
 
 /**
- * Xaeroの世界地図が保存している地形から{@link CoarseMap}を作る。
+ * Builds a {@link CoarseMap} from the terrain saved by Xaero's world map.
  *
- * <p>これが読むのは「Xaeroの地図に描かれたことのある範囲」であって、いま読み込まれているチャンクではない。
- * だから読み込み済みチャンクの遥か外側——数千ブロック先の海や山——の地形が分かる。逆に、一度も
- * 訪れていない場所のデータは存在しない。
+ * <p>What this reads is "the area that has ever been drawn on Xaero's map", not the currently loaded chunks.
+ * So it knows the terrain far outside the loaded chunks, such as seas and mountains thousands of blocks away. Conversely,
+ * there's no data for places never visited.
  *
- * <p><b>スレッド契約:</b> メインスレッドから呼ぶこと。{@code getLeafMapRegion}は生成を伴う場合に
- * メインスレッドであることを自分で検査し、違反すると{@link IllegalAccessError}を投げる。ここでは
- * 生成を要求しない（{@code create=false}）が、Xaeroの書き込みスレッドと同じ構造を触るため、
- * 呼び出し自体をメインスレッドに寄せておく。
+ * <p><b>Thread contract:</b> call from the main thread. {@code getLeafMapRegion} checks for itself that it's on the main
+ * thread when creation is involved, and throws {@link IllegalAccessError} on violation. Creation isn't requested here
+ * ({@code create=false}), but since it touches the same structures as Xaero's writer thread,
+ * the calls themselves are kept on the main thread.
  *
- * <p>呼ぶ前に{@link XaeroPresence#mapPresent()}を確認すること。Xaero未導入の環境では
- * このクラスのロード自体が失敗する。
+ * <p>Check {@link XaeroPresence#mapPresent()} before calling. Without Xaero installed,
+ * loading this class itself fails.
  */
 public final class XaeroMapReader {
 
     /**
-     * 地表のレイヤー番号。洞窟レイヤーは「頭上の天井のY」を16で割った値が番号になるのに対し、
-     * 地表だけはこの番兵で表される（Xaeroはこの値のときだけ{@code caves/}以下を使わない）。
+     * The surface layer number. Cave layers are numbered by "the Y of the overhead ceiling" divided by 16,
+     * while only the surface is represented by this sentinel (Xaero skips {@code caves/} only for this value).
      */
     private static final int SURFACE_LAYER = Integer.MAX_VALUE;
 
-    /** 1リージョン＝32×32チャンク（512ブロック四方）。 */
+    /** 1 region = 32x32 chunks (512 blocks square). */
     private static final int CHUNKS_PER_REGION_SHIFT = 5;
 
-    /** 1タイル束＝4×4タイル。リージョンは8×8のタイル束を持つ。 */
+    /** 1 tile chunk = 4x4 tiles. A region holds 8x8 tile chunks. */
     private static final int TILE_CHUNKS_PER_REGION = 8;
     private static final int TILES_PER_TILE_CHUNK = 4;
 
     /**
-     * 1チャンク（＝1タイル、16×16ブロック）から何点を見るか。256点すべてを見ると、
-     * 数百チャンク四方を集めるだけでメインスレッドが数百ミリ秒止まる。海か陸かの判定に
-     * 必要なのは「そのチャンクの大まかな性格」なので、格子状に間引いて足りる。
+     * How many points to sample per chunk (= 1 tile, 16x16 blocks). Looking at all 256 points stalls the main thread for
+     * hundreds of milliseconds just to gather a few hundred chunks square. Deciding sea vs. land only needs
+     * "the rough character of that chunk", so thinning on a grid is enough.
      */
     private static final int SAMPLE_STEP = 4;
     private static final int SAMPLES_PER_TILE = (16 / SAMPLE_STEP) * (16 / SAMPLE_STEP);
 
     /**
-     * このセルを{@link CoarseMap#LAVA_MIXED}（通れるが高コスト）とみなすサンプル比率。
-     * これを下回る量の溶岩は、層2・層3が1マス単位で避けられる前提で無視する。
+     * Sample ratio at which this cell is considered {@link CoarseMap#LAVA_MIXED} (passable but expensive).
+     * Lava below this amount is ignored, on the premise that layers 2 and 3 can avoid it block by block.
      */
     private static final int LAVA_MIXED_NUMERATOR = 4;
 
     /**
-     * 一度に投げる読み込み要求の上限。要求はXaeroの読み込みスレッドの単一キューに積まれるので、
-     * 広い範囲を一気に頼むと地図表示そのものが待たされる。近い側から順に埋まれば
-     * 長距離ルートは引けるので、足りなければ次の呼び出しで続きを頼む。
+     * Cap on load requests issued at once. Requests pile into a single queue on Xaero's loader thread, so
+     * asking for a wide area at once makes the map display itself wait. Filling in from the near side is enough
+     * to draw a long-distance route, so if it's not enough, the rest is requested on the next call.
      */
     private static final int MAX_LOAD_REQUESTS = 64;
 
     /**
-     * 1回の読み取りで見る洞窟レイヤーの数の上限。参照Yに近い順に絞る。
+     * Cap on the number of cave layers looked at in one read. Narrowed in order of closeness to the reference Y.
      *
-     * <p><b>ネザーの高さ({@code 0..127})を{@link #CAVE_MODE_DEPTH}のスライスで刻むと8枚になる。
-     * ここを4枚にしていたせいで、歩ける階のレイヤーが丸ごと落ちていた。</b>実機（2026-09-07）:
-     * 始点y33・目的地y64で参照Yが48になり、選ばれたのはレイヤー4・3・5・2——歩けるクリムゾンの森
-     * (y65〜97)を持つレイヤー6が枠から外れた。落としたレイヤーは{@link #surveyRegions}・
-     * {@link #requestLoad}の対象にもならないので、<b>読み込み要求すら出ない</b>（未読み込み
-     * リージョンが0になっても「全部見えた」ことにならない）。結果、層1にはそのセルに溶岩の床しか
-     * 無いと「見えて」しまい、溶岩を避ける道が地図の上に存在しなくなる
-     * （{@code NetherCaveLayerSlabReproTest}）。
+     * <p><b>Slicing the Nether's height ({@code 0..127}) into {@link #CAVE_MODE_DEPTH} slices gives 8.
+     * Having this at 4 dropped the layers of walkable levels entirely.</b> Real game (2026-09-07):
+     * start y33 and destination y64 gave a reference Y of 48, and the chosen layers were 4, 3, 5, 2; layer 6, which holds
+     * the walkable crimson forest (y65-97), fell outside the cap. Dropped layers also aren't covered by {@link #surveyRegions}
+     * or {@link #requestLoad}, so <b>not even load requests are issued</b> (even when unloaded regions reach 0, it doesn't
+     * mean "everything is visible"). As a result, layer 1 "sees" only a lava floor in that cell, and no lava-avoiding
+     * path exists on the map
+     * ({@code NetherCaveLayerSlabReproTest}).
      *
-     * <p>読む枚数はメインスレッドの地図読みに直接効くが、読むのは<b>メモリに載っているタイルだけ</b>で、
-     * データの無いレイヤーはほぼ0コストで終わる。
+     * <p>The number of layers read directly affects main-thread map reading, but only <b>tiles in memory</b> are read,
+     * and layers with no data finish at almost zero cost.
      *
-     * <p><b>{@link CoarseMap#MAX_FLOORS}を超えてはいけない</b>（{@link #layersFor}の「合計を
-     * MAX_FLOORS以内に収めること」）。天井の無い次元では地表レイヤーが1枚を占めるので、
-     * ここは洞窟レイヤーの枠として{@code MAX_FLOORS}ちょうどに置く——地表を足す側は
-     * {@link #layersFor}が1枚ぶん枠を空ける。ネザーの高さを刻んだ8枚のうち2枚は落ちるが、
-     * 落ちるのは参照Yから最も遠い2枚で、実機の症例（参照Y=48でレイヤー6が落ちる）は入る。
+     * <p><b>Must not exceed {@link CoarseMap#MAX_FLOORS}</b> ({@link #layersFor}'s "keep the total within
+     * MAX_FLOORS"). In dimensions without a ceiling the surface layer takes one slot, so
+     * this is set to exactly {@code MAX_FLOORS} as the cave layer cap; on the side that adds the surface,
+     * {@link #layersFor} frees one slot. 2 of the 8 slices of the Nether's height are dropped, but
+     * the dropped ones are the 2 farthest from the reference Y, and the real-game case (layer 6 dropped at reference Y=48) is included.
      */
     private static final int MAX_CAVE_LAYERS = CoarseMap.MAX_FLOORS;
 
     /**
-     * 1つの洞窟レイヤーが持つスライスの厚さ（ブロック）。Xaeroの{@code CAVE_MODE_DEPTH}既定値で、
-     * {@code caveStart}からこのぶん下までしか記録されない。これより近い参照Yの差は
-     * ほぼ同じ地形しか見えないので、再挑戦の候補として意味がない。
+     * Thickness (blocks) of the slice one cave layer holds. Xaero's default {@code CAVE_MODE_DEPTH};
+     * only this far below {@code caveStart} is recorded. Reference Y differences smaller than this
+     * see almost the same terrain, so they're meaningless as retry candidates.
      */
     private static final int CAVE_MODE_DEPTH = 30;
 
     /**
-     * 天井の無い次元で洞窟レイヤーを読む範囲（参照Yからの距離、ブロック）。
+     * Range (distance from the reference Y, in blocks) of cave layers read in dimensions without a ceiling.
      *
-     * <p>1枚のレイヤーが持つのは{@code caveStart}から{@link #CAVE_MODE_DEPTH}下までのスライス
-     * だけなので、中心が丸ごと1スライスぶん離れたレイヤーは「今いる高さ帯とは別の地形」を
-     * 記述している。地上を移動しているときに深い洞窟のレイヤーまで読むのは、メインスレッドの
-     * 地図読み（ここが層1でいちばん重い）を増やすだけで案内は変わらない。
+     * <p>A layer only holds the slice from {@code caveStart} down to {@link #CAVE_MODE_DEPTH} below,
+     * so a layer whose center is a whole slice away describes "terrain other than the current height band".
+     * Reading deep cave layers while moving on the surface only increases main-thread map reading
+     * (the heaviest part of layer 1) without changing the guidance.
      *
-     * <p>天井のある次元には掛けない——ネザーはデータが洞窟レイヤーにしか無く、参照Yから
-     * 離れたレイヤーを落とすと読めるものが無くなる場面がある。
+     * <p>Not applied in dimensions with a ceiling: the Nether only has data in cave layers, and dropping layers far from
+     * the reference Y can leave nothing to read.
      */
     private static final int CAVE_LAYER_RELEVANCE_BLOCKS = CAVE_MODE_DEPTH;
 
@@ -124,27 +124,27 @@ public final class XaeroMapReader {
     }
 
     /**
-     * この範囲を読むときに見るべきレイヤー。参照Yに近い順に最大{@value #MAX_CAVE_LAYERS}枚。
+     * Layers to look at when reading this range. Up to {@value #MAX_CAVE_LAYERS}, in order of closeness to the reference Y.
      *
-     * <p>Xaeroの{@code CaveStartCalculator}は「頭上3×3の全列に不透明ブロックがあるか」で
-     * 洞窟レイヤーへ書くかを決める。<b>これは次元の性質ではなくその場の地形の性質</b>なので、
-     * 現世の洞窟にいるときも洞窟レイヤーに書かれている——ネザーだけの話ではない。
+     * <p>Xaero's {@code CaveStartCalculator} decides whether to write to cave layers by "whether every column of the 3x3
+     * overhead has an opaque block". <b>This is a property of the local terrain, not of the dimension</b>, so
+     * it writes to cave layers even while in Overworld caves; it isn't Nether-only.
      *
-     * <p>ネザーは頭上が必ず岩盤天井で塞がっているため常に洞窟側へ倒れ、地表レイヤーには何も
-     * 入らない。現世は<b>両方</b>に入る（地上を歩けば地表レイヤー、洞窟に潜れば洞窟レイヤー）ので、
-     * 地表レイヤーを必ず含めたうえで洞窟レイヤーを足す。
+     * <p>In the Nether the overhead is always blocked by the bedrock ceiling, so it always falls to the cave side and nothing
+     * goes into the surface layer. The Overworld writes to <b>both</b> (the surface layer when walking on the surface, cave layers
+     * when going into caves), so cave layers are added while always including the surface layer.
      *
-     * <p>ジ・エンドは頭上が開けているので{@code CaveStartCalculator}が地表側を返し、洞窟
-     * レイヤーには何も書かれない——{@code caveLayers}が空になって自然に地表だけへ落ちる。
-     * （{@code hasSkyLight()}で分けるとエンドを誤って洞窟側に倒すが、そもそも次元で分けない）
+     * <p>The End is open overhead, so {@code CaveStartCalculator} returns the surface side and nothing is written to cave
+     * layers; {@code caveLayers} becomes empty and it naturally falls back to the surface only.
+     * (Splitting by {@code hasSkyLight()} would wrongly put the End on the cave side, but we don't split by dimension at all)
      *
-     * <p><b>合計を{@link CoarseMap#MAX_FLOORS}以内に収めること。</b>{@code CoarseMapBuilder.putFloor}は
-     * 上限を超えたとき<b>最も高い床</b>を捨てる（呼び出し側が絞る前提の実装）。現世では地表の床が
-     * まさに最も高いので、地表＋洞窟レイヤーで上限を超えると地表が捨てられ、地上のナビが壊れる。
-     * {@link #MAX_CAVE_LAYERS}がその上限に等しいので、地表を足す側では洞窟の枠を1つ減らす。
+     * <p><b>Keep the total within {@link CoarseMap#MAX_FLOORS}.</b> {@code CoarseMapBuilder.putFloor}
+     * discards <b>the highest floor</b> when the cap is exceeded (implemented on the premise that the caller narrows it). In the Overworld the surface floor is
+     * exactly the highest, so if surface + cave layers exceed the cap the surface is discarded and surface navigation breaks.
+     * {@link #MAX_CAVE_LAYERS} equals that cap, so the side that adds the surface reduces the cave slots by one.
      *
-     * <p>レイヤー番号を{@code caveStart}の計算式から予測しないのは、{@code caveStart}が
-     * プレイヤーの頭上の地形次第で決まるため。実際にメモリに載っているものだけを見る。
+     * <p>Layer numbers aren't predicted from the {@code caveStart} formula, because {@code caveStart} is
+     * determined by the terrain above the player. Only what's actually in memory is looked at.
      */
     private static int[] layersFor(MapProcessor processor, int referenceY) {
         Level level = Minecraft.getInstance().level;
@@ -162,7 +162,7 @@ public final class XaeroMapReader {
             }
         }
         caveLayers.sort(Comparator.comparingInt(layer -> Math.abs(layerCenterY(layer) - referenceY)));
-        // 天井のある次元は地表レイヤーに何も入らないので枠を空けない。それ以外は地表を必ず残す
+        // Dimensions with a ceiling put nothing in the surface layer, so no slot is freed. Otherwise the surface is always kept
         int caveSlots = hasCeiling ? MAX_CAVE_LAYERS : MAX_CAVE_LAYERS - 1;
         int count = Math.min(caveLayers.size(), caveSlots);
         int[] layers = new int[hasCeiling ? count : count + 1];
@@ -177,11 +177,11 @@ public final class XaeroMapReader {
     }
 
     /**
-     * レイヤー番号が代表するY。{@code caveLayer == caveStart >> 4}の逆算だが、{@code caveStart}は
-     * スライスの<b>上端</b>であって中心ではない（実際に記録されるのは
-     * {@code [caveStart - CAVE_MODE_DEPTH, caveStart]}）。{@code caveLayer << 4}をそのまま使うと
-     * 実際の中心よりCAVE_MODE_DEPTH/2ぶん高く見積もることになり、参照Yに近いレイヤーの選定が
-     * 系統的に上へ偏る。
+     * The Y a layer number represents. The inverse of {@code caveLayer == caveStart >> 4}, but {@code caveStart} is
+     * the <b>top</b> of the slice, not its center (what's actually recorded is
+     * {@code [caveStart - CAVE_MODE_DEPTH, caveStart]}). Using {@code caveLayer << 4} as-is
+     * would estimate CAVE_MODE_DEPTH/2 higher than the actual center, systematically biasing the choice of layers
+     * near the reference Y upward.
      */
     private static int layerCenterY(int caveLayer) {
         return caveLayer == SURFACE_LAYER || caveLayer == Integer.MIN_VALUE
@@ -196,11 +196,11 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 複数レイヤーを重ねて読むときに、セルごとにどのレイヤーの値を採用するかを決める。
-     * 参照Yに最も近い高さが勝つ——ネザーでは同じ(x,z)が複数のY帯で記録されうるため。
+     * When reading multiple layers stacked, decides per cell which layer's value to adopt.
+     * The height closest to the reference Y wins, since in the Nether the same (x,z) can be recorded in multiple Y bands.
      *
-     * <p>採用元が隣り合うセルで食い違うと、そこは段差として現れる。粗い地図はもともと崖を
-     * 起伏として扱うので破綻はしないが、レイヤーをまたぐ垂直移動を層1/2で表現はできない。
+     * <p>Where the source differs between adjacent cells, a step appears there. The coarse map already treats cliffs
+     * as relief so nothing breaks, but vertical movement across layers can't be represented in layers 1/2.
      */
     private static final class LayerMerge {
 
@@ -221,7 +221,7 @@ public final class XaeroMapReader {
             Arrays.fill(this.bestDistance, Integer.MAX_VALUE);
         }
 
-        /** このセルに{@code height}を書くべきなら{@code true}を返し、勝った距離を記録する。 */
+        /** Returns {@code true} if {@code height} should be written to this cell, and records the winning distance. */
         boolean accept(int x, int z, int height) {
             int localX = x - minX;
             int localZ = z - minZ;
@@ -239,31 +239,31 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 指定範囲の地表を読む。読めたセルが1つも無ければ{@link CoarseMap#knownCells()}が0になる
-     * （その範囲が未訪問か、Xaeroがまだリージョンを読み込んでいない）。
+     * Reads the surface of the given range. If no cell could be read, {@link CoarseMap#knownCells()} is 0
+     * (the range is unvisited, or Xaero hasn't loaded the region yet).
      *
-     * <p>{@link #layersFor}が選んだレイヤーはそれぞれ独立した床として{@link CoarseMap}へ積む
-     * （1つに潰さない）。天井のある次元では、これで初めて上下に重なる複数の通路を層1が
-     * 同時に見られる——潰していた頃は参照Yを変えて読み直す再挑戦（梯子）が必要だったが、
-     * 1回の読み取りで全レイヤーぶんの床が揃うので不要になった。
+     * <p>Each layer chosen by {@link #layersFor} is stacked into the {@link CoarseMap} as an independent floor
+     * (not squashed into one). In dimensions with a ceiling, this is what first lets layer 1 see multiple
+     * vertically stacked passages at once; when they were squashed, a retry re-reading with a different reference Y
+     * (the ladder) was needed, but now one read gathers floors from all layers, so it's unnecessary.
      */
     public static CoarseMap readSurface(int minChunkX, int minChunkZ, int chunksX, int chunksZ, int referenceY) {
         return readSurfaceReporting(minChunkX, minChunkZ, chunksX, chunksZ, referenceY).map();
     }
 
     /**
-     * {@link #readSurface}に<b>レイヤーごとの取り分</b>を添えた版。
+     * {@link #readSurface} with <b>each layer's share</b> attached.
      *
-     * <p>「地図が見えていない」の内訳は、どのレイヤーからセルが取れたかを出さないと分からない——
-     * 歩ける階のレイヤーが空なのか、そもそも読む対象から外れていたのかで打つ手が違う
-     * （{@link #MAX_CAVE_LAYERS}参照）。
+     * <p>The breakdown of "the map isn't visible" can't be known without reporting which layers cells came from:
+     * the remedy differs depending on whether the walkable level's layer is empty or was excluded from reading altogether
+     * (see {@link #MAX_CAVE_LAYERS}).
      */
     public static SurfaceRead readSurfaceReporting(int minChunkX, int minChunkZ, int chunksX, int chunksZ,
                                                     int referenceY) {
         CoarseMapBuilder builder = new CoarseMapBuilder(minChunkX, minChunkZ, chunksX, chunksZ);
         MapProcessor processor = processor();
         if (processor == null) {
-            return new SurfaceRead(builder.build(), "レイヤー無し");
+            return new SurfaceRead(builder.build(), "no layers");
         }
         LongSet voidCandidates = new LongOpenHashSet();
         StringBuilder perLayer = new StringBuilder();
@@ -273,7 +273,7 @@ public final class XaeroMapReader {
             if (!perLayer.isEmpty()) {
                 perLayer.append(' ');
             }
-            perLayer.append(caveLayer == SURFACE_LAYER ? "地表" : "L" + caveLayer)
+            perLayer.append(caveLayer == SURFACE_LAYER ? "surface" : "L" + caveLayer)
                     .append('=').append(builder.knownCells() - before);
         }
         markVoidCells(builder, voidCandidates);
@@ -281,19 +281,19 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 読んだ地図と、レイヤーごとに<b>新しく床が付いたセルの数</b>。既に別のレイヤーで床が
-     * 付いているセルは数えないので、合計は{@link CoarseMap#knownCells()}に一致する。
+     * The map that was read, and per layer the <b>number of cells that newly got a floor</b>. Cells that already have a floor
+     * from another layer aren't counted, so the total matches {@link CoarseMap#knownCells()}.
      */
     public record SurfaceRead(CoarseMap map, String layerBreakdown) {
     }
 
     /**
-     * どのレイヤーからも床が得られなかったセルのうち、空気の列を実際に読めていたものを
-     * {@link CoarseMap#VOID}にする。
+     * Of the cells that got no floor from any layer, those whose air columns were actually read are made
+     * {@link CoarseMap#VOID}.
      *
-     * <p><b>レイヤーごとに書かずに最後へ回すのが要点。</b>ネザーのように同じXZが複数のY帯で
-     * 記録される次元では、あるレイヤーで床が無くても別のレイヤーには床がある。レイヤー単位で
-     * 奈落を書くと、実在する床を持つセルに到達不能な床が1枚余計に積まれる。
+     * <p><b>The key is deferring this to the end rather than writing per layer.</b> In dimensions like the Nether where the same XZ
+     * is recorded in multiple Y bands, a layer without a floor doesn't mean other layers lack one. Writing the void
+     * per layer would stack an extra unreachable floor onto cells that have real floors.
      */
     private static void markVoidCells(CoarseMapBuilder builder, LongSet voidCandidates) {
         LongIterator iterator = voidCandidates.iterator();
@@ -330,8 +330,8 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 廊下（層1のwaypoint間の線分±マージン）をブロック解像度で読む。{@link #readSurface}と違い
-     * 間引きをしない（256点/チャンク全部）ので、狭い範囲（廊下1本96×96ブロック程度）専用。
+     * Reads a corridor (the segment between layer 1 waypoints ± a margin) at block resolution. Unlike {@link #readSurface},
+     * it doesn't thin out (all 256 points/chunk), so it's only for narrow ranges (about 96x96 blocks per corridor).
      */
     public static SurfaceGrid readSurfaceDetailed(int minBlockX, int minBlockZ, int sizeX, int sizeZ,
                                                    int referenceY) {
@@ -362,33 +362,33 @@ public final class XaeroMapReader {
         return builder.build();
     }
 
-    /** {@link #forEachCaveFloor}が1本の柱について報告する床。 */
+    /** A floor reported by {@link #forEachCaveFloor} for one column. */
     @FunctionalInterface
     public interface FloorVisitor {
 
         /**
-         * @param floorTopY このレイヤーで見つかった、いちばん上の固体ブロックのY。立つのは1つ上
-         * @param lava      その面が溶岩か
+         * @param floorTopY the Y of the topmost solid block found in this layer. One above it is where you stand
+         * @param lava      whether that surface is lava
          */
         void floor(int x, int z, int floorTopY, boolean lava);
     }
 
     /**
-     * 洞窟レイヤーが持つ床を<b>ブロック解像度・レイヤーごと</b>に1つずつ報告する。
-     * 3D粗層（{@code VoxelTerrain}）の唯一のデータ源。
+     * Reports the floors held by cave layers one by one, <b>at block resolution, per layer</b>.
+     * The only data source for the 3D coarse layer ({@code VoxelTerrain}).
      *
-     * <p>{@link #readSurfaceDetailed}と違い<b>レイヤーを1枚に潰さない</b>。潰すとネザーで
-     * 上下に重なる通路のうち1枚しか残らず、3次元にした意味が消える。{@link #readSurface}と違い
-     * <b>チャンク平均にもしない</b>——実測で、チャンク平均の床では歩ける格子が全体の6%にしか
-     * ならず、ガイドが「知らない場所をまっすぐ橋で渡る方が安い」と答えるようになる。
+     * <p>Unlike {@link #readSurfaceDetailed}, it <b>doesn't squash layers into one</b>. Squashing would leave only one of the
+     * vertically stacked passages in the Nether, defeating the point of going 3D. Unlike {@link #readSurface}, it
+     * <b>doesn't average per chunk either</b>: measured, chunk-averaged floors made only 6% of the grid walkable,
+     * and the guide started answering "bridging straight across unknown places is cheaper".
      *
-     * <p>{@link #MAX_CAVE_LAYERS}の枠も掛けない。あれは{@link CoarseMap#MAX_FLOORS}に収める
-     * ための制限で、こちらの格子には効かない（同じ柱に何枚の床があってもセルが別なら別に入る）。
+     * <p>The {@link #MAX_CAVE_LAYERS} cap isn't applied either. That limit exists to fit within {@link CoarseMap#MAX_FLOORS},
+     * and doesn't affect this grid (however many floors a column has, they go in separately if the cells differ).
      *
-     * <p><b>メインスレッド専用。</b>Xaeroのリージョン構造を触る。
+     * <p><b>Main thread only.</b> Touches Xaero's region structures.
      *
-     * @param step 何ブロックおきに見るか。格子のセル辺の半分にすると、1セルにつき数点が入る
-     * @return 報告した床の数。0なら、この範囲の地図をXaeroがまだ持っていない
+     * @param step how many blocks apart to sample. At half the grid cell's edge, several points fall into each cell
+     * @return the number of floors reported. 0 means Xaero doesn't have the map for this range yet
      */
     public static int forEachCaveFloor(int minBlockX, int minBlockZ, int sizeX, int sizeZ,
                                         int referenceY, int step, FloorVisitor visitor) {
@@ -418,7 +418,7 @@ public final class XaeroMapReader {
                                     continue;
                                 }
                                 boolean lava = isLava(block);
-                                // 水は水面が通れる高さ。水底の高さを渡すと立てない所を床にしてしまう
+                                // For water, the passable height is the surface. Passing the bottom's height would make unstandable places floors
                                 int height = !lava && isWater(block) ? block.getTopHeight() : block.getHeight();
                                 visitor.floor(blockX + x, blockZ + z, height, lava);
                                 reported[0]++;
@@ -432,9 +432,9 @@ public final class XaeroMapReader {
     }
 
     /**
-     * メモリに載っている全レイヤー。{@link #layersFor}と違って枚数を絞らない
-     * （{@link #forEachCaveFloor}専用）。参照Yに近い順に並べるのは、途中で打ち切られたときに
-     * 手前の高さ帯が残るようにするため。
+     * All layers in memory. Unlike {@link #layersFor}, the count isn't narrowed
+     * (only for {@link #forEachCaveFloor}). They're ordered by closeness to the reference Y so that if cut off midway,
+     * the nearby height bands remain.
      */
     private static int[] allLayers(MapProcessor processor, int referenceY) {
         List<Integer> layers = new ArrayList<>(loadedLayers(processor));
@@ -443,19 +443,19 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 範囲内のリージョンの状態。読めたセルが少ないとき、原因は2つに割れる。
-     * 訪れてはいるがまだメモリに無い（{@code pendingLoad}）のか、そもそも訪れていない
-     * （{@code loaded}にも{@code pendingLoad}にも数えられない）のか。前者なら
-     * {@link #requestLoad}で埋まるが、後者には打つ手が無い。
+     * The state of regions in range. When few cells could be read, the cause splits in two:
+     * visited but not in memory yet ({@code pendingLoad}), or never visited at all
+     * (counted in neither {@code loaded} nor {@code pendingLoad}). The former is filled in by
+     * {@link #requestLoad}, but nothing can be done about the latter.
      *
-     * <p>{@code pendingLoad}が「ディスクにある数」ではないことに注意。Xaeroはリージョンを
-     * 読み込み終えると、その検出情報を捨てる（{@code MapLayer.removeRegionDetection}）。
-     * つまりこれは「ディスクにあって、まだ読み込んでいないもの」の数で、読み込みが進むほど減る。
+     * <p>Note that {@code pendingLoad} isn't "the number on disk". Once Xaero finishes loading a region,
+     * it discards that detection info ({@code MapLayer.removeRegionDetection}).
+     * So this is the number "on disk and not loaded yet", which decreases as loading progresses.
      */
     public record RegionStats(int inRange, int loaded, int pendingLoad) {
     }
 
-    /** {@link #readSurface}と同じ範囲について、リージョンの読み込み状況だけを数える。 */
+    /** Counts only the region load status for the same range as {@link #readSurface}. */
     public static RegionStats surveyRegions(int minChunkX, int minChunkZ, int chunksX, int chunksZ,
                                              int referenceY) {
         MapProcessor processor = processor();
@@ -490,12 +490,12 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 範囲内の「ディスクにあるのにまだ読み込まれていない」リージョンに読み込みを要求する。
-     * 実際に読み込まれるのは非同期なので、戻り値が0になるまで（あるいは諦めるまで）
-     * 呼び出し側が待つ必要がある。要求できた数を返す。
+     * Requests loading of regions in range that are "on disk but not loaded yet".
+     * Actual loading is asynchronous, so the caller must wait until the return value reaches 0
+     * (or give up). Returns the number of requests made.
      *
-     * <p>Xaeroは地図を表示するために必要になった範囲しかメモリに載せない。起動直後や、
-     * 世界地図を一度も開いていない状態では、訪問済みの土地でも1つも読み込まれていない。
+     * <p>Xaero only keeps in memory the range needed to display the map. Right after startup, or
+     * without ever opening the world map, not a single region is loaded, even for visited land.
      */
     public static int requestLoad(int minChunkX, int minChunkZ, int chunksX, int chunksZ, int referenceY) {
         MapProcessor processor = processor();
@@ -508,8 +508,8 @@ public final class XaeroMapReader {
         int maxRegionX = (minChunkX + chunksX - 1) >> CHUNKS_PER_REGION_SHIFT;
         int minRegionZ = minChunkZ >> CHUNKS_PER_REGION_SHIFT;
         int maxRegionZ = (minChunkZ + chunksZ - 1) >> CHUNKS_PER_REGION_SHIFT;
-        // 上限はレイヤー横断で1つ。レイヤーごとに満額使うとXaeroの単一読み込みキューが溢れ、
-        // 地図表示そのものが待たされる
+        // The cap is one shared across layers. Using the full amount per layer overflows Xaero's single load queue,
+        // making the map display itself wait
         for (int caveLayer : layersFor(processor, referenceY)) {
             if (requested >= MAX_LOAD_REQUESTS) {
                 break;
@@ -521,12 +521,12 @@ public final class XaeroMapReader {
             }
             for (int regionX = minRegionX; regionX <= maxRegionX && requested < MAX_LOAD_REQUESTS; regionX++) {
                 for (int regionZ = minRegionZ; regionZ <= maxRegionZ && requested < MAX_LOAD_REQUESTS; regionZ++) {
-                    // 検出情報が無い＝未訪問か、すでに読み込み済み。どちらも要求する意味が無い
-                    // （要求すると空のリージョンをメモリに作るだけで終わる）
+                    // No detection info = unvisited or already loaded. Neither is worth requesting
+                    // (requesting would just create an empty region in memory)
                     if (layer.getRegionDetection(regionX, regionZ) == null) {
                         continue;
                     }
-                    // ここだけcreate=true。読み込みを頼むにはリージョンの器そのものが要る
+                    // create=true only here. Requesting a load needs the region container itself
                     MapRegion region = processor.getLeafMapRegion(caveLayer, regionX, regionZ, true);
                     if (region == null || region.isLoaded()) {
                         continue;
@@ -540,8 +540,8 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 1レイヤーが、ある範囲についてどれだけデータを持っているか。{@code caveLayer}が
-     * {@link Integer#MAX_VALUE}なら地表レイヤー。
+     * How much data one layer has for a given range. If {@code caveLayer} is
+     * {@link Integer#MAX_VALUE}, it's the surface layer.
      */
     public record LayerProbe(int caveLayer, int knownCells, int minHeight, int maxHeight) {
 
@@ -551,8 +551,8 @@ public final class XaeroMapReader {
     }
 
     /**
-     * メモリに載っている全レイヤーを、選定・マージを通さずそのまま個別に読んで比べる診断用。
-     * ネザーで「地表レイヤーが空で洞窟レイヤーに散っている」ことを実データで確かめるためのもの。
+     * For diagnostics: reads every layer in memory individually as-is, without selection or merging, and compares them.
+     * Used to confirm with real data that in the Nether "the surface layer is empty and data is scattered across cave layers".
      */
     public static List<LayerProbe> probeLayers(int minChunkX, int minChunkZ, int chunksX, int chunksZ) {
         MapProcessor processor = processor();
@@ -562,9 +562,9 @@ public final class XaeroMapReader {
         List<LayerProbe> probes = new ArrayList<>();
         for (int caveLayer : loadedLayers(processor)) {
             CoarseMapBuilder builder = new CoarseMapBuilder(minChunkX, minChunkZ, chunksX, chunksZ);
-            // 1レイヤーだけを読むので、1セルに複数の床が積まれることはない（floor 0だけを見ればよい）。
-            // 奈落の印は付けない——この診断が答えるのは「このレイヤーが床をどれだけ持っているか」で、
-            // 高さを持たないVOIDの床を混ぜるとknownCellsも高さの範囲も意味が変わる
+            // Only one layer is read, so multiple floors never stack in one cell (looking at floor 0 alone is enough).
+            // No void marks: this diagnostic answers "how many floors does this layer have", and mixing in
+            // heightless VOID floors would change the meaning of knownCells and the height range
             readLayer(processor, caveLayer, minChunkX, minChunkZ, chunksX, chunksZ, builder,
                     new LongOpenHashSet());
             CoarseMap map = builder.build();
@@ -589,7 +589,7 @@ public final class XaeroMapReader {
         return probes;
     }
 
-    /** Xaeroの洞窟モード設定。0=無効（地表レイヤーへ）/ 1=Y帯ごとに分割 / 2=単一レイヤー。 */
+    /** Xaero's cave mode setting. 0 = disabled (to the surface layer) / 1 = split by Y band / 2 = single layer. */
     public static int caveModeType() {
         MapProcessor processor = processor();
         return processor == null ? -1 : processor.getMapWorld().getCurrentDimension().getCaveModeType();
@@ -597,26 +597,26 @@ public final class XaeroMapReader {
 
     private static MapProcessor processor() {
         if (!Minecraft.getInstance().isSameThread()) {
-            throw new IllegalStateException("XaeroMapReaderはメインスレッドから呼ぶこと");
+            throw new IllegalStateException("XaeroMapReader must be called from the main thread");
         }
         WorldMapSession session = WorldMapSession.getCurrentSession();
         if (session == null || !session.isUsable()) {
             return null;
         }
         MapProcessor processor = session.getMapProcessor();
-        // 地図のワールドが確定するまでリージョンの座標系そのものが定まらない
+        // Until the map's world is settled, the region coordinate system itself isn't determined
         return processor != null && processor.isMapWorldUsable() ? processor : null;
     }
 
     /**
-     * 1リージョンの中の読み込み済みタイルをすべて訪ねる。リージョン→タイルチャンク→タイルの
-     * 3重の入れ子と「読めているか」の判定は、粗い読み方（{@link #readTile}）でも
-     * ブロック解像度（{@link #readTileDetailed}）でも変わらないのでここに畳んである。
+     * Visits every loaded tile in one region. The triple nesting of region -> tile chunk -> tile and the
+     * "is it readable" check are the same for both the coarse reading ({@link #readTile}) and
+     * block resolution ({@link #readTileDetailed}), so they're folded in here.
      */
     private static void forEachLoadedTile(MapProcessor processor, int caveLayer, int regionX, int regionZ,
                                            Consumer<MapTile> visitor) {
-        // create=falseなので、Xaeroがまだ読み込んでいないリージョンはnullで返る。
-        // ここでディスクから読ませないのは、読み込みが非同期で完了を待てないため
+        // create=false, so regions Xaero hasn't loaded yet come back as null.
+        // Not making it read from disk here, because loading is asynchronous and completion can't be awaited
         MapRegion region = processor.getLeafMapRegion(caveLayer, regionX, regionZ, false);
         if (region == null || !region.isLoaded()) {
             return;
@@ -641,12 +641,12 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 1タイル＝1チャンク。タイル自身がチャンク座標を持っているので、外側の添字から復元する必要はない。
+     * 1 tile = 1 chunk. The tile itself holds its chunk coordinates, so there's no need to recover them from the outer indices.
      *
-     * <p>{@link #readSurface}が複数レイヤーを読むとき、ここは呼ばれるたびに床を1つ
-     * {@link CoarseMapBuilder#putFloor}で積む。レイヤーを1つの高さへ潰さない——潰すと
-     * 天井のある次元で上下に重なる独立した通路が、片方だけ生き残ったり不当な段差として
-     * 繋がって見えたりする。
+     * <p>When {@link #readSurface} reads multiple layers, each call here stacks one floor via
+     * {@link CoarseMapBuilder#putFloor}. Layers aren't squashed into one height; squashing would make independent
+     * vertically stacked passages in dimensions with a ceiling either survive only on one side or appear connected
+     * by unjustified steps.
      */
     private static void readTile(MapTile tile, CoarseMapBuilder builder, LongSet voidCandidates) {
         int waterSamples = 0;
@@ -655,11 +655,11 @@ public final class XaeroMapReader {
         int heightSamples = 0;
         int minHeight = Integer.MAX_VALUE;
         int maxHeight = Integer.MIN_VALUE;
-        // 溶岩面の高さの平均。samplesが全部溶岩だった稀なケース（下記）だけで使う
+        // Average lava surface height. Used only in the rare case where all samples were lava (below)
         int lavaHeightSum = 0;
         int samples = 0;
-        // 「床が無いと分かっている」列の数。Xaeroは不透明ブロックが1つも無い列に空気を書くので、
-        // タイルが存在するのに空気だけ＝奈落。タイルそのものが無い（未訪問）のとは別物
+        // Number of columns "known to have no floor". Xaero writes air for columns with no opaque block at all,
+        // so a tile that exists but is only air = void. Different from the tile itself not existing (unvisited)
         int voidSamples = 0;
 
         for (int x = 0; x < 16; x += SAMPLE_STEP) {
@@ -675,17 +675,17 @@ public final class XaeroMapReader {
                 samples++;
                 boolean water = isWater(block);
                 boolean lava = !water && isLava(block);
-                // 水面の高さを使うのは、粗いルートが見るのが「そこを通れるか」だから。
-                // 水底の高さで段差を測ると、深い海が巨大な崖として現れて経路が歪む
+        // The water surface height is used because what the coarse route looks at is "can it pass there".
+        // Measuring steps by the bottom height would make deep seas appear as huge cliffs and distort the route
                 int sampleHeight = water ? block.getTopHeight() : block.getHeight();
                 if (water) {
                     waterSamples++;
                 } else if (lava) {
                     lavaSamples++;
                     lavaHeightSum += sampleHeight;
-                    // 溶岩面は代表高さ（＝waypointのY）から除く。溶岩は立てないので、
-                    // その高さを混ぜるとwaypointが溶岩の海の水面に落ち、層2の
-                    // resolveStandableが到達できなくなる
+                    // Lava surfaces are excluded from the representative height (= the waypoint's Y). Lava can't be stood on,
+                    // so mixing in that height would drop the waypoint onto the surface of a lava sea, and layer 2's
+                    // resolveStandable couldn't reach it
                     continue;
                 }
                 heightSum += sampleHeight;
@@ -696,18 +696,18 @@ public final class XaeroMapReader {
         }
 
         if (samples == 0) {
-            // 床のある列が1つも無い。空気の列を実際に読めていたなら、それは「まだ知らない」ではなく
-            // 「床が無い」という情報なので、未訪問と同じ扱いにしてはいけない。ただし他のレイヤーが
-            // このセルに床を持っているかもしれないので、ここでは覚えるだけにして判定は全レイヤーを
-            // 読み終えてから行う（{@link #markVoidCells}）
+            // Not a single column with a floor. If air columns were actually read, that's not "not known yet" but
+            // the information "there's no floor", so it must not be treated like unvisited. However, other layers
+            // might have a floor in this cell, so only remember it here and decide after reading all layers
+            // ({@link #markVoidCells})
             if (voidSamples > 0) {
                 voidCandidates.add(chunkKey(tile.getChunkX(), tile.getChunkZ()));
             }
             return;
         }
-        // 溶岩は水と同じく「過半数」で通行不能とし、それ未満は通れるが高いセルに落とす。
-        // 以前はこの1/4の量で通行不能にしていたが、溶岩が地形の一部であるネザーでは
-        // 既知セルの58%が壁になり、出発点すら通行不能になっていた
+        // Like water, lava is impassable at a "majority", and below that the cell becomes passable but expensive.
+        // Previously it became impassable at a quarter of this amount, but in the Nether, where lava is part of the terrain,
+        // 58% of known cells became walls, and even the start became impassable
         byte kind;
         if (lavaSamples * 2 >= samples) {
             kind = CoarseMap.LAVA;
@@ -718,8 +718,8 @@ public final class XaeroMapReader {
         } else {
             kind = CoarseMap.LAND;
         }
-        // heightSamples==0はサンプル全部が溶岩のときだけ（＝kindは必ずLAVA）。ここは溶岩面の高さで
-        // 正しい——BridgePolicy.BRIDGEでこのセルを渡るとき、足場を置くのがまさにその高さになる
+        // heightSamples==0 only when every sample is lava (= kind is always LAVA). The lava surface height is
+        // correct here: when crossing this cell with BridgePolicy.BRIDGE, that's exactly the height where footing is placed
         int averageHeight = heightSamples > 0 ? heightSum / heightSamples : lavaHeightSum / lavaSamples;
         int representativeMin = heightSamples > 0 ? minHeight : averageHeight;
         int representativeMax = heightSamples > 0 ? maxHeight : averageHeight;
@@ -728,8 +728,8 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 1タイル分をブロック解像度（256点）で読む。{@link #readTile}と違い間引かない — 廊下限定の
-     * 狭い範囲でしか呼ばないので、ここで数百チャンク分を舐める心配は無い。
+     * Reads one tile at block resolution (256 points). Unlike {@link #readTile} it doesn't thin out; it's only called
+     * for narrow corridor-limited ranges, so there's no risk of sweeping hundreds of chunks here.
      */
     private static void readTileDetailed(MapTile tile, SurfaceGridBuilder builder, LayerMerge merge) {
         int blockX = tile.getChunkX() * 16;
@@ -742,7 +742,7 @@ public final class XaeroMapReader {
                 }
                 boolean lava = isLava(block);
                 boolean water = !lava && isWater(block);
-                // 採用の判定は通れる高さで行う。水は水面、それ以外は地表そのもの
+                // Adoption is decided by the passable height: the water surface for water, otherwise the surface itself
                 int mergeHeight = water ? block.getTopHeight() : block.getHeight();
                 if (!merge.accept(blockX + x, blockZ + z, mergeHeight)) {
                     continue;
@@ -750,7 +750,7 @@ public final class XaeroMapReader {
                 if (lava) {
                     builder.put(blockX + x, blockZ + z, CoarseMap.LAVA, block.getHeight());
                 } else if (water) {
-                    // 水底と水面の両方が読めるので、層1（水面のみ）には無い水深を持たせられる
+                    // Both the bottom and the surface of water can be read, so it can carry water depth, which layer 1 (surface only) lacks
                     builder.put(blockX + x, blockZ + z, CoarseMap.WATER, block.getHeight(), block.getTopHeight());
                 } else {
                     builder.put(blockX + x, blockZ + z, CoarseMap.LAND, block.getHeight());
@@ -760,8 +760,8 @@ public final class XaeroMapReader {
     }
 
     /**
-     * 水は地表のブロックとしてではなくオーバーレイとして記録される。海底の砂が{@code state}に入り、
-     * その上に水のオーバーレイが乗る形なので、{@code state}だけを見ると海が砂浜に見える。
+     * Water is recorded as an overlay rather than as a surface block. The seabed sand goes into {@code state}, with
+     * the water overlay on top, so looking only at {@code state} makes the sea look like a beach.
      */
     private static boolean isWater(MapBlock block) {
         ArrayList<Overlay> overlays = block.getOverlays();
@@ -777,14 +777,14 @@ public final class XaeroMapReader {
     }
 
     /**
-     * この列にこのレイヤーのデータが無いか。
+     * Whether this column has no data in this layer.
      *
-     * <p>Xaeroは走査範囲に不透明ブロックを1つも見つけられなかった列を、空気かつ高さ
-     * {@code worldBottomY}（ネザーなら0）として書く（{@code MapWriter#loadPixel}）。洞窟レイヤーは
-     * {@code caveStart}から{@code CAVE_MODE_DEPTH}ブロック下までしか見ないので、これが普通に起きる。
+     * <p>Xaero writes columns where it found no opaque block in the scan range as air at height
+     * {@code worldBottomY} (0 in the Nether) ({@code MapWriter#loadPixel}). Cave layers only look from
+     * {@code caveStart} down to {@code CAVE_MODE_DEPTH} blocks below, so this happens routinely.
      *
-     * <p>そのまま読むと奈落の底に地面があることになり、waypointが{@code y=1}へ落ちる。地表レイヤーは
-     * 常に下まで走査して必ず何かに当たるので、空気は「データが無い」の印として使える。
+     * <p>Read as-is, there would be ground at the bottom of the void and waypoints would drop to {@code y=1}. The surface layer
+     * always scans to the bottom and hits something, so air can be used as the mark for "no data".
      */
     @SuppressWarnings("deprecation")
     private static boolean isEmpty(MapBlock block) {

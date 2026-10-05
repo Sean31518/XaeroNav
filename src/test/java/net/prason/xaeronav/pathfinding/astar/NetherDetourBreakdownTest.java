@@ -20,27 +20,28 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>ネザーの長距離が基準の約3倍になる（{@link NetherWideRouteTest}）のは、どの層のせいか。</b>
- * 1本の経路について、実機の探索を要素ごとに剥がして測る:
+ * <b>Which layer is to blame for long Nether routes coming out about 3x the baseline ({@link NetherWideRouteTest})?</b>
+ * For a single route, peels the real game's search apart component by component and measures each:
  *
  * <ol>
- * <li><b>基準</b> — 全視界・重み1.0・ガイド無しの1回の探索（これが1.000倍）</li>
- * <li><b>重みだけ</b> — ガイド無し・重み{@value AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}。
- *     重み付きA\*の貪欲さの取り分</li>
- * <li><b>ガイドだけ</b> — 層1のcost-to-goガイドあり・重み1.0。ガイドが下限を破っていれば、
- *     重み1.0でも最適から外れる</li>
- * <li><b>重み＋ガイド</b> — 実機の1区間と同じ設定を、区間に切らずに通しで</li>
- * <li><b>中間目標に立ち寄る（旧実装）と目的地を狙う（いまの実装）</b>の比較。質だけでなく
- *     展開ノード数も出す——現世では入れ替えが損になるので、そこも同じ物差しで測る</li>
+ * <li><b>Baseline</b>: a single search with full visibility, weight 1.0, and no guide (this is 1.000x)</li>
+ * <li><b>Weight only</b>: no guide, weight {@value AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}.
+ *     The share due to weighted A\*'s greediness</li>
+ * <li><b>Guide only</b>: layer 1's cost-to-go guide, weight 1.0. If the guide breaks the lower bound,
+ *     it deviates from optimal even at weight 1.0</li>
+ * <li><b>Weight + guide</b>: the same settings as one real-game leg, run end to end without splitting into legs</li>
+ * <li>Comparison of <b>stopping by intermediate targets (old implementation) vs. aiming at the destination (current
+ *     implementation)</b>. Reports expanded node counts as well as quality; in the Overworld the switch is a loss, so that
+ *     is measured with the same yardstick too</li>
  * </ol>
  *
- * <p>ここで採らなかった案（進めないときだけ中間目標へ退避する／箱を切る／中間目標の周りに
- * 廊下を置く／狙う半径を緩める）も一度は測った。半径を緩めるのは逆効果（未到達が増える）で、
- * 他は目的地を狙うのと同等以下だった。経緯は[[xaeronav-architecture]]。
+ * <p>Alternatives not adopted here (retreating to an intermediate target only when stuck / cutting the box / placing a
+ * corridor around intermediate targets / loosening the aim radius) were also measured once. Loosening the radius was
+ * counterproductive (more unreached), and the others were equal to or worse than aiming at the destination. History in [[xaeronav-architecture]].
  *
- * <p>あわせて<b>ガイドが最適経路の各点で残りコストを超えていないか</b>（下限違反）も測る。
- * {@code GuideAdmissibilityTest}はネザーを荒地224ブロック四方・60〜160ブロックでしか見ておらず、
- * 溶岩の海と長距離が入っていない。
+ * <p>It also measures <b>whether the guide exceeds the remaining cost at each point of the optimal path</b> (lower bound
+ * violation). {@code GuideAdmissibilityTest} only looks at the Nether on 224-block-square badlands at 60-160 blocks,
+ * without lava seas or long distances.
  */
 @Tag("slow")
 class NetherDetourBreakdownTest {
@@ -51,8 +52,8 @@ class NetherDetourBreakdownTest {
     private static final long TIME_LIMIT_MILLIS = 120_000;
 
     /**
-     * {@link NetherWideRouteTest}で基準が解けた4本。座標をそのまま持つのは、乱数の種や
-     * 両端の解決規則を変えても<b>同じ経路を測り続けられる</b>ようにするため。
+     * The 4 routes whose baseline was solved in {@link NetherWideRouteTest}. Coordinates are held as-is so that
+     * <b>the same routes keep being measured</b> even if the random seed or the endpoint resolution rules change.
      */
     private static List<BlockPos[]> routes() {
         return List.of(
@@ -82,11 +83,11 @@ class NetherDetourBreakdownTest {
     }
 
     private static String ratio(double value, double best) {
-        return Double.isFinite(value) ? String.format(Locale.ROOT, "%6.0f(%.3f倍)", value, value / best)
-                : "     未到達";
+        return Double.isFinite(value) ? String.format(Locale.ROOT, "%6.0f(%.3fx)", value, value / best)
+                : "   unreached";
     }
 
-    /** ガイドが最適経路の各点で残りコストを超えていないか。1.0を超えたら下限違反。 */
+    /** Whether the guide exceeds the remaining cost at each point of the optimal path. Above 1.0 is a lower bound violation. */
     private static double worstOverestimate(PathResult best, CostToGo guide, BlockPos start) {
         double remaining = best.steps().stream().mapToDouble(PathStep::cost).sum();
         double worst = 0.0;
@@ -101,7 +102,7 @@ class NetherDetourBreakdownTest {
         return worst;
     }
 
-    /** 折れ線の長さ（ブロック）。 */
+    /** Length of a polyline (blocks). */
     private static double polylineLength(List<BlockPos> points) {
         double length = 0;
         for (int i = 1; i < points.size(); i++) {
@@ -119,8 +120,8 @@ class NetherDetourBreakdownTest {
     }
 
     /**
-     * <b>区間ごとに「その2点の間としては最適か」を測る。</b>各区間が最適に解けているのに全体が
-     * 3倍なら、悪いのは区間の解き方ではなく<b>中間目標の並びそのもの</b>——つまり層1の大局。
+     * <b>Measures, per leg, "is it optimal as a path between those two points".</b> If every leg is solved optimally yet the
+     * whole is 3x, what's bad isn't how legs are solved but <b>the sequence of intermediate targets itself</b>, i.e. layer 1's big picture.
      */
     private static String legByLeg(FakeCells cells, BlockPos start, CoarseRouter.Route route)
             throws Exception {
@@ -151,34 +152,34 @@ class NetherDetourBreakdownTest {
                 optimal += idealCost;
                 solved++;
                 if (legCost / idealCost > 1.15) {
-                    worst.add(String.format(Locale.ROOT, "%s→%s %.2f倍",
+                    worst.add(String.format(Locale.ROOT, "%s->%s %.2fx",
                             from.toShortString(), to.toShortString(), legCost / idealCost));
                 }
             }
             from = to;
         }
         return String.format(Locale.ROOT,
-                "区間ごと%d本 walked%.0f/最適%.0f=%.3f倍 / 実際に歩いた道のり%.0fブロック"
-                        + "（中間目標間の直線の合計%.0f＝%.1f倍の大迂回） %s",
+                "%d legs walked%.0f/optimal%.0f=%.3fx / distance actually walked %.0f blocks"
+                        + " (sum of straight lines between intermediate targets %.0f = %.1fx, a huge detour) %s",
                 solved, walked, optimal, optimal > 0 ? walked / optimal : 0,
                 walkedDistance, straightDistance,
                 straightDistance > 0 ? walkedDistance / straightDistance : 0,
-                worst.isEmpty() ? "" : "悪い区間: " + String.join(", ", worst));
+                worst.isEmpty() ? "" : "bad legs: " + String.join(", ", worst));
     }
 
-    /** 中間目標はチャンク解像度なので、実機と同じく領域ゴールとして狙う。 */
+    /** Intermediate targets are at chunk resolution, so aim at them as area goals, as in the real game. */
     private static final int LEG_GOAL_RADIUS = 16;
 
-    /** 継ぎ足しの回数の上限。実機は歩きながら何度でも継ぎ足すので、行き詰まりの検出用。 */
+    /** Cap on the number of extensions. The real game extends any number of times while walking, so this is for detecting dead ends. */
     private static final int MAX_SEGMENTS = 24;
 
     /**
-     * <b>設計変更案の測定。</b>中間目標を「必ず立ち寄る点」にせず、<b>目的地をそのまま狙って
-     * 層1ガイドで方向づけ、予算で打ち切られた部分経路を採って末端から継ぎ足す</b>。
+     * <b>Measurement of a design change proposal.</b> Instead of making intermediate targets "points that must be visited",
+     * <b>aim directly at the destination, steer with the layer 1 guide, take the partial path cut off by the budget, and extend from its end</b>.
      *
-     * <p>いまの実装が中間目標を経由地として扱うのは「一度に解けない距離を区間へ割る」ため。
-     * だが測定では、区間ごとに最適でも<b>経由すること自体</b>がコストを3倍にしていた。
-     * ガイドは下限を破っていないので、遠い目的地を狙っても方向は正しいはず——という仮説。
+     * <p>The current implementation treats intermediate targets as via points in order to "split a distance that can't be solved at once
+     * into legs". But measurements showed that even when each leg is optimal, <b>going via them itself</b> tripled the cost.
+     * The guide doesn't break the lower bound, so aiming at a distant destination should still give the right direction; that's the hypothesis.
      */
     private record GuidedWalk(double cost, boolean arrived, String trace, long nodes) {
     }
@@ -193,39 +194,39 @@ class NetherDetourBreakdownTest {
             PathResult result = new AStarPathfinder(cells, limits, guide).search(from, goal, () -> false);
             nodes += result.expandedNodes();
             if (result.steps().isEmpty()) {
-                // 実機と同じエスカレーション（PathfindingState#DEEP_SEARCH_BUDGET_FACTOR）。
-                // 中間目標を狙う側にはこれを与えていたので、揃えないと比較にならない
+                // The same escalation as the real game (PathfindingState#DEEP_SEARCH_BUDGET_FACTOR).
+                // The side aiming at intermediate targets was given this, so without matching it the comparison is meaningless
                 result = new AStarPathfinder(cells, new SearchLimits(800_000, 16_000,
                         limits.heuristicWeight()), guide).search(from, goal, () -> false);
                 nodes += result.expandedNodes();
-                trace.add("深い予算へ");
+                trace.add("to deep budget");
             }
             if (result.steps().isEmpty()) {
-                trace.add("0ステップ(" + result.termination() + ")");
+                trace.add("0 steps(" + result.termination() + ")");
                 return new GuidedWalk(cost, false, String.join(" ", trace), nodes);
             }
             cost += result.steps().stream().mapToDouble(PathStep::cost).sum();
             BlockPos end = result.steps().get(result.steps().size() - 1).pos();
-            trace.add(String.format(Locale.ROOT, "%dステップ→%s(目的地まで%.0f, %s)",
+            trace.add(String.format(Locale.ROOT, "%d steps->%s(%.0f to destination, %s)",
                     result.steps().size(), end.toShortString(), Math.sqrt(end.distSqr(goal)),
                     result.termination()));
             if (result.complete()) {
                 return new GuidedWalk(cost, true, String.join(" ", trace), nodes);
             }
             if (end.equals(from)) {
-                trace.add("末端が進まない");
+                trace.add("end doesn't advance");
                 return new GuidedWalk(cost, false, String.join(" ", trace), nodes);
             }
             from = end;
         }
-        trace.add("継ぎ足し" + MAX_SEGMENTS + "回で届かず");
+        trace.add("didn't reach in " + MAX_SEGMENTS + " extensions");
         return new GuidedWalk(cost, false, String.join(" ", trace), nodes);
     }
 
     /**
-     * <b>「中間目標の列さえ正しければ組み立ては機能するのか」の確認。</b>最適経路そのものを
-     * 中間目標の列に間引いて、実機と同じ区間分割で辿り直す。ここが1.0倍近くになるなら、
-     * 直すべきは<b>層1のルート選択だけ</b>で、区間分割・継ぎ足しの仕組みは無罪。
+     * <b>Checks "does the assembly work as long as the intermediate target sequence is right".</b> Thins the optimal path itself
+     * into a sequence of intermediate targets and re-follows it with the same leg splitting as the real game. If this comes close to 1.0x,
+     * what needs fixing is <b>only layer 1's route choice</b>, and the leg splitting and extension mechanisms are innocent.
      */
     private static double followOptimalAsWaypoints(FakeCells cells, PathResult best, BlockPos start,
                                                     BlockPos goal) throws Exception {
@@ -254,7 +255,7 @@ class NetherDetourBreakdownTest {
         return cost;
     }
 
-    /** 中間目標のセルが層1にどう見えていたか。 */
+    /** How the intermediate targets' cells looked to layer 1. */
     private static String waypointKinds(CoarseMap map, CoarseRouter.Route route) {
         List<String> kinds = new ArrayList<>();
         for (BlockPos waypoint : route.waypoints()) {
@@ -264,30 +265,30 @@ class NetherDetourBreakdownTest {
             byte kind = floor < 0 ? CoarseMap.NO_DATA : map.kindAtFloor(cx, cz, floor);
             int span = floor < 0 ? 0
                     : map.maxHeightAtFloor(cx, cz, floor) - map.minHeightAtFloor(cx, cz, floor);
-            kinds.add(kindName(kind) + "(起伏" + span + ")");
+            kinds.add(kindName(kind) + "(relief" + span + ")");
         }
         return String.join(" ", kinds);
     }
 
     private static String kindName(byte kind) {
         return switch (kind) {
-            case CoarseMap.LAND -> "陸";
-            case CoarseMap.WATER -> "水";
-            case CoarseMap.LAVA -> "溶岩";
-            case CoarseMap.LAVA_MIXED -> "溶岩混";
-            case CoarseMap.VOID -> "奈落";
-            default -> "不明";
+            case CoarseMap.LAND -> "land";
+            case CoarseMap.WATER -> "water";
+            case CoarseMap.LAVA -> "lava";
+            case CoarseMap.LAVA_MIXED -> "lava-mixed";
+            case CoarseMap.VOID -> "void";
+            default -> "unknown";
         };
     }
 
 
 
     /**
-     * <b>案4。</b>中間目標は使うが、<b>狙う半径を緩める</b>。いまは16ブロック（セルの半幅）で
-     * 「そのチャンクへ立ち寄れ」に近い。半径を広げれば「その方角へ進めばよい」に緩む。
+     * <b>Proposal 4.</b> Intermediate targets are used, but <b>the aim radius is loosened</b>. Currently it's 16 blocks (half a cell's width),
+     * close to "stop by that chunk". Widening the radius relaxes it to "just head in that direction".
      *
-     * <p>実装は{@code PathfindingState}が{@code PathfindingExecutor#submit}へ渡す
-     * {@code goalRadius}を変えるだけなので、効くなら一番安い直し方。
+     * <p>The implementation only changes the {@code goalRadius} that {@code PathfindingState} passes to
+     * {@code PathfindingExecutor#submit}, so if it works it's the cheapest fix.
      */
     private static GuidedWalk followWithRadius(FakeCells cells, BlockPos start, CoarseRouter.Route route,
                                                 int radius) throws Exception {
@@ -311,14 +312,14 @@ class NetherDetourBreakdownTest {
 
 
     /**
-     * <b>層1が選んだ道のセルと、最適経路が通ったセルを、層1が持っている情報だけで比べる。</b>
-     * ここで差が付くなら、その情報をコストへ足せば層1は正しい道を選べる＝根本解決になる。
-     * 差が付かないなら、チャンク解像度の地図では原理的に区別できないということ。
+     * <b>Compares the cells of the road layer 1 chose with the cells the optimal path went through, using only the information layer 1 has.</b>
+     * If they differ here, adding that information to the cost would let layer 1 choose the right road = a fundamental fix.
+     * If they don't, a chunk-resolution map fundamentally can't tell them apart.
      */
     private static String compareCells(CoarseMap map, FakeCells cells, PathResult best,
                                         BlockPos start, CoarseRouter.Route coarse) {
-        return "  最適経路のセル: " + cellStats(map, cellsAlong(pathPoints(best, start)))
-                + " / 層1が選んだセル: " + cellStats(map, cellsAlong(coarse.waypoints()));
+        return "  optimal path cells: " + cellStats(map, cellsAlong(pathPoints(best, start)))
+                + " / cells layer 1 chose: " + cellStats(map, cellsAlong(coarse.waypoints()));
     }
 
     private static List<BlockPos> pathPoints(PathResult result, BlockPos start) {
@@ -330,7 +331,7 @@ class NetherDetourBreakdownTest {
         return points;
     }
 
-    /** 点列が通ったセル（重複なし、通った順）。 */
+    /** Cells a point sequence passed through (no duplicates, in order of passage). */
     private static List<BlockPos> cellsAlong(List<BlockPos> points) {
         List<BlockPos> cells = new ArrayList<>();
         for (BlockPos point : points) {
@@ -366,24 +367,24 @@ class NetherDetourBreakdownTest {
                     lava++;
                 }
             }
-            // 床同士の高さの隔たり（3D迷路の深さ）
+            // Height separation between floors (the depth of the 3D maze)
             for (int i = 1; i < count; i++) {
                 gapSum += map.heightAtFloor(cx, cz, i) - map.heightAtFloor(cx, cz, i - 1);
             }
         }
         if (total == 0) {
-            return "セル無し";
+            return "no cells";
         }
         return String.format(Locale.ROOT,
-                "%dセル 床%.2f枚/セル 起伏%.1f 床間の隔たり%.1f 溶岩%d%%",
+                "%d cells floors%.2f/cell relief%.1f floor separation%.1f lava%d%%",
                 total, floors / (double) total, span / (double) total, gapSum / (double) total,
                 lava * 100 / total);
     }
 
     /**
-     * <b>現世でも同じ入れ替えが得か。</b>ネザーでは目的地を狙う方が質も展開ノード数も良かったが、
-     * 現世は中間目標が近いぶん探索が早く終わる——入れ替えると毎回箱を舐め切ることになり、
-     * 質は変わらないのに計算量だけ増えるおそれがある。全体に適用してよいかはここで決まる。
+     * <b>Is the same switch a gain in the Overworld too?</b> In the Nether, aiming at the destination was better in both quality and
+     * expanded nodes, but in the Overworld intermediate targets are close, so searches end early; switching would sweep the whole box
+     * every time, possibly increasing computation without changing quality. This decides whether it can be applied everywhere.
      */
     @Test
     void comparesTheSameSwapInTheOverworld() throws Exception {
@@ -417,7 +418,7 @@ class NetherDetourBreakdownTest {
             GuidedWalk toGoal = followGuidedToGoal(cells, start, goal, guide,
                     new SearchLimits(100_000, 2_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT));
             report.add(String.format(Locale.ROOT,
-                    "%s→%s 基準%6.0f 現行%s 展開%,d / 目的地狙い%s 展開%,d",
+                    "%s->%s baseline%6.0f current%s expanded%,d / aim-at-destination%s expanded%,d",
                     start.toShortString(), goal.toShortString(), bestCost,
                     ratio(viaWaypoints.arrived() ? viaWaypoints.cost() : Double.POSITIVE_INFINITY,
                             bestCost),
@@ -425,18 +426,18 @@ class NetherDetourBreakdownTest {
                     ratio(toGoal.arrived() ? toGoal.cost() : Double.POSITIVE_INFINITY, bestCost),
                     toGoal.nodes()));
         }
-        System.out.println("=== 現世 ===\n" + String.join("\n", report));
-        assertTrue(!report.isEmpty(), "1本も測れていない");
+        System.out.println("=== Overworld ===\n" + String.join("\n", report));
+        assertTrue(!report.isEmpty(), "not a single route measured");
     }
 
-    /** 実機の描画距離10チャンク相当。{@code SearchBounds.around}はこれで箱を切る。 */
+    /** Equivalent to the real game's render distance of 10 chunks. {@code SearchBounds.around} cuts the box with this. */
     private static final int WINDOW_RADIUS = 160;
 
     /**
-     * <b>実機の{@code PathfindingExecutor#buildCostToGoGuide}と同じ作り方のガイド。</b>
-     * 層1の地図を<b>探索の箱の中だけ</b>から組む。目的地が箱の外にあると、
-     * {@code CoarseRouter#costToGo}は目的地セルを地図に含まないので全コストが無限になり、
-     * {@code estimate()}はどこでも0を返す——<b>ガイドが消える</b>。
+     * <b>A guide built the same way as the real game's {@code PathfindingExecutor#buildCostToGoGuide}.</b>
+     * Builds layer 1's map from <b>only inside the search box</b>. If the destination is outside the box,
+     * {@code CoarseRouter#costToGo} doesn't include the destination cell in the map, so every cost is infinite and
+     * {@code estimate()} returns 0 everywhere: <b>the guide vanishes</b>.
      */
     private static CostToGo guideFromSearchBox(FakeCells cells, BlockPos start, BlockPos goal) {
         SearchBounds box = new SearchBounds(
@@ -459,13 +460,13 @@ class NetherDetourBreakdownTest {
             BlockPos goal = route[1];
             PathResult best = solve(cells, start, goal, null, 1.0);
             if (!best.complete()) {
-                report.add(start.toShortString() + "→" + goal.toShortString() + ": 基準が解けない");
+                report.add(start.toShortString() + "→" + goal.toShortString() + ": baseline can't be solved");
                 continue;
             }
             measured++;
             double bestCost = cost(best);
             CoarseMap map = LiveCoarseSampler.sample(cells, cells.bounds(), start.getY(), () -> false);
-            // 実機と同じ作り方（PathfindingExecutor#buildCostToGoGuideと同じ引数）
+            // Built the same way as the real game (same arguments as PathfindingExecutor#buildCostToGoGuide)
             CostToGo guide = CoarseRouter.costToGo(map, goal, false, CoarseRouter.BridgePolicy.BRIDGE);
 
             double weighted = cost(solve(cells, start, goal, null, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT));
@@ -479,13 +480,13 @@ class NetherDetourBreakdownTest {
             }
 
             report.add(String.format(Locale.ROOT,
-                    "%s→%s 基準%6.0f 重みだけ%s ガイドだけ%s 重み+ガイド%s ガイドの下限違反%.3f倍",
+                    "%s->%s baseline%6.0f weight-only%s guide-only%s weight+guide%s guide lower-bound violation%.3fx",
                     start.toShortString(), goal.toShortString(), bestCost,
                     ratio(weighted, bestCost), ratio(guided, bestCost), ratio(both, bestCost),
                     overestimate));
 
-            // 層1の中間目標の並びそのものが遠回りなのかを見る。最適経路の道のりと、
-            // 中間目標を順に結んだ折れ線の長さを比べる（どちらもブロック単位の距離）
+            // See whether layer 1's sequence of intermediate targets is itself a detour. Compare the optimal path's distance with
+            // the length of the polyline connecting intermediate targets in order (both distances in blocks)
             CoarseRouter.Route coarse = null;
             for (CoarseRouter.BridgePolicy policy : CoarseRouter.BridgePolicy.values()) {
                 CoarseRouter.Route candidate = CoarseRouter.findRoute(map, start, goal, false, policy);
@@ -495,49 +496,49 @@ class NetherDetourBreakdownTest {
                 }
             }
             if (coarse == null) {
-                report.add("  層1が目的地へ届かない");
+                report.add("  layer 1 doesn't reach the destination");
                 continue;
             }
             List<BlockPos> polyline = new ArrayList<>();
             polyline.add(start);
             polyline.addAll(coarse.waypoints());
             report.add(String.format(Locale.ROOT,
-                    "  最適経路の道のり%.0fブロック / 中間目標の折れ線%.0fブロック(%.3f倍) / 直線%.0fブロック",
+                    "  optimal path distance %.0f blocks / intermediate target polyline %.0f blocks(%.3fx) / straight line %.0f blocks",
                     pathLength(best), polylineLength(polyline),
                     polylineLength(polyline) / pathLength(best),
                     Math.sqrt(start.distSqr(goal))));
             report.add("  " + legByLeg(cells, start, coarse));
 
-            // 設計変更案: 中間目標を経由せず、目的地を狙って継ぎ足す（実機の既定予算で）
+            // Design change proposal: don't go via intermediate targets; aim at the destination and extend (with the real game's default budget)
             SearchLimits liveLimits = new SearchLimits(100_000, 2_000,
                     AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
-            report.add("  中間目標のセル: " + waypointKinds(map, coarse));
+            report.add("  intermediate target cells: " + waypointKinds(map, coarse));
             report.add(compareCells(map, cells, best, start, coarse));
             double asWaypoints = followOptimalAsWaypoints(cells, best, start, goal);
-            report.add("  【対照】最適経路を中間目標に間引いて辿り直す " + ratio(asWaypoints, bestCost));
+            report.add("  [control] thin the optimal path into intermediate targets and re-follow " + ratio(asWaypoints, bestCost));
             CostToGo boxGuide = guideFromSearchBox(cells, start, goal);
             GuidedWalk boxed = followGuidedToGoal(cells, start, goal, boxGuide, liveLimits);
             report.add(String.format(Locale.ROOT,
-                    "  【実装のいまの姿】箱の中だけからガイドを作る %s 展開%,d（始点でのガイド値=%.0f）",
+                    "  [current implementation] build the guide from only inside the box %s expanded%,d (guide value at start=%.0f)",
                     ratio(boxed.arrived() ? boxed.cost() : Double.POSITIVE_INFINITY, bestCost),
                     boxed.nodes(), boxGuide.estimate(start.getX(), start.getY(), start.getZ())));
             GuidedWalk toGoal = followGuidedToGoal(cells, start, goal, guide, liveLimits);
-            report.add(String.format(Locale.ROOT, "  【案】目的地を狙って継ぎ足す %s 展開%,d",
+            report.add(String.format(Locale.ROOT, "  [proposal] aim at the destination and extend %s expanded%,d",
                     ratio(toGoal.arrived() ? toGoal.cost() : Double.POSITIVE_INFINITY, bestCost),
                     toGoal.nodes()));
             if (!toGoal.arrived()) {
                 report.add("    " + toGoal.trace());
             }
             GuidedWalk viaWaypoints = followWithRadius(cells, start, coarse, 16);
-            report.add(String.format(Locale.ROOT, "  【現行】中間目標に立ち寄る %s 展開%,d",
+            report.add(String.format(Locale.ROOT, "  [current] stop by intermediate targets %s expanded%,d",
                     ratio(viaWaypoints.arrived() ? viaWaypoints.cost() : Double.POSITIVE_INFINITY,
                             bestCost),
                     viaWaypoints.nodes()));
         }
 
-        report.add(String.format(Locale.ROOT, "ガイドの下限違反の最悪: %.3f倍 %s",
+        report.add(String.format(Locale.ROOT, "worst guide lower-bound violation: %.3fx %s",
                 worstGuideRatio, worstGuideAt));
         System.out.println(String.join("\n", report));
-        assertTrue(measured > 0, "1本も測れていない\n" + String.join("\n", report));
+        assertTrue(measured > 0, "not a single route measured\n" + String.join("\n", report));
     }
 }

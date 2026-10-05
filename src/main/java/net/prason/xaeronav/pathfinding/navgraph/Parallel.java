@@ -9,22 +9,22 @@ import java.util.function.BooleanSupplier;
 import org.jspecify.annotations.Nullable;
 
 /**
- * {@code [0, count)}を小分けにして、呼び出し元のスレッドとプールで並べて回す。
+ * Splits {@code [0, count)} into chunks and runs them side by side on the calling thread and the pool.
  *
- * <p>呼び出し元も手を動かすので、プールが他の仕事で埋まっていても止まらない。
- * <b>プールのスレッドから呼んではいけない</b>——待っている間そのスレッドを塞ぐので、並列度が1つ減る。
+ * <p>The caller does work too, so this does not stall even when the pool is busy with other jobs.
+ * <b>Do not call this from a pool thread</b>: it blocks that thread while waiting, reducing parallelism by one.
  */
 record Parallel(@Nullable Executor pool, int workers) {
 
     static final Parallel INLINE = new Parallel(null, 1);
 
-    /** {@code [from, to)}を処理する。打ち切るなら{@code false}を返す。 */
+    /** Processes {@code [from, to)}. Returns {@code false} to stop. */
     @FunctionalInterface
     interface Range {
         boolean run(int from, int to);
     }
 
-    /** @return どこかの小分けが打ち切ったら{@code false} */
+    /** @return {@code false} if any chunk stopped early */
     boolean forEach(int count, int grain, BooleanSupplier cancelled, Range body) {
         if (pool == null || workers <= 1 || count <= grain) {
             for (int from = 0; from < count; from += grain) {

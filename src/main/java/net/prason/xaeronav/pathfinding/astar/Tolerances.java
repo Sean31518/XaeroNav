@@ -3,38 +3,38 @@ package net.prason.xaeronav.pathfinding.astar;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 詰んだときに段階的に緩める「危険の許容量」一式。{@link RunCaps}（何マス／何tick続けてよいか）と
- * 落下ダメージの許容点数をまとめたもの。
+ * The full set of "risk allowances" loosened step by step when stuck. Bundles {@link RunCaps} (how many blocks/ticks in a row are allowed)
+ * with the allowed fall-damage points.
  *
- * <p>1つの器にまとめてあるのは、緩める側（{@code PathfindingExecutor}）が段階を1本の梯子として
- * 持つため。片方だけ緩めても、もう片方で詰んでいれば同じ探索をもう一度払うだけになる。
+ * <p>They share one holder because the loosening side ({@code PathfindingExecutor}) holds the steps as a single
+ * ladder. Loosening only one does nothing but pay for the same search again if the other one is still stuck.
  *
- * <p><b>{@link RunCaps}へ{@code maxFallDamagePoints}を直接足さないこと。</b>あちらは
- * <b>0が無制限</b>を表すのに対し、落下ダメージの0は「一切許さない」で意味が正反対になる
- * （{@link RunCaps#NONE}が落下ダメージだけ最も厳しい側へ倒れる）。
+ * <p><b>Do not add {@code maxFallDamagePoints} directly to {@link RunCaps}.</b> There,
+ * <b>0 means unlimited</b>, whereas for fall damage 0 means "none allowed", the exact opposite
+ * ({@link RunCaps#NONE} would tip fall damage alone to the strictest side).
  *
- * @param maxFallDamagePoints 落下ダメージを何点(0.5ハート単位)まで許容してよいか。0なら安全高さを
- *                            超える落下を一切提示しない。<b>無制限は表現しない</b>——上限を外すと
- *                            即死する落下が案内に出るので、緩める側が体力から上限を決める
- * @param allowRiskyJumps 底の無い空虚の上・外したら死ぬ落差の上の跳躍を許すか。既定では避け、
- *                        <b>経路が一本も引けなかったときだけ</b>緩める側が開ける——ユーザーの意図は
- *                        「回り込めるならそちらを通れ」であって「絶対に跳ぶな」ではない
- *                        （C字の島の両端を跳ぶより外周を歩く方が安全、島と島の間なら跳ぶしかない）。
- *                        {@code fallDamageToleranceEnabled}が詰み回避でも開かないのとは<b>意図的に違う</b>：
- *                        あちらは「痛い思いをしたくない」という好みで、断られた以上は代案が要らない。
- *                        こちらの代案は「経路が出ない」しかなく、跳ぶ区間には
- *                        {@code PathRisk.VOID_BELOW}で必ず警告色が付く
- * @param placedBlockBudget 経路全体で置いてよい足場の総数。0なら無制限。<b>{@link RunCaps}へ入れずに
- *                        ここへ置くのは、あちらが「何マス続けてよいか」＝連続長の器だから</b>——
- *                        累積の予算を{@code RUN_CAP_LOOSEN_MULTIPLIERS}の倍率で緩めても意味が無い
- *                        （持ち物の枚数は地形の都合で増えない）。緩めるなら外す一択なので、
- *                        梯子の最後の段でだけ0にする
- * @param placeWithoutBlocks 足場に使えるブロックを1つも持っていなくても設置の移動を作ってよいか。
- *                        <b>詰み回避の最後の手段</b>——ジ・エンドの島渡りのように橋以外に道が無い
- *                        地形では、持っていないというだけで経路が<b>原理的に</b>出なくなる。案内に
- *                        何も出ないので「島渡りだけできない」としか見えない。出せば「ここに橋が要る」
- *                        と分かり、掘って集めるなり引き返すなり判断できる。{@code maxSubmergedTicks}を
- *                        外して息の続かない潜水を見せるのと同じ扱いで、HUDが必要な枚数を伝える
+ * @param maxFallDamagePoints how many points (in half hearts) of fall damage are acceptable. At 0, no fall beyond the safe
+ *                            height is ever suggested. <b>Unlimited is not representable</b>: removing the cap would put
+ *                            lethal falls into the guidance, so the loosening side derives the cap from health
+ * @param allowRiskyJumps whether to allow jumps over bottomless void or over drops that kill on a miss. Avoided by default;
+ *                        the loosening side opens it <b>only when not a single path could be drawn</b>. The user's intent is
+ *                        "go around if you can", not "never jump"
+ *                        (walking the rim of a C-shaped island beats jumping across its ends; between islands, jumping is the only way).
+ *                        <b>Deliberately different</b> from {@code fallDamageToleranceEnabled}, which stays closed even to get unstuck:
+ *                        that one is a preference for "I don't want to get hurt", and once declined no alternative is needed.
+ *                        Here the only alternative is "no path at all", and jump legs always get
+ *                        a warning color via {@code PathRisk.VOID_BELOW}
+ * @param placedBlockBudget total number of footing blocks that may be placed along the whole path. 0 means unlimited. <b>It lives
+ *                        here rather than in {@link RunCaps} because that one holds run lengths, i.e. "how many blocks in a row"</b>;
+ *                        scaling a cumulative budget by the {@code RUN_CAP_LOOSEN_MULTIPLIERS} factors is meaningless
+ *                        (the item count in the inventory doesn't grow with the terrain). The only way to loosen it is to remove it,
+ *                        so it becomes 0 only on the last rung of the ladder
+ * @param placeWithoutBlocks whether placement moves may be generated even when holding no blocks usable as footing.
+ *                        <b>The last resort for getting unstuck</b>: in terrain where bridging is the only way, like island-hopping in
+ *                        the End, not having blocks alone makes a path <b>fundamentally</b> impossible. With nothing in the
+ *                        guidance, it just looks like "only island-hopping fails". Showing it makes clear "a bridge is needed here",
+ *                        so the player can decide to mine for blocks or turn back. Treated the same as dropping {@code maxSubmergedTicks}
+ *                        to show a dive longer than the player's breath, with the HUD telling how many blocks are needed
  */
 public record Tolerances(RunCaps caps, int maxFallDamagePoints, boolean allowRiskyJumps,
                           int placedBlockBudget, boolean placeWithoutBlocks) {

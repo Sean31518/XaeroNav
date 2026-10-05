@@ -19,10 +19,10 @@ import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * 目的地を決めた直後の、航法グラフの初回の組み立て（構築＋ガイド）を実機の保存地形で測る。
- * 地形は{@link ArrayCells}で配列に写す——{@link FakeCells}のままだとセルの読み出しが実機より桁で重く、内訳が実機と合わない。
+ * Measures the nav graph's first build (construction + guide) right after a destination is set, on real saved terrain.
+ * The terrain is copied into an array with {@link ArrayCells}; as {@link FakeCells}, cell reads are orders of magnitude heavier than in-game, and the breakdown wouldn't match.
  *
- * <p>{@code 辺}と{@code 値}は結果のダイジェスト。速さを変える変更の前後でこれが1つでも変わったら、結果を変えている。
+ * <p>{@code edges} and {@code value} are digests of the result. If either changes across a speed change, the change alters results.
  */
 @Tag("bench")
 class NavGraphFirstBuildBenchTest {
@@ -40,14 +40,14 @@ class NavGraphFirstBuildBenchTest {
         int rounds = Integer.getInteger("xaeronav.rounds", 3);
         int warmup = Integer.getInteger("xaeronav.warmup", 0);
         if (warmup > 0) {
-            // 別の場所・別の目的地で小さな窓を1回組み、JITを温める（本番の結果には触れない）
+            // Build a small window once at another place with another destination to warm up the JIT (doesn't touch the production result)
             BlockPos at = StanceFinder.resolveStart(cells, new BlockPos(-100, 64, 600));
             WindowedCells small = new WindowedCells(new ArrayCells(cells, at, warmup), at, warmup);
             long began = System.currentTimeMillis();
             new NavGraph(at.offset(40, 0, 40), cells.bounds().minY(), cells.bounds().maxY()).refresh(() -> small,
                     at.getX(), at.getZ(), warmup, LoadedArea.square(at.getX(), at.getZ(), warmup),
                     FarField.of((x, y, z) -> 0.0), ForkJoinPool.commonPool(), workers, () -> false);
-            System.out.printf(Locale.ROOT, "温め 半径%d %dms%n", warmup, System.currentTimeMillis() - began);
+            System.out.printf(Locale.ROOT, "warmup radius%d %dms%n", warmup, System.currentTimeMillis() - began);
         }
         for (BlockPos raw : PLAYERS) {
             BlockPos player = StanceFinder.resolveStart(cells, raw);
@@ -61,7 +61,7 @@ class NavGraphFirstBuildBenchTest {
                         LoadedArea.square(player.getX(), player.getZ(), WINDOW), far, ForkJoinPool.commonPool(),
                         workers, () -> false);
                 WindowField field = built.field();
-                System.out.printf(Locale.ROOT, "プレイヤー%s 回%d 構築%dms ガイド%dms セクション%d 辺%d ノード%d 値%016x%n",
+                System.out.printf(Locale.ROOT, "player%s round%d build%dms guide%dms sections%d edges%d nodes%d value%016x%n",
                         player.toShortString(), round, built.buildMillis(), field.buildMillis(), built.sectionsBuilt(),
                         graph.edgeCount(), field.nodes(), digest(field, player, cells));
             }

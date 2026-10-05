@@ -15,12 +15,12 @@ import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 経路から外れたときに、どのステップへ合流するか。
+ * Which step to rejoin when you've strayed from the path.
  *
- * <p><b>合流点より手前は捨てられる</b>ので、先のステップへ合流できるほど残りの道のりが短くなる。
- * 距離だけで「最も近い1点」を選ぶと、経路が曲がっている所で自分より手前のステップが選ばれ、
- * いま歩いてきた区間をもう一度歩かされる——ユーザー報告「引き直したときに、先に決まっていた
- * ルートとの間が最適じゃない」の形。
+ * <p><b>Everything before the join point is discarded</b>, so the further ahead you can rejoin, the shorter the
+ * remaining distance. Choosing "the single closest point" by distance alone picks a step behind you where the path
+ * bends, making you walk the stretch you just came along again; this is the shape of the user report "when it
+ * recomputes, the connection to the previously decided route isn't optimal".
  */
 class SpliceJoinTest {
 
@@ -31,7 +31,7 @@ class SpliceJoinTest {
                 List.of(), List.of(), PathRisk.NONE, null);
     }
 
-    /** 東へ10進んでから南へ10曲がる、直角の経路。 */
+    /** A right-angled path going 10 east, then turning 10 south. */
     private static List<PathStep> corner() {
         List<PathStep> steps = new ArrayList<>();
         for (int x = 1; x <= 10; x++) {
@@ -48,10 +48,10 @@ class SpliceJoinTest {
     }
 
     /**
-     * 直角の内側に立ったとき、<b>曲がった先へ合流すること</b>。
+     * Standing inside the right angle, <b>it rejoins past the turn</b>.
      *
-     * <p>この位置から最も近いのは曲がる前の腕（3ブロック）だが、そこへ合流すると角を回る
-     * 14ブロックがまるごと残る。曲がった先はほんの少し遠いだけで、残りははるかに短い。
+     * <p>From this position the closest is the arm before the turn (3 blocks), but rejoining there leaves all 14
+     * blocks around the corner. Past the turn is only slightly farther, and the remainder is far shorter.
      */
     @Test
     void joinsPastTheCornerInsteadOfBacktracking() {
@@ -59,12 +59,12 @@ class SpliceJoinTest {
         int index = join(steps, new Vec3(3.5, Y + 0.5, 3.5));
 
         BlockPos joined = steps.get(index).pos();
-        assertEquals(10, joined.getX(), "曲がる前の腕へ戻っている: " + joined.toShortString());
+        assertEquals(10, joined.getX(), "Went back to the arm before the turn: " + joined.toShortString());
         assertTrue(joined.getZ() >= 5,
-                "角のすぐ先ではなく、同じくらい近い中でいちばん先へ合流するはず: " + joined.toShortString());
+                "Should rejoin the furthest among the similarly close, not just past the corner: " + joined.toShortString());
     }
 
-    /** 経路の真横に居るだけなら、そのまま自分の位置のステップへ合流する。 */
+    /** If you're just beside the path, rejoin the step at your own position. */
     @Test
     void joinsBesideItselfOnAStraightPath() {
         List<PathStep> steps = new ArrayList<>();
@@ -73,14 +73,14 @@ class SpliceJoinTest {
         }
         int index = join(steps, new Vec3(20.5, Y + 0.5, 3.5));
 
-        // 真横なので、余裕(8)ぶん先までは同じくらい近い。手前へは戻らないことが要点
+        // Right beside it, so up to the slack (8) ahead is similarly close. The point is not going back
         assertTrue(steps.get(index).pos().getX() >= 20,
-                "自分より手前へ合流している: " + steps.get(index).pos().toShortString());
+                "Rejoined behind yourself: " + steps.get(index).pos().toShortString());
         assertTrue(steps.get(index).pos().getX() <= 30,
-                "余裕を超えて遠くへ飛んでいる: " + steps.get(index).pos().toShortString());
+                "Jumped too far, beyond the slack: " + steps.get(index).pos().toShortString());
     }
 
-    /** 足場を置いて渡る区間へは合流できない（まだ存在しないブロックの上に立てない）。 */
+    /** Can't rejoin onto a stretch crossed by placing footing (can't stand on blocks that don't exist yet). */
     @Test
     void neverJoinsOntoABridge() {
         List<PathStep> steps = new ArrayList<>();
@@ -93,28 +93,28 @@ class SpliceJoinTest {
         }
         int index = join(steps, new Vec3(14.5, Y + 0.5, 0.5));
 
-        assertTrue(index <= 9, "橋の上へ合流している: " + steps.get(index).pos().toShortString());
+        assertTrue(index <= 9, "Rejoined onto the bridge: " + steps.get(index).pos().toShortString());
     }
 
-    /** 通れなくなったステップは飛ばして、その手前へ合流する。 */
+    /** Steps that became impassable are skipped, rejoining before them. */
     @Test
     void skipsStepsThatAreNoLongerPassable() {
         List<PathStep> steps = new ArrayList<>();
         for (int x = 1; x <= 40; x++) {
             steps.add(step(x, 0));
         }
-        // x >= 22 が塞がっている
+        // x >= 22 is blocked
         int index = Splice.joinableStepIndex(steps, new Vec3(20.5, Y + 0.5, 0.5), 0,
                 i -> steps.get(i).pos().getX() < 22);
 
         assertEquals(21, steps.get(index).pos().getX(),
-                "塞がっていない中でいちばん先へ合流するはず: " + steps.get(index).pos().toShortString());
+                "Should rejoin the furthest unblocked step: " + steps.get(index).pos().toShortString());
     }
 
     /**
-     * <b>近い範囲が全部塞がっていても諦めないこと。</b>範囲は検査を掛けずに測った「最も近い
-     * ステップ」から取るので、その一帯が塞がっていると範囲ごと外れる。塞がった箇所を迂回する
-     * 場面がまさにそれで、ここで-1を返すと合流できるのに全部引き直すことになる。
+     * <b>Don't give up even if the whole nearby range is blocked.</b> The range is taken from "the closest step"
+     * measured without checks, so if that area is blocked the whole range misses. Detouring around a blocked spot is
+     * exactly that case, and returning -1 here would recompute everything even though rejoining is possible.
      */
     @Test
     void looksBeyondTheSlackWhenEverythingNearIsBlocked() {
@@ -122,21 +122,21 @@ class SpliceJoinTest {
         for (int x = 1; x <= 40; x++) {
             steps.add(step(x, 0));
         }
-        // プレイヤーの周り（余裕8ブロックぶん）がまるごと塞がっている
+        // Everything around the player (the 8-block slack) is blocked
         int index = Splice.joinableStepIndex(steps, new Vec3(20.5, Y + 0.5, 0.5), 0,
                 i -> steps.get(i).pos().getX() < 8 || steps.get(i).pos().getX() > 32);
 
         assertTrue(steps.get(index).pos().getX() > 32,
-                "塞がった一帯の手前で諦めている: " + steps.get(index).pos().toShortString());
+                "Gave up before the blocked area: " + steps.get(index).pos().toShortString());
     }
 
-    /** {@code minIndex}より手前は候補にしない（塞がった箇所を迂回するとき用）。 */
+    /** Steps before {@code minIndex} aren't candidates (for detouring around a blocked spot). */
     @Test
     void respectsTheMinimumIndex() {
         List<PathStep> steps = corner();
         int index = Splice.joinableStepIndex(steps, new Vec3(1.5, Y + 0.5, 0.5), 15,
                 i -> true);
 
-        assertTrue(index >= 15, "minIndexより手前へ合流している: " + index);
+        assertTrue(index >= 15, "Rejoined before minIndex: " + index);
     }
 }

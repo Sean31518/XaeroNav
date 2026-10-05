@@ -51,19 +51,19 @@ class NavGuidanceTest {
     void timeBeyondTheRouteIsAddedWithoutChangingTheDistance() {
         PathResult result = path(30, false);
         NavGuidance routeOnly = NavGuidance.forPath(result, new BlockPos(0, 60, 0), 0.0);
-        // 実線の先に60秒ぶん
+        // 60 seconds' worth beyond the solid line
         NavGuidance withBeyond = NavGuidance.forPath(result, new BlockPos(0, 60, 0), 1200.0);
 
         assertEquals(routeOnly.remainingBlocks, withBeyond.remainingBlocks);
         int added = withBeyond.remainingSeconds - routeOnly.remainingSeconds;
-        assertTrue(added >= 40 && added <= 80, "足された秒数: " + added);
+        assertTrue(added >= 40 && added <= 80, "Seconds added: " + added);
     }
 
     @Test
     void dotsFollowTheWaypointsAheadAndSkipThePassedOnes() {
         List<BlockPos> waypoints = List.of(new BlockPos(0, 60, 0), new BlockPos(100, 60, 0), new BlockPos(100, 60, 100));
 
-        // 始点は1本目の区間の上。0,0の中間目標は通過済み
+        // The start is on the first segment. The intermediate goal at 0,0 has already been passed
         double length = GoalEta.alongDots(new BlockPos(50, 60, 0), new BlockPos(100, 60, 200), waypoints);
 
         assertEquals(50 + 100 + 100, length, 1e-6);

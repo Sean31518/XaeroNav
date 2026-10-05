@@ -10,24 +10,24 @@ import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 航法グラフの1セクション（16³）から出る移動を、<b>探索とまったく同じ移動生成で</b>全部拾う。
+ * Collects every move leaving one nav graph section (16³), <b>using exactly the same move generation as the search</b>.
  *
- * <p>別のコストモデルで辺を張り直さないのが要点——層1・層2はそれをやって「真のコストを粗くしたもの」ではなく
- * 「別の推測」になり、ガイドの質の天井を作っていた。
+ * <p>The key is not re-deriving edges with a different cost model. Layers 1 and 2 did that and ended up with "a different
+ * guess" rather than "a coarsened version of the true cost", which put a ceiling on guide quality.
  *
- * <p>展開するのは{@code mask}に含まれるセルだけで、辺の行き先はセクションの外でもよい。
+ * <p>Only cells in {@code mask} are expanded, and an edge's destination may lie outside the section.
  */
 public final class SectionMoves {
 
     public static final int SIZE = 16;
 
-    /** 展開してよいセル（殻）。 */
+    /** Cells that may be expanded (the shell). */
     @FunctionalInterface
     public interface Mask {
         boolean contains(int x, int y, int z);
     }
 
-    /** 拾った辺。座標は{@link BlockPos#asLong}、値段はtick。 */
+    /** Collected edges. Coordinates are {@link BlockPos#asLong}, costs are in ticks. */
     @FunctionalInterface
     public interface Sink {
         void edge(long from, long to, float cost);
@@ -37,9 +37,9 @@ public final class SectionMoves {
     }
 
     /**
-     * @param goalX 目的地の列。奈落の上の橋は目的地へ近づく向きにしか張られない（{@link BuildMoves#addBridge}）ので、
-     *              ここで拾った辺は目的地ごとに違う
-     * @return 打ち切られたら{@code false}
+     * @param goalX the destination column. Bridges over the void are only built in the direction approaching the destination ({@link BuildMoves#addBridge}),
+     *              so the edges collected here differ per destination
+     * @return {@code false} if cut off
      */
     public static boolean build(CellSource cells, int sectionX, int sectionY, int sectionZ, Mask mask, int goalX,
                                 int goalZ, Sink sink, BooleanSupplier cancelled) {
@@ -59,13 +59,13 @@ public final class SectionMoves {
         if (seeds.isEmpty()) {
             return true;
         }
-        // 重み0の素のDijkstraとして回す。上限は置かない——展開はセクションの殻に閉じている
+        // Run as a plain Dijkstra with weight 0. No cap: expansion is confined to the section's shell
         AStarPathfinder closure = new AStarPathfinder(cells, new SearchLimits(Integer.MAX_VALUE, Long.MAX_VALUE / 4, 0.0));
         closure.expandFilter((x, y, z) -> Math.floorDiv(x, SIZE) == sectionX && Math.floorDiv(y, SIZE) == sectionY
                 && Math.floorDiv(z, SIZE) == sectionZ && mask.contains(x, y, z));
         closure.edgeSink((fx, fy, fz, fromBoating, tx, ty, tz, toBoating, edgeCost, kind) -> {
-            // 水中の割増は探索が到達経路の息の勘定から決める。辺の値段としては「着いた先で頭が水に浸かっていて、
-            // 真上へ1マス浮上するのでない」ときに掛かると見なす（AStarPathfinder#relaxと同じ免除）
+            // The search decides the underwater surcharge from the breath accounting along the path taken. As an edge cost, treat it as applying
+            // when "the head is underwater at the destination and it isn't surfacing one block straight up" (same exemption as AStarPathfinder#relax)
             boolean surfacing = ty > fy && Math.abs(tx - fx) + Math.abs(tz - fz) <= 1;
             boolean submerged = !surfacing && CellData.water(cells.cell(tx, ty + 1, tz));
             sink.edge(BlockPos.asLong(fx, fy, fz), BlockPos.asLong(tx, ty, tz),

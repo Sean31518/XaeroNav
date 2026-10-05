@@ -16,50 +16,50 @@ import net.prason.xaeronav.pathfinding.cost.FlightCosts;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * {@link AirGrid}の上を26近傍で解くA*。空いている空間だけを通る折れ線を返す。
+ * A* over {@link AirGrid} with a 26-neighborhood. Returns a polyline that passes only through open space.
  *
- * <p>ノードは座標を持つオブジェクトではなく<b>平行配列に載せた整数ID</b>にしてある。歩行の
- * {@code PathNode}が持っている情報（移動の種類・橋の連続長・掘削）は空中には1つも無く、残るのは
- * コストと親だけ。3D格子は同じ距離でも歩行の何倍もノードを触るので、1ノードあたりのオブジェクト確保を
- * 無くしておく意味が大きい。
+ * <p>Nodes are <b>integer IDs over parallel arrays</b> rather than objects holding coordinates. None of the information
+ * that the walking {@code PathNode} holds (move kind, bridge run length, digging) exists in the air; all that remains is
+ * cost and parent. A 3D grid touches many times more nodes than walking for the same distance, so eliminating
+ * per-node object allocation matters a lot.
  *
- * <p>{@code PathNode.closed}と同じ規律を守る——重み付きA*は一貫性が崩れるので、確定済みノードを
- * openへ戻すと同じセルを何度も展開し直す（歩行側の実測で1セルあたり6.3回）。戻さない代わりに
- * 経路のコストは最適の{@code heuristicWeight}倍以内に収まる。
+ * <p>Follows the same discipline as {@code PathNode.closed}: weighted A* breaks consistency, so returning settled nodes
+ * to open re-expands the same cell over and over (6.3 times per cell measured on the walking side). In exchange for not returning them,
+ * the path cost stays within {@code heuristicWeight} times the optimum.
  */
 public final class FlightPathfinder {
 
     /**
-     * 未到達で終わったときに「どこまで進めたか」を選ぶための係数。小さいほど実際に進んだ距離を
-     * 重く見る。歩行側（{@code AStarPathfinder.COEFFICIENTS}）と同じ考え方で、Baritoneに倣っている。
+     * Coefficients for choosing "how far we got" when the search ends without reaching the goal. Smaller values weigh
+     * the distance actually traveled more heavily. Same idea as the walking side ({@code AStarPathfinder.COEFFICIENTS}), following Baritone.
      */
     private static final double[] COEFFICIENTS = {1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 10.0};
 
-    /** 打ち切り・時間切れの確認を入れる間隔（展開数のマスク）。 */
+    /** Interval for checking cancellation/timeout (a mask on the expansion count). */
     private static final int CHECK_INTERVAL_MASK = 0x3F;
 
-    /** 部分経路として提示する価値がある最短の長さ（ブロック）。これ未満なら経路なしとして扱う。 */
+    /** Shortest length (blocks) worth offering as a partial path. Anything shorter is treated as no path. */
     private static final double MIN_USEFUL_PATH_BLOCKS = 8.0;
 
-    /** 始点・目的地が格子の目に乗っていないときに、飛行可なセルを探す半径（セル数）。 */
+    /** Radius (in cells) to search for a flyable cell when the start or destination doesn't land on the grid. */
     static final int SNAP_CELL_RADIUS = 3;
 
     /**
-     * ゴール領域の垂直方向の許容幅（ブロック）。<b>水平半径より広く固定する</b>。
+     * Vertical tolerance (blocks) of the goal region. <b>Fixed wider than the horizontal radius</b>.
      *
-     * <p>飛行のゴールはたいてい{@code CoarseFlightRouter}が置いた中間目標で、そのYは
-     * 「チャンク平均の床の高さから導いた高度帯」を更にクランプした推定値でしかない。水平と同じ
-     * 幅でYを縛ると、推定が数ブロック外れただけで<b>原理的に到達不能</b>になり、それを発見する
-     * ために毎回ノード上限を使い切る——地形が複雑なほど当たりやすく、経路が伸びなくなる。
-     * 歩行の{@code AStarPathfinder.GOAL_VERTICAL_TOLERANCE_BLOCKS}とまったく同じ判断。
+     * <p>The flight goal is usually an intermediate target placed by {@code CoarseFlightRouter}, and its Y is
+     * only an estimate: "an altitude band derived from the chunk-average floor height", further clamped. Constraining Y to the same
+     * width as horizontal makes the goal <b>unreachable in principle</b> when the estimate is off by just a few blocks, and discovering that
+     * burns the node limit every time; the more complex the terrain, the more often this hits, and the path stops extending.
+     * Exactly the same reasoning as walking's {@code AStarPathfinder.GOAL_VERTICAL_TOLERANCE_BLOCKS}.
      */
     static final int GOAL_VERTICAL_TOLERANCE_BLOCKS = 24;
 
     private static final double MIN_IMPROVEMENT = 0.01;
 
     /**
-     * 探索の期限を過ぎてから、平滑化に更に許す時間（ミリ秒）。ここを設けないと、上限いっぱいまで
-     * 探索した回の平滑化が青天井になる（実機で探索2秒＋平滑化6.5秒）。
+     * Extra time (milliseconds) allowed for smoothing after the search deadline has passed. Without this, smoothing after a search
+     * that ran to the limit is unbounded (in practice: 2 s search + 6.5 s smoothing).
      */
     private static final long SMOOTHING_ALLOWANCE_MILLIS = 400L;
 
@@ -68,7 +68,7 @@ public final class FlightPathfinder {
     private final SearchLimits limits;
     private final double clearancePenaltyTicks;
 
-    // ノード表（IDは0始まりの連番）。cellKey -> ID の引きは1本だけ持つ
+    // Node table (IDs are sequential from 0). Only one cellKey -> ID lookup is kept
     private final Long2IntOpenHashMap ids = new Long2IntOpenHashMap();
     private long[] cellKey = new long[1024];
     private double[] cost = new double[1024];
@@ -92,8 +92,8 @@ public final class FlightPathfinder {
     private long deadline;
 
     /**
-     * @param clearancePenaltyTicks 26近傍が完全に塞がったセルへ入るときの割増（tick）。0で無効。
-     *                              最短でも狭い所は通したくない、という要求をここで表す
+     * @param clearancePenaltyTicks surcharge (ticks) for entering a cell whose 26-neighborhood is fully blocked. 0 disables it.
+     *                              Expresses the requirement to avoid narrow spots even on the shortest path
      */
     public FlightPathfinder(AirGrid grid, boolean rockets, SearchLimits limits, double clearancePenaltyTicks) {
         this.grid = grid;
@@ -108,23 +108,23 @@ public final class FlightPathfinder {
     }
 
     /**
-     * {@code start}から{@code target}の半径{@code goalRadiusBlocks}以内へ届く折れ線を探す。
+     * Find a polyline from {@code start} that reaches within radius {@code goalRadiusBlocks} of {@code target}.
      *
-     * <p>ゴールを点ではなく<b>領域</b>にするのは歩行側と同じ理由——目的地はたいてい着地する地面
-     * そのもの（＝飛行不可のセル）で、点で要求すると原理的に到達しない。空中でどこまで寄れば
-     * あとは自力で降りられるか、が実際に知りたいこと。
+     * <p>The goal is a <b>region</b> rather than a point for the same reason as walking: the destination is usually the landing ground
+     * itself (i.e. a non-flyable cell), so requiring a point makes it unreachable in principle. What we actually want to know is how close
+     * we need to get in the air before the player can descend on their own.
      */
     public FlightRoute search(Vec3 start, Vec3 target, double goalRadiusBlocks, BooleanSupplier cancelled) {
         return search(start, target, goalRadiusBlocks, FlightHorizon.NONE, FlightGuide.NONE, cancelled);
     }
 
-    /** {@code horizon}の外へ出たセルも着いたとみなす（{@link FlightHorizon}参照）。 */
+    /** Cells that leave {@code horizon} also count as arrived (see {@link FlightHorizon}). */
     public FlightRoute search(Vec3 start, Vec3 target, double goalRadiusBlocks, FlightHorizon horizon,
                               FlightGuide guide, BooleanSupplier cancelled) {
         this.horizon = horizon;
         this.guide = guide;
-        // ノードの見積もりはゴールが決まって初めて計算できる。2回目の探索でゴールが変わっても
-        // 前回のノードは古い見積もりを持ったままなので、表ごと捨てる
+        // A node's estimate can only be computed once the goal is fixed. Even if the goal changes on a second search,
+        // the previous nodes keep their stale estimates, so discard the whole table
         ids.clear();
         nodeCount = 0;
         heapSize = 0;
@@ -135,7 +135,7 @@ public final class FlightPathfinder {
 
         long startCell = grid.nearestFlyable(start, SNAP_CELL_RADIUS);
         if (startCell == AirGrid.NONE) {
-            // 周りが塞がっている（岩の中・未ロード）。ここから引ける経路は無い
+            // The surroundings are blocked (inside rock, unloaded). No path can be drawn from here
             return FlightRoute.NONE;
         }
 
@@ -179,9 +179,9 @@ public final class FlightPathfinder {
     }
 
     /**
-     * ゴールを飛行可なセルへ寄せた点。中間目標はチャンク中心＋帯のYという推定値なので、
-     * ブロック解像度では岩の中にあることが珍しくない——そのままだと領域ゴールでも届かず、
-     * 毎回ノード上限を焼いてから部分経路を返すことになる。
+     * The goal snapped to a flyable cell. Intermediate targets are estimates (chunk center + band Y), so
+     * at block resolution they are often inside rock; left as-is, even a region goal wouldn't be reached,
+     * and every search would burn the node limit before returning a partial path.
      */
     static Vec3 snappedGoal(AirGrid grid, Vec3 target) {
         long goalCell = grid.nearestFlyable(target, SNAP_CELL_RADIUS);
@@ -190,7 +190,7 @@ public final class FlightPathfinder {
     }
 
     /**
-     * 球ではなく<b>水平の円柱</b>で見る（垂直は{@link #GOAL_VERTICAL_TOLERANCE_BLOCKS}まで許す）。
+     * Checked as a <b>horizontal cylinder</b>, not a sphere (vertically, up to {@link #GOAL_VERTICAL_TOLERANCE_BLOCKS} is allowed).
      */
     private boolean reachedGoal(int node) {
         Vec3 center = centerOf(node);
@@ -204,8 +204,8 @@ public final class FlightPathfinder {
     }
 
     /**
-     * ゴールへ届かなかったときの到達点。係数の小さい（＝進んだ距離を重く見る）ものから順に、
-     * 始点から{@link #MIN_USEFUL_PATH_BLOCKS}以上離れている候補を採る。
+     * The reached point when the goal wasn't reached. In order of smallest coefficient (= weighing distance traveled more),
+     * take the first candidate at least {@link #MIN_USEFUL_PATH_BLOCKS} away from the start.
      */
     private int fallback(int startNode) {
         double threshold = MIN_USEFUL_PATH_BLOCKS * MIN_USEFUL_PATH_BLOCKS;
@@ -219,8 +219,8 @@ public final class FlightPathfinder {
     }
 
     /**
-     * 26近傍へ伸ばす。斜めの移動は<b>跨ぐ2×2×2の箱が全て飛行可のときだけ</b>許す。
-     * 端の2セルだけを見ると、岩の角を斜めに擦り抜ける経路が出る。
+     * Expand to the 26-neighborhood. A diagonal move is allowed <b>only when the whole 2×2×2 box it spans is flyable</b>.
+     * Checking only the 2 end cells produces paths that slip diagonally through rock corners.
      */
     private void expand(int current) {
         long key = cellKey[current];
@@ -242,7 +242,7 @@ public final class FlightPathfinder {
         }
     }
 
-    /** 移動が跨ぐ全セル（軸移動なら2、面斜めなら4、立体斜めなら8）が飛行可か。 */
+    /** Whether all cells a move spans (2 for an axis move, 4 for a face diagonal, 8 for a 3D diagonal) are flyable. */
     private boolean boxClear(int x, int y, int z, int dx, int dy, int dz) {
         for (int stepX = 0; stepX <= Math.abs(dx); stepX++) {
             for (int stepY = 0; stepY <= Math.abs(dy); stepY++) {
@@ -289,15 +289,15 @@ public final class FlightPathfinder {
     }
 
     /**
-     * ゴールまでの見積もり。<b>領域ゴールの縁までを測る</b>——中心までを測ると、領域の中に
-     * 入っている（＝残りコスト0）ノードにも見積もりが残り、非許容になる。
+     * Estimate to the goal. <b>Measures to the edge of the goal region</b>: measuring to the center leaves an estimate on
+     * nodes already inside the region (= remaining cost 0), making it inadmissible.
      *
-     * <p>軸ごとに縁まで詰めるのが要点。以前は中心までの見積もりから一律の割引を引いていたが、
-     * 垂直の許容を{@link #GOAL_VERTICAL_TOLERANCE_BLOCKS}まで広げると割引が足りず、ゴール直下の
-     * ノードが「まだ54tickかかる」ように見えて、A*が別の方向を掘り続ける。
+     * <p>The key is clamping to the edge per axis. Previously a flat discount was subtracted from the estimate to the center, but
+     * widening the vertical tolerance to {@link #GOAL_VERTICAL_TOLERANCE_BLOCKS} made the discount insufficient, so nodes directly below the goal
+     * looked like they "still take 54 ticks", and A* kept digging in another direction.
      *
-     * <p>狭さの割増（{@link Clearance}）はここに入れない。割増は常に0以上なので、入れない限り
-     * 見積もりは下限のままで、A*の性質は変わらない。
+     * <p>The narrowness surcharge ({@link Clearance}) is not included here. The surcharge is always >= 0, so as long as it's left out
+     * the estimate stays a lower bound and A*'s properties don't change.
      */
     private double estimateToGoal(int x, int y, int z) {
         Vec3 center = grid.center(x, y, z);
@@ -325,8 +325,8 @@ public final class FlightPathfinder {
             }
         }
         Collections.reverse(reversed);
-        // 先頭はプレイヤーがいるセルの中心なので、実際の位置へ差し替える。ここを中心のままにすると
-        // 線が自分の横から生えて見える
+        // The first point is the center of the player's cell, so replace it with the actual position. Leaving it at the center
+        // makes the line appear to sprout from beside the player
         reversed.set(0, start);
         List<Vec3> smoothed = FlightSmoother.smooth(reversed, grid, rockets, clearancePenaltyTicks,
                 deadline + SMOOTHING_ALLOWANCE_MILLIS);
@@ -338,7 +338,7 @@ public final class FlightPathfinder {
         return grid.center(BlockPos.getX(key), BlockPos.getY(key), BlockPos.getZ(key));
     }
 
-    /** そのセルのノードID。無ければ作る。 */
+    /** The node ID for that cell. Created if absent. */
     private int node(long key) {
         int existing = ids.get(key);
         if (existing >= 0) {
@@ -370,7 +370,7 @@ public final class FlightPathfinder {
         closed = Arrays.copyOf(closed, size);
     }
 
-    // --- オープンセット（IDを並べた二分ヒープ。decrease-keyのためにノード側が位置を持つ） ---
+    // --- Open set (a binary heap of IDs; nodes store their position for decrease-key) ---
 
     private void insert(int node) {
         if (heapSize + 1 == heap.length) {

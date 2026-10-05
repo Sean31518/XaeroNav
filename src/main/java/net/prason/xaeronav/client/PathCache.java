@@ -5,17 +5,18 @@ import java.util.function.Function;
 import net.prason.xaeronav.pathfinding.astar.PathResult;
 
 /**
- * 「経路が変わったときにだけ組み直す」を1箇所にまとめたもの。
+ * Puts "rebuild only when the path changes" in one place.
  *
- * <p>案内表示・地図の点・ワールド内描画・HUDの警告は、どれも経路から何かを導いて毎フレーム使う。
- * 導いた結果は経路が同じ限り変わらないので、フレームごとに作り直す意味はない。同じ判断を4箇所が
- * それぞれの書き方で持っていたため、新しい派生物を足すたびに「前の経路と同じか比べる」を
- * 書き起こす必要があり、比較を忘れれば毎フレーム再計算に静かに戻る。
+ * <p>The guidance display, map dots, in-world rendering, and HUD warnings all derive something from the path and
+ * use it every frame. The derived result doesn't change as long as the path is the same, so rebuilding it every
+ * frame is pointless. Four places each held this same decision in their own way, so every new derived value
+ * meant writing "compare with the previous path" from scratch, and forgetting the comparison silently fell back
+ * to recomputing every frame.
  *
- * <p>比較は{@code ==}で行う。{@link PathResult}は探索のたびに新しく作られ、内容が同じでも
- * 別インスタンスになるので、参照の一致がそのまま「同じ経路か」の答えになる。
+ * <p>The comparison uses {@code ==}. A {@link PathResult} is created fresh for every search and is a separate
+ * instance even when the contents are equal, so reference equality directly answers "is this the same path?".
  *
- * <p>スレッド安全ではない。描画スレッドまたはクライアントスレッドのどちらか一方から使うこと。
+ * <p>Not thread-safe. Use it from only one of the render thread or the client thread.
  */
 final class PathCache<T> {
 

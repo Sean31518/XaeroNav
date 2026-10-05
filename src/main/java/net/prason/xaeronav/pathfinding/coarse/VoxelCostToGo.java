@@ -10,78 +10,80 @@ import net.prason.xaeronav.pathfinding.astar.CostToGo;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * {@link VoxelTerrain}から作る、目的地までの残りコストの見積もり。天井のある次元の遠距離ルートで
- * {@code AStarPathfinder}へ渡す唯一のガイド。
+ * An estimate of the remaining cost to the destination, built from {@link VoxelTerrain}. The only guide passed to
+ * {@code AStarPathfinder} for long-distance routes in dimensions with a ceiling.
  *
- * <p>{@link CoarseRouter#costToGo}との違いは2つだけだが、どちらもネザーでは決定的だった:
+ * <p>There are only two differences from {@link CoarseRouter#costToGo}, but both were decisive in the Nether:
  *
  * <ul>
- *   <li><b>3次元</b>。柱ごとに床を数枚持つ表現では、縦に積まれたトンネルを区別できない</li>
- *   <li><b>探索の箱の外まで覆う</b>。目的地が箱の外にあると{@code CoarseRouter#costToGo}は
- *       全コストを無限にし、どこでも0を返す表になる＝ガイド無しと同じ</li>
+ *   <li><b>3D</b>. A representation with a few floors per column cannot distinguish vertically stacked tunnels</li>
+ *   <li><b>Covers beyond the search box</b>. When the destination is outside the box, {@code CoarseRouter#costToGo}
+ *       makes every cost infinite, giving a table that returns 0 everywhere = the same as no guide</li>
  * </ul>
  *
- * <p>実測（ユーザーの停止ルート）: 現行の2.5D層1ガイドは0ステップ、ガイド無しは全世界が見えていても
- * 300万ノードで未到達、ここが作るガイドは到達（682手）。「3次元であること」と「箱の外まで
- * 覆っていること」は<b>両方</b>必要で、片方だけだとどちらも0ステップになる。
+ * <p>Measured (the user's stalled route): the current 2.5D layer-1 guide gives 0 steps, no guide fails to arrive
+ * after 3 million nodes even with the whole world visible, and the guide built here arrives (682 steps). "Being 3D"
+ * and "covering beyond the box" are <b>both</b> required; with only one, both give 0 steps.
  *
- * <p><b>これは意図的に非許容（non-admissible）。</b>{@code AStarPathfinder}は幾何学的な
- * {@code Heuristic}とのmaxを取るので、下限を破っても幾何側が救う。{@code GuideAdmissibilityTest}の
- * 対象にしないのはそのため——あちらが守っているのは層1の{@code costToGo}の許容性で、役割が違う。
+ * <p><b>This is intentionally non-admissible.</b> {@code AStarPathfinder} takes the max with the geometric
+ * {@code Heuristic}, so even if this breaks the lower bound, the geometric side rescues it. That is why it is not
+ * covered by {@code GuideAdmissibilityTest}: that test guards the admissibility of layer 1's {@code costToGo}, a
+ * different role.
  */
 public final class VoxelCostToGo implements CostToGo {
 
     /**
-     * 床の無いセルを1ブロック渡る値段（疾走の何倍か）＝実費の橋。
+     * Cost of crossing one block of a cell with no floor (as a multiple of sprinting) = the actual cost of bridging.
      *
-     * <p><b>実費のまま使うこと。</b>この表は幾何{@code Heuristic}とのmaxで採られるので、
-     * 直線距離の何倍かがそのまま探索の重みになる——一見「地図が薄いと膨らみすぎて貪欲になる」
-     * ように見えるが、<b>そう見えるだけで実際には正しい</b>。実測（ユーザーの停止ルート、
-     * 洞窟レイヤー1枚・訪問68%という実機と同じ薄さの地図）では、膨らみ5.84倍の表がそのまま
-     * 549手で歩き通す。ここを縮めると（3.0倍・2.0倍へ）<b>逆に歩けなくなった</b>——
-     * 縮めた表は幾何ヒューリスティックに埋もれ、迂回すべき向きを言わなくなる。
+     * <p><b>Use the actual cost as-is.</b> This table is taken via max with the geometric {@code Heuristic}, so its
+     * multiple of straight-line distance becomes the search weight directly. At first glance it seems "a thin map
+     * inflates it too much and makes it greedy", but <b>that is only how it looks; it is actually right</b>. Measured
+     * (the user's stalled route, on a map as thin as the real one: one cave layer, 68% visited), the table inflated
+     * 5.84 times walks all the way in 549 steps. Shrinking it (to 3.0 or 2.0 times) <b>made it unable to walk</b>:
+     * the shrunken table is buried under the geometric heuristic and stops saying which way to detour.
      *
-     * <p>比を落とす側も測ってある: 11.1→3.0→1.5倍で1回の探索の前進は5→5→4ブロックで、
-     * どのみち改善しない。<b>この表の値段はいじる場所ではない。</b>
+     * <p>Lowering the ratio was measured too: at 11.1→3.0→1.5 times, each search advanced 5→5→4 blocks, no improvement
+     * either way. <b>The costs in this table are not the place to tweak.</b>
      */
     private static final double OPEN_PENALTY =
             (ActionCosts.PLACE_BLOCK_OVERHEAD_TICKS + ActionCosts.SPRINT_ONE_BLOCK)
                     / ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
-     * 溶岩の面を1ブロック渡る値段（疾走の何倍か）。橋を架けて渡ってよい設定なら、床の無いセルと
-     * <b>同じ</b>——実際に払うのも同じ「橋を架ける」だから。
+     * Cost of crossing one block of lava surface (as a multiple of sprinting). When bridging is allowed, the
+     * <b>same</b> as a cell with no floor, because what you actually pay is the same "build a bridge".
      *
-     * <p>「溶岩に架けられる橋は空中より短い（{@code CellSource#maxLavaBridgeRunBlocks}は既定30、
-     * 空中は96）ぶん高いはず」という理屈は立つが、<b>割り増して良くなることを測っていない</b>ので
-     * 揃えてある。この表の役目は大まかな向きを出すことで、溶岩を1マス単位で避けるのは層3の仕事。
+     * <p>One could argue "lava bridges are shorter than mid-air ones ({@code CellSource#maxLavaBridgeRunBlocks} defaults
+     * to 30, mid-air to 96), so it should cost more", but <b>we have not measured that a surcharge helps</b>, so they
+     * are kept equal. This table's job is to give a rough direction; avoiding lava cell by cell is layer 3's job.
      */
     private static final double LAVA_PENALTY = OPEN_PENALTY;
 
     /**
-     * 溶岩に橋を架けない設定のときの、溶岩の面の値段。渡れないので<b>床の無いセルより高く
-     * なければならない</b>——ここを掘削の実費（疾走の約7倍）に置いていた実装は、溶岩を
-     * 空洞（約11倍）より<b>安く</b>見積もっていた。
+     * Cost of a lava surface when bridging over lava is disabled. It cannot be crossed, so it <b>must be more expensive
+     * than a cell with no floor</b>. An implementation that set this to the actual dig cost (about 7 times sprinting)
+     * estimated lava as <b>cheaper</b> than open space (about 11 times).
      *
-     * <p>倍率そのものは測っていない。回帰のフィクスチャは全て溶岩橋ありの設定で、
-     * こちらの枝を通らない。「渡れないものは渡れる場所より高い」という順序だけが根拠。
+     * <p>The multiplier itself has not been measured. All regression fixtures use settings with lava bridges, so they
+     * do not go through this branch. The only basis is the ordering "what cannot be crossed costs more than what can".
      */
     private static final double BLOCKED_LAVA_PENALTY = OPEN_PENALTY * 8.0;
 
     /**
-     * 目的地のセルに床が見つからないときに、代わりの起点を探す範囲（ブロック）。
+     * Range (blocks) for finding a substitute origin when no floor is found in the destination cell.
      *
-     * <p><b>ここがこの設計の急所。</b>起点を1つも決められないとコスト表が丸ごと空になり、
-     * {@link #estimate}がどこでも0を返す＝ガイド無しと同じ＝「経路が1本も出ない」現象に戻る。
-     * 実測では、床を58%落とした地図で起点を床に限ると到達がコインフリップになった。
-     * 垂直の幅は領域ゴールの垂直許容({@code AStarPathfinder#goalVerticalRadius})と同じ考え方。
+     * <p><b>This is the crux of this design.</b> If not a single origin can be chosen, the whole cost table is empty and
+     * {@link #estimate} returns 0 everywhere = the same as no guide = back to the "not a single route comes out"
+     * problem. Measured on a map with 58% of floors dropped, restricting origins to floors made arrival a coin flip.
+     * The vertical extent follows the same idea as the region goal's vertical tolerance
+     * ({@code AStarPathfinder#goalVerticalRadius}).
      */
     private static final int ANCHOR_VERTICAL_BLOCKS = 24;
 
     private static final int ANCHOR_HORIZONTAL_BLOCKS = 16;
 
-    // 優先度キューの鍵は投入後に変わってはいけない。cost[]を経由して比べると、後の緩和が
-    // ヒープの順序を壊したまま優先度だけ変える
+    // Priority queue keys must not change after insertion. Comparing through cost[] lets later relaxations
+    // change only the priority while leaving the heap order broken
     private record Entry(int index, double cost) {
     }
 
@@ -98,13 +100,13 @@ public final class VoxelCostToGo implements CostToGo {
     }
 
     /**
-     * 目的地から逆向きにDijkstraを回してコスト表を作る。<b>ワーカースレッドで呼んでよい</b>
-     * （{@link VoxelTerrain}を組み終えていれば、ここはXaeroにもワールドにも触らない）。
+     * Builds the cost table by running Dijkstra backward from the destination. <b>May be called on a worker thread</b>
+     * (once {@link VoxelTerrain} is built, this touches neither Xaero nor the world).
      *
-     * @param goal 立てる座標へ寄せ終えた目的地（{@code StanceFinder#resolveGoal}の後）
-     * @return 起点を決められなければ{@code null}。呼び出し側は<b>黙ってガイド無しへ落とさず</b>、
-     *         それを記録すること——ガイドが無いことこそが遠距離ネザーの失敗そのものなので、
-     *         区別が付かないと同じ調査をもう一度やることになる
+     * @param goal the destination already snapped to a standable coordinate (after {@code StanceFinder#resolveGoal})
+     * @return {@code null} if no origin can be chosen. The caller must <b>not silently fall back to no guide</b>, and
+     *         must log it: having no guide is the very failure of long-distance Nether routes, so without telling
+     *         them apart the same investigation gets repeated
      */
     public static VoxelCostToGo build(VoxelTerrain terrain, BlockPos goal, BooleanSupplier cancelled) {
         int goalIndex = anchor(terrain, goal);
@@ -166,12 +168,12 @@ public final class VoxelCostToGo implements CostToGo {
     }
 
     /**
-     * 辺1ブロックあたりの値段。<b>一律「疾走の何倍」にしてはいけない。</b>立てない格子を
-     * 同じ値段で束ねた試作は、溶岩だらけのネザーで「壁を突っ切る方が安い」と言ってしまい、
-     * 展開ノードを減らしたまま経路だけ悪くなった。
+     * Cost per block of an edge. <b>Must not be a flat "N times sprinting".</b> A prototype that lumped unstandable
+     * cells at the same cost said "cutting through walls is cheaper" in the lava-filled Nether, and made routes worse
+     * while reducing expanded nodes.
      *
-     * <p>逆に、地図が薄いと見積もりが直線距離の5倍以上になるのを見て<b>縮めたくもなるが、
-     * それも測って外してある</b>（{@link #OPEN_PENALTY}）。
+     * <p>Conversely, seeing the estimate exceed 5 times the straight-line distance on a thin map <b>makes you want to
+     * shrink it, but that was measured and ruled out too</b> ({@link #OPEN_PENALTY}).
      */
     private static double rate(byte kind, boolean lavaPassable) {
         double penalty = switch (kind) {
@@ -183,11 +185,11 @@ public final class VoxelCostToGo implements CostToGo {
     }
 
     /**
-     * 目的地のセル、無ければその周りで逆向きDijkstraの起点にできるセルを探す。
-     * 床を優先し、床が無ければ空洞、それも無ければ目的地のセルそのもの。
+     * Finds the destination cell, or failing that a nearby cell, to use as the origin of the backward Dijkstra.
+     * Prefers a floor; without a floor, open space; failing that, the destination cell itself.
      *
-     * <p><b>最後の手段まで用意するのが要点。</b>「起点が見つからない」は表全体を無効にするので、
-     * 岩の中の座標であっても起点として使う方が、ガイドを丸ごと諦めるよりはるかにましになる。
+     * <p><b>Providing a last resort is the key point.</b> "No origin found" invalidates the whole table, so using even
+     * a coordinate inside rock as the origin is far better than giving up the guide entirely.
      */
     private static int anchor(VoxelTerrain terrain, BlockPos goal) {
         if (!terrain.contains(goal.getX(), goal.getY(), goal.getZ())) {
@@ -227,7 +229,7 @@ public final class VoxelCostToGo implements CostToGo {
         return fallback >= 0 ? fallback : terrain.indexOfBlock(goal.getX(), goal.getY(), goal.getZ());
     }
 
-    /** Dijkstraが届いたセルの数（診断用）。 */
+    /** Number of cells Dijkstra reached (for diagnostics). */
     public int reachableCells() {
         return reachableCells;
     }
@@ -239,8 +241,8 @@ public final class VoxelCostToGo implements CostToGo {
     /**
      * {@inheritDoc}
      *
-     * <p>箱の外は<b>いちばん近い縁のセルの値＋そこまでの直線</b>で答える。0を返すと箱の縁が
-     * 崖になり、A*は「箱の外の方が安い」と読んで経路から離れる向きに展開してしまう。
+     * <p>Outside the box, it answers with <b>the value of the nearest edge cell + the straight line to it</b>. Returning
+     * 0 would turn the box edge into a cliff, and A* would read "outside the box is cheaper" and expand away from the route.
      */
     @Override
     public double estimate(int x, int y, int z) {

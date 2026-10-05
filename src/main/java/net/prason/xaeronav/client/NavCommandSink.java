@@ -3,11 +3,11 @@ package net.prason.xaeronav.client;
 import net.minecraft.network.chat.Component;
 
 /**
- * {@code /xaeronav}の応答をチャットへ返す口。
+ * Where {@code /xaeronav} replies are sent back to chat.
  *
- * <p>コマンドの中身はローダーに依存しないが、応答の宛先だけは依存する
- * （NeoForgeは{@code CommandSourceStack}、Fabricは{@code FabricClientCommandSource}）。
- * その1点だけをここで受け止める。
+ * <p>The commands themselves don't depend on the loader, but where the reply goes does
+ * (NeoForge uses {@code CommandSourceStack}, Fabric uses {@code FabricClientCommandSource}).
+ * This absorbs just that one point.
  */
 public interface NavCommandSink {
 

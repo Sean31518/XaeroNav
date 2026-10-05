@@ -4,20 +4,20 @@ import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.world.CellData;
 
 /**
- * 地上の移動候補生成（歩行・斜め・昇降・跳躍・梯子・落下）。{@link AStarPathfinder}の
- * 分割の一部——探索ループ・open set・ノード表は{@link AStarPathfinder}に残し、
- * 候補生成だけをここへ切り出した。
+ * Ground move candidate generation (walk, diagonal, ascend/descend, jump, ladder, fall). Part of the
+ * split of {@link AStarPathfinder}: the search loop, open set and node table stay in
+ * {@link AStarPathfinder}, and only candidate generation was extracted here.
  *
- * <p>探索1回につき1つだけ生成する（{@link AStarPathfinder}のコンストラクタ参照）。展開のたびに
- * 新しく作らないので、ホットパスへのアロケーションは増えない。{@code owner}経由で触る
- * {@link AStarPathfinder}側のフィールド・ヘルパーは元のクラスと同じ意味を持つ——ロジックは
- * 移動のみで、挙動を変えていない。
+ * <p>Exactly one is created per search (see the {@link AStarPathfinder} constructor). It is not
+ * recreated on every expansion, so no allocations are added to the hot path. The fields and helpers
+ * of {@link AStarPathfinder} accessed via {@code owner} mean the same as in the original class: the
+ * logic was only moved, with no behavior change.
  */
 final class GroundMoves {
 
     /**
-     * 飛び越えられる隙間の最大幅（着地点は隙間の1マス先）。疾走ジャンプは滞空約12.5tickの間に
-     * 水平4マス弱しか進めないので、3マスの隙間＝4マス先への着地がバニラの到達限界になる。
+     * Maximum width of a gap that can be jumped across (the landing spot is one block past the gap). A
+     * sprint jump covers just under 4 blocks horizontally during its ~12.5 ticks of airtime, so a 3-block gap (landing 4 blocks ahead) is the vanilla reach limit.
      */
     private static final int MAX_JUMP_GAP_BLOCKS = 3;
 
@@ -45,10 +45,10 @@ final class GroundMoves {
     }
 
     /**
-     * 同一高度での斜め移動。カーディナル4方向のみだと、斜めに続く地形で
-     * 本来なら1手で行ける区間を2手のジグザグで迂回することになり不必要に遠回りになる。
-     * 角の2セル（{@link AStarPathfinder#clearWithoutDigging}）が両方とも掘削なしで通行可能な場合のみ許可し、
-     * 体が壁の角をすり抜ける経路を生成しないようにする。
+     * Diagonal move at the same height. With only the 4 cardinal directions, terrain that runs diagonally
+     * would force a 2-move zigzag over a stretch that should take 1 move, an unnecessary detour.
+     * Allowed only when both corner cells ({@link AStarPathfinder#clearWithoutDigging}) are passable without digging,
+     * so no path is generated where the body slips through the corner of a wall.
      */
     void addDiagonalTraverse(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -79,13 +79,13 @@ final class GroundMoves {
         if (!CellData.standable(owner.view.cell(x, from.y, z))) {
             return;
         }
-        // 梯子・ツタに掴まったままではジャンプできない（addJumpGapと同じ理由：onGround()がfalseで
-        // jumpFromGround()が呼ばれない）
+        // You can't jump while holding onto a ladder/vine (same reason as addJumpGap: onGround() is false so
+        // jumpFromGround() is never called)
         if (CellData.climbable(owner.view.cell(from.x, from.y, from.z))) {
             return;
         }
-        // 踏み切り地点の頭上。塞がっていればそのままではジャンプできないが、洞窟では天井を1マス
-        // 崩して上がるのが普通の手段なので、掘れるなら掘るという選択肢として残す
+        // Headroom above the takeoff spot. If blocked, you can't jump as-is, but in caves breaking one block
+        // of ceiling to climb up is the normal approach, so keep it as an option when it can be dug
         double clearanceCost = owner.columnCost(from.x, from.y + 2, from.y + 2, from.z, null);
         if (Double.isInfinite(clearanceCost)) {
             return;
@@ -105,8 +105,8 @@ final class GroundMoves {
         int y = from.y - 1;
         int z = from.z + dz;
 
-        // 水面へ踏み込む場合は足場が要らない。海岸は水面より1マス高いのが普通なので、
-        // これが無いと岸から海に入る手段そのものが無くなる
+        // Stepping into water needs no floor. Shores are usually one block above the water surface, so
+        // without this there would be no way at all to enter the sea from the shore
         boolean intoWater = CellData.water(owner.view.cell(x, y, z));
         if (!intoWater && !CellData.standable(owner.view.cell(x, y - 1, z))) {
             return;
@@ -122,14 +122,14 @@ final class GroundMoves {
     }
 
     /**
-     * 斜め1マスで1段登りながら進む（近距離レパートリー拡充）。カーディナル4方向限定の
-     * {@link #addAscend}だと、斜めに続く階段状の地形で本来1手の区間が「登ってから横へ」の2手に
-     * 分解されてしまう。{@link #addDiagonalTraverse}と同じく、体が壁の角をすり抜けないよう
-     * 角2セルの掘削なし通行可能性を求める。
+     * Advance diagonally by one block while climbing one step (broadens the short-range repertoire). With
+     * {@link #addAscend} limited to the 4 cardinal directions, stair-like terrain running diagonally splits
+     * a 1-move stretch into 2 moves ("climb, then sideways"). Like {@link #addDiagonalTraverse}, both corner
+     * cells must be passable without digging so the body does not slip through a wall corner.
      *
-     * <p>掘削は許可しない。角を抜ける移動で掘るくらいなら、カーディナルで素直に掘る方が安全で
-     * コストも正しく出る。{@link #addAscend}と同じくジャンプ時間支配のモデルなので、
-     * 地形の速度倍率（氷・ソウルサンド等）は見ない。
+     * <p>Digging is not allowed. Rather than digging during a corner-cutting move, digging straight along
+     * a cardinal is safer and gets the cost right. Like {@link #addAscend}, the model is dominated by jump
+     * time, so terrain speed factors (ice, soul sand, etc.) are ignored.
      */
     void addDiagonalAscend(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -139,15 +139,15 @@ final class GroundMoves {
         if (!CellData.standable(owner.view.cell(x, from.y, z))) {
             return;
         }
-        // 梯子・ツタに掴まったままではジャンプできない（addJumpGapと同じ理由）
+        // You can't jump while holding onto a ladder/vine (same reason as addJumpGap)
         if (CellData.climbable(owner.view.cell(from.x, from.y, from.z))) {
             return;
         }
-        // 角2列を到着高さで見る。踏み出し高さの角は段差そのものなので塞がっていて構わない
+        // Check the 2 corner columns at the arrival height. The corners at the departure height are the step itself, so they may be blocked
         if (!owner.clearWithoutDigging(from.x + dx, y, from.z) || !owner.clearWithoutDigging(from.x, y, from.z + dz)) {
             return;
         }
-        // 踏み切り地点の頭上。塞がっていると跳べない
+        // Headroom above the takeoff spot. If blocked, you can't jump
         if (!CellData.occupiableWithoutDigging(owner.view.cell(from.x, from.y + 2, from.z))) {
             return;
         }
@@ -160,10 +160,10 @@ final class GroundMoves {
     }
 
     /**
-     * 斜め1マスで1段降りながら進む。{@link #addDiagonalAscend}と同じ狙い。掘削は許可しない。
+     * Advance diagonally by one block while descending one step. Same goal as {@link #addDiagonalAscend}. Digging is not allowed.
      *
-     * <p>{@link #addDescend}と違い水面への踏み込みは扱わない（床は{@code standable}限定）。
-     * 海岸線の水際はカーディナル側が既に扱っており、斜めまで足すと水際で経路が細かく揺れる。
+     * <p>Unlike {@link #addDescend}, stepping into water is not handled (the floor must be {@code standable}).
+     * The cardinal side already handles the shoreline, and adding diagonals makes the path jitter at the water's edge.
      */
     void addDiagonalDescend(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -173,20 +173,20 @@ final class GroundMoves {
         if (!CellData.standable(owner.view.cell(x, y - 1, z))) {
             return;
         }
-        // 角2列を踏み出し高さで見る
+        // Check the 2 corner columns at the departure height
         if (!owner.clearWithoutDigging(from.x + dx, from.y, from.z)
                 || !owner.clearWithoutDigging(from.x, from.y, from.z + dz)) {
             return;
         }
-        // 到着地点の身体3セル分（Descendと同じ縦一列）。2回に分けて呼ぶことで
-        // y-1〜y+1（着地の足元・頭、踏み出し地点の足元と同じ高さ）をまとめて確認する
+        // The 3 body cells at the arrival spot (the same vertical column as Descend). Calling it twice
+        // checks y-1 to y+1 (the landing feet/head, and the same height as the departure feet) together
         if (!owner.clearWithoutDigging(x, y, z) || !owner.clearWithoutDigging(x, y + 1, z)) {
             return;
         }
-        // 身体が水中にある斜め下降は泳いで進むので、疾走を前提にした値段では速すぎる——
-        // 泳ぎの斜め(7.857)より安くなり、水中で上下にジグザグして進む経路が出る。
-        // 水面へ踏み込む側は上のstandable要求で既に除いてあるので、ここで見るのは
-        // 「もう水の中にいる」場合だけ
+        // A diagonal descent with the body underwater is swum, so a sprint-based price is too cheap:
+        // it would be cheaper than a diagonal swim (7.857) and produce paths that zigzag up and down underwater.
+        // Stepping into water from above is already excluded by the standable requirement above, so this
+        // only covers the "already in water" case
         boolean swimming = CellData.water(owner.view.cell(from.x, from.y, from.z))
                 || CellData.water(owner.view.cell(x, y, z));
         double cost = swimming
@@ -196,20 +196,20 @@ final class GroundMoves {
     }
 
     /**
-     * 隙間を飛び越える（同一高度、カーディナル方向のみ）。
+     * Jump across a gap (same height, cardinal directions only).
      *
-     * <p>これが無いと、誰でも何も考えずに跨げる1マスの割れ目（小川・洞窟の裂け目・峡谷の枝）で、
-     * ブロックを置いて渡るか大きく迂回することになる。
+     * <p>Without this, a 1-block crack anyone would step over without thinking (a creek, cave fissure, ravine branch)
+     * would mean placing a block to cross or taking a big detour.
      *
-     * <p>{@link #MAX_JUMP_GAP_BLOCKS}マスまで。これは疾走ジャンプの到達限界そのもので、
-     * これ以上は助走をどれだけ取っても届かない。跳躍は外せば落ちるので、そもそも提示するかどうかを
-     * {@code CellSource#jumpGapEnabled()}で切れるようにしてある。
+     * <p>Up to {@link #MAX_JUMP_GAP_BLOCKS} blocks. That is exactly the sprint jump's reach limit;
+     * beyond it, no run-up is long enough. A missed jump means a fall, so whether to offer jumps at all
+     * can be switched off with {@code CellSource#jumpGapEnabled()}.
      *
-     * <p>近い隙間から順に試し、最初に着地できた距離で確定する。同じ方向に複数の着地点があるとき、
-     * 手前に降りられるなら遠くまで跳ぶ理由が無い（{@link ActionCosts#jumpAcrossGap}も遠いほど高い）。
+     * <p>Gaps are tried nearest first, settling on the first distance with a valid landing. With several landing spots
+     * in one direction, there is no reason to jump far if you can land closer ({@link ActionCosts#jumpAcrossGap} also costs more with distance).
      *
-     * <p>空中では掘れないので、通り抜ける空間は掘削なしで通れることを求める。頭上も見る —
-     * ジャンプは1.25マス上がるので、天井があると跳べずに隙間へ落ちる。
+     * <p>You can't dig mid-air, so the space passed through must be clear without digging. Headroom is checked too:
+     * a jump rises 1.25 blocks, so a ceiling makes the jump fail and you drop into the gap.
      */
     void addJumpGap(PathNode from, int dx, int dz) {
         if (!owner.view.jumpGapEnabled()) {
@@ -217,69 +217,69 @@ final class GroundMoves {
         }
         int y = from.y;
         if (CellData.standable(owner.view.cell(from.x + dx, y - 1, from.z + dz))) {
-            // 隙間ではなく床がある。歩いて行けるならTraverseの方が安い
+            // There is floor, not a gap. If it can be walked, Traverse is cheaper
             return;
         }
-        // 踏み切り地点の頭上。ここが塞がっていると跳躍そのものが成立しない
+        // Headroom above the takeoff spot. If blocked, the jump itself is impossible
         if (!CellData.occupiableWithoutDigging(owner.view.cell(from.x, from.y + 2, from.z))) {
             return;
         }
-        // ソウルサンド・蜂蜜の上からは疾走の最高速度が出ない。到達距離は踏み切り時の水平速度で
-        // 決まる（滞空時間は距離に依らず一定）ので、減速したまま跳ぶと必ず隙間に落ちる。
-        // 倍率の探し方は歩行コスト（{@code AStarPathfinder#stepCost}）と同じくバニラの
-        // {@code getBlockSpeedFactor}に倣う
+        // Soul sand and honey prevent reaching top sprint speed. Reach is determined by horizontal speed at
+        // takeoff (airtime is constant regardless of distance), so jumping while slowed always drops into the gap.
+        // The speed factor is looked up like the walking cost ({@code AStarPathfinder#stepCost}), following vanilla's
+        // {@code getBlockSpeedFactor}
         if (slowedTakeoff(from.x, y, from.z)) {
             return;
         }
-        // 蜘蛛の巣の上からは跳べない。WebBlock#entityInsideが移動量に0.25を掛け続けるので、
-        // 疾走の助走で乗せた速度もジャンプ自体の初速も踏み切った瞬間に大きく削られる——
-        // 理論上は隙間の向こうへ届く場合もあるが、外して落ちる確率が高すぎて案内として出す価値が無い
+        // You can't jump from cobwebs. WebBlock#entityInside keeps multiplying movement by 0.25, so
+        // both the speed built up by the sprint run-up and the jump's initial velocity are cut sharply at takeoff.
+        // In theory it may sometimes reach across, but the chance of missing and falling is too high to be worth suggesting
         if (CellData.cobweb(owner.view.cell(from.x, y, from.z))) {
             return;
         }
-        // 梯子・ツタに掴まったままでは跳べない。onGround()がfalseなのでjumpFromGround()自体が
-        // 呼ばれず（LivingEntity#aiStep）、掴まったまま接地していてもhandleOnClimbableが
-        // 水平速度を±0.15に固定するので、疾走の0.286も踏み切り加算の0.2も残らない
+        // You can't jump while holding onto a ladder/vine. onGround() is false so jumpFromGround() itself is
+        // never called (LivingEntity#aiStep), and even if grounded while holding on, handleOnClimbable clamps
+        // horizontal speed to ±0.15, so neither the sprint's 0.286 nor the takeoff boost of 0.2 survives
         if (CellData.climbable(owner.view.cell(from.x, y, from.z))
                 || !CellData.standable(owner.view.cell(from.x, y - 1, from.z))) {
             return;
         }
-        // 助走が要る。疾走の最高速度は静止から約5tick（≒1マス）かけて乗り、滞空中の加速は
-        // 0.02/tickしかない（LivingEntity#getFlyingSpeed）ので、到達距離は踏み切り速度で
-        // そのまま決まる。1マス幅の足場からでは自分のマスの中（約0.5マス）しか助走できず、
-        // 3マスの隙間は理論上届いても余裕がゼロになる——跳べと指示するだけで、外して落ちるのは
-        // 人間の方（JUMP_REACH_PENALTYと同じ方針）
+        // A run-up is needed. Top sprint speed takes about 5 ticks (~1 block) to reach from standstill, and
+        // mid-air acceleration is only 0.02/tick (LivingEntity#getFlyingSpeed), so reach is determined directly
+        // by takeoff speed. From a 1-block-wide platform the run-up is limited to within your own block (~0.5 blocks),
+        // and a 3-block gap, even if theoretically reachable, has zero margin. We only tell the player to jump;
+        // it's the human who misses and falls (same policy as JUMP_REACH_PENALTY)
         if (!hasRunUp(from, y, dx, dz)) {
             return;
         }
 
-        // 跳び越す隙間の下がどれだけ深いか。addBridgeと同じ値段表で危険料を積む
+        // How deep below the gap being jumped. Add a hazard fee using the same price table as addBridge
         double dropRisk = 0.0;
         for (int gap = 1; gap <= MAX_JUMP_GAP_BLOCKS; gap++) {
             int gapX = from.x + gap * dx;
             int gapZ = from.z + gap * dz;
-            // 跳び越える空間が塞がっていれば、その先へはどれだけ助走しても届かない
+            // If the space being jumped through is blocked, no run-up will reach beyond it
             if (!owner.clearWithoutDigging(gapX, y, gapZ)
                     || !CellData.occupiableWithoutDigging(owner.view.cell(gapX, y + 2, gapZ))) {
                 return;
             }
-            // 蜘蛛の巣は当たり判定が無いのでclearWithoutDiggingは素通りするが、滞空中に体が
-            // かすめると速度をまた0.25倍に削られる。踏み切りだけ見ても、経路の途中に巣があれば
-            // 同じ理由で隙間に落ちる
+            // Cobwebs have no collision box, so clearWithoutDigging passes through them, but if the body brushes one
+            // mid-air, speed is cut by 0.25 again. Even checking only the takeoff, a web along the path makes you
+            // drop into the gap for the same reason
             if (CellData.cobweb(owner.view.cell(gapX, y, gapZ))
                     || CellData.cobweb(owner.view.cell(gapX, y + 1, gapZ))) {
                 return;
             }
-            // 下が溶岩の隙間は跳ばない。跳躍は外せば落ちるという前提でコストを積んであるが、
-            // 溶岩ではその「外したとき」が死なので、コストの多寡で釣り合う話ではなくなる。
-            // 下が読めない（未ロード）隙間も同じ扱いにする——溶岩でないと言い切れない
+            // Don't jump gaps over lava. Jump costs assume a miss means a fall, but over lava that
+            // "miss" is death, so it is no longer something cost can balance.
+            // Treat gaps whose bottom can't be read (unloaded) the same: we can't be sure it isn't lava
             if (owner.scans.lavaOrUnknownBelow(gapX, y, gapZ)) {
                 return;
             }
             int gapDrop = missDrop(gapX, y, gapZ);
             if (owner.avoidRiskyJumps && gapDrop >= owner.view.fatalFallBlocks()) {
-                // 外したら死ぬ隙間。溶岩と違って「その隙間の上を跳ぶ手そのものを永久に消す」のではなく、
-                // 回り込む道が一本も無いと分かったときだけ緩和の梯子が開ける（riskyJumpBlocked）
+                // A gap where missing is fatal. Unlike lava, this does not "permanently remove the move of jumping over this gap";
+                // the relaxation ladder opens only when it turns out there is no way around at all (riskyJumpBlocked)
                 owner.markRiskyJumpBlocked();
                 return;
             }
@@ -287,7 +287,7 @@ final class GroundMoves {
             int x = from.x + (gap + 1) * dx;
             int z = from.z + (gap + 1) * dz;
             if (!CellData.standable(owner.view.cell(x, y - 1, z))) {
-                // まだ着地できない。隙間はもう1マス続く
+                // Can't land yet. The gap continues one more block
                 continue;
             }
             if (!owner.clearWithoutDigging(x, y, z)) {
@@ -299,33 +299,33 @@ final class GroundMoves {
     }
 
     /**
-     * この隙間を跳び損ねたら何マス落ちるか。底が無い（奈落）なら{@code CellSource#fatalFallBlocks()}を返す。
+     * How many blocks you fall if you miss this gap. Returns {@code CellSource#fatalFallBlocks()} if there is no bottom (void).
      *
-     * <p>落差の測り方は{@link #addFall}・{@code BuildMoves#addBridge}と揃えてある——あちらが
-     * 「意図して降りる」高さを見るのに対し、こちらは同じ落差を「跳んで外したとき」として見る。
-     * 溶岩と未ロードは呼び出し側（{@code lavaOrUnknownBelow}）が先に弾いている。
+     * <p>The drop is measured the same way as {@link #addFall} and {@code BuildMoves#addBridge}: those look at
+     * the height of an "intentional descent", while this looks at the same drop as "a missed jump".
+     * Lava and unloaded cells are already rejected by the caller ({@code lavaOrUnknownBelow}).
      */
     private int missDrop(int x, int y, int z) {
         int obstacleY = owner.scans.firstNonAirBelow(x, y - 1, z);
         if (obstacleY == ColumnScans.NOTHING_BELOW || obstacleY == ColumnScans.UNREADABLE_BELOW) {
-            // 未ロードは呼び出し側が既に弾いている。ここへは来ない想定だが、
-            // 「読めない＝危険ではない」と倒さないよう明示しておく
+            // The caller already rejects unloaded cells. It shouldn't get here, but make it explicit
+            // so "unreadable" is never treated as "not dangerous"
             return owner.view.fatalFallBlocks();
         }
         long obstacle = owner.view.cell(x, obstacleY, z);
         if (CellData.water(obstacle)) {
-            // 着水はバニラが落下距離をリセットするので、どれだけ落ちても死なない
+            // Vanilla resets fall distance on landing in water, so no fall height is fatal
             return 0;
         }
         return y - obstacleY - 1;
     }
 
-    /** 踏み切り地点が減速ブロックの上か（バニラの{@code Entity#getBlockSpeedFactor}と同じ探し方）。 */
+    /** Whether the takeoff spot is on a slowing block (looked up the same way as vanilla's {@code Entity#getBlockSpeedFactor}). */
     private boolean slowedTakeoff(int x, int y, int z) {
         return owner.takeoffSpeedFactor(x, y, z) < 1.0;
     }
 
-    /** 踏み切り地点の手前（跳躍方向の逆側）に、走り込める足場が1マスあるか。 */
+    /** Whether there is one block of footing behind the takeoff spot (opposite the jump direction) to run up from. */
     private boolean hasRunUp(PathNode from, int y, int dx, int dz) {
         int x = from.x - dx;
         int z = from.z - dz;
@@ -333,8 +333,8 @@ final class GroundMoves {
     }
 
     /**
-     * 梯子・ツタに横から取り付く。足場を要求しないのが{@link #addTraverse}との違いで、
-     * 縦穴の途中に張られた梯子へ移るにはこれが要る。
+     * Grab onto a ladder/vine from the side. Unlike {@link #addTraverse}, no footing is required;
+     * this is needed to move onto a ladder hung partway up a vertical shaft.
      */
     void addClimb(PathNode from, int dx, int dz) {
         int x = from.x + dx;
@@ -342,7 +342,7 @@ final class GroundMoves {
         int z = from.z + dz;
 
         if (CellData.standable(owner.view.cell(x, y - 1, z))) {
-            // 足場があるなら同じ移動をTraverse側が作る
+            // If there is footing, Traverse produces the same move
             return;
         }
         if (!CellData.climbable(owner.view.cell(x, y, z))
@@ -352,7 +352,7 @@ final class GroundMoves {
         owner.relax(from, x, y, z, ActionCosts.WALK_ONE_BLOCK, MoveKind.CLIMB);
     }
 
-    /** 梯子・ツタを登る。上り切った先へは、そこから水平移動で降りる（頂上より上には行けない）。 */
+    /** Climb a ladder/vine. Past the top, you leave via a horizontal move from there (you can't go above the top). */
     void addClimbUp(PathNode from) {
         int y = from.y + 1;
         if (!CellData.climbable(owner.view.cell(from.x, y, from.z))
@@ -371,29 +371,29 @@ final class GroundMoves {
     }
 
     /**
-     * 縁から踏み出して落ちる。1マス下は{@link #addDescend}が扱うので、ここは2マス以上の落下だけ。
+     * Step off an edge and fall. A 1-block drop is handled by {@link #addDescend}, so this covers only falls of 2+ blocks.
      *
-     * <p>既定では落下ダメージを受ける高さを提示しない（{@code ActionCosts#SAFE_FALL_BLOCKS}まで）。降りる
-     * 手段は掘り下げ（Descend + 掘削）もあるので、痛い近道を勧めるより階段状に降りる経路を出す方がよい。
-     * ただし着水はバニラが落下距離をリセットするので、高さを問わず安全に降りられる。
+     * <p>By default, heights that cause fall damage are not offered (up to {@code ActionCosts#SAFE_FALL_BLOCKS}). Digging
+     * down (Descend + digging) is also a way down, so a stair-like descent is better than suggesting a painful shortcut.
+     * However, vanilla resets fall distance on landing in water, so any height is a safe descent there.
      *
-     * <p>設定で許可された場合だけ、体力から決まる上限までのダメージ落下と、水バケツMLGによる無傷の
-     * 落下を候補に加える（{@code CellSource#maxFallDamagePoints}／{@code CellSource#canMlgWaterBucket}）。
+     * <p>Only when allowed by config, damaging falls up to a health-derived limit and damage-free
+     * water bucket MLG falls are added as candidates ({@code CellSource#maxFallDamagePoints} / {@code CellSource#canMlgWaterBucket}).
      */
     void addFall(PathNode from, int dx, int dz, int obstacleY) {
         if (obstacleY == ColumnScans.NOTHING_BELOW || obstacleY == ColumnScans.UNREADABLE_BELOW) {
-            // 底が無い（奈落）か、下に何があるか読めない。どちらも着地点を約束できない
+            // No bottom (void), or what lies below can't be read. Either way, a landing spot can't be promised
             return;
         }
         int x = from.x + dx;
         int z = from.z + dz;
-        // 踏み出す先の2マスが空いていないと縁から出られない。落下中は掘れないので空気であること
+        // The 2 blocks stepped into must be open to leave the edge. You can't dig while falling, so they must be air
         if (!CellData.passableEmpty(owner.view.cell(x, from.y, z))
                 || !CellData.passableEmpty(owner.view.cell(x, from.y + 1, z))) {
             return;
         }
 
-        // 縁を踏み出す動作も足元のブロックに減速される（落下中と着地後は無関係）
+        // Stepping off the edge is also slowed by the block underfoot (falling and after landing are unaffected)
         double takeoff = owner.takeoffSpeedFactor(from.x, from.y, from.z);
         long obstacle = owner.view.cell(x, obstacleY, z);
         if (CellData.water(obstacle)) {
@@ -402,7 +402,7 @@ final class GroundMoves {
             return;
         }
         if (!CellData.standable(obstacle)) {
-            // 柵や梯子など、落ちても足場にならないもの
+            // Fences, ladders, etc.: things that don't serve as footing even if you fall onto them
             return;
         }
         int drop = from.y - obstacleY - 1;
@@ -414,7 +414,7 @@ final class GroundMoves {
             return;
         }
 
-        // バニラのダメージは ceil(落下距離 - SAFE_FALL_DISTANCE)。落下距離が整数マスなのでそのまま引き算になる
+        // Vanilla damage is ceil(fall distance - SAFE_FALL_DISTANCE). Fall distance is a whole number of blocks, so it's a plain subtraction
         int damage = drop - ActionCosts.SAFE_FALL_BLOCKS;
         boolean mlg = owner.view.canMlgWaterBucket();
         if (mlg) {
@@ -423,11 +423,11 @@ final class GroundMoves {
                     MoveKind.FALL_MLG);
         }
         if (damage > owner.maxFallDamagePoints) {
-            // 立てる床はそこにあり、届きもする。許容量だけが足りない——緩めれば道になる可能性がある。
-            // ここまで来ている時点で奈落でも未ロードでもないので、フラグは「緩める意味がある」を正しく指す。
+            // A standable floor is there and reachable. Only the allowance is short: relaxing it might open a route.
+            // Having got this far, it's neither void nor unloaded, so the flag correctly means "relaxing would help".
             //
-            // 水バケツMLGで同じ着地を既に作れているなら立てない。その辺は許容量に関わらず通れるので、
-            // 緩めても増える移動が無い——立てると、緩和の梯子が何も変えずに探索を繰り返すだけになる
+            // Don't set it if a water bucket MLG already produces the same landing. That spot is passable regardless of the allowance,
+            // so relaxing adds no moves; setting it would just make the relaxation ladder repeat the search without changing anything
             owner.markFallDamageCapBlocked(!mlg);
             return;
         }

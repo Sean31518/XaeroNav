@@ -8,10 +8,11 @@ import net.prason.xaeronav.pathfinding.astar.AStarPathfinder;
 import net.prason.xaeronav.pathfinding.astar.SearchLimits;
 
 /**
- * 並列フォールバックの通常予算側に渡す上限。
+ * The caps handed to the normal-budget side of the parallel fallback.
  *
- * <p>重みだけを落とし、予算と時間には触らない——通常予算側は<b>失敗してよい</b>探索で、
- * 失敗したぶんは同時に走っている深い予算が拾う。予算まで削ると、拾える経路まで減らすことになる。
+ * <p>Only the weight is lowered; the budget and time are left alone. The normal-budget side is a search that is
+ * <b>allowed to fail</b>, and whatever it misses is picked up by the deep budget running at the same time.
+ * Cutting the budget too would shrink the set of paths that can be picked up.
  */
 class QualityPassTest {
 
@@ -26,7 +27,7 @@ class QualityPassTest {
         assertEquals(1.2, quality.heuristicWeight(), 1e-9);
     }
 
-    /** 設定で既定より軽い重みにしている人の値は、こちらの都合で戻さない。 */
+    /** Don't override the value of someone who has configured a lighter weight than the default. */
     @Test
     void neverRaisesAWeightTheUserAlreadyLowered() {
         SearchLimits configured = new SearchLimits(100_000, 2_000, 1.05);

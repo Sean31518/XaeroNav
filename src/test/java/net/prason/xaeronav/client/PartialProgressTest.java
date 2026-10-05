@@ -14,8 +14,8 @@ import net.prason.xaeronav.pathfinding.astar.PathResult.Termination;
 import org.junit.jupiter.api.Test;
 
 /**
- * 途中までの経路どうしは、目的地の近くまで引けている方を残す。実機のネザーでは、目的地まで16ブロックの
- * 所まで引けていた経路が、予算切れで145ブロック手前で切れた引き直しの結果に置き換わっていた。
+ * Between partial paths, keep the one drawn closer to the destination. In the real Nether, a path drawn to within 16 blocks
+ * of the destination was being replaced by a recompute that ran out of budget and stopped 145 blocks short.
  */
 class PartialProgressTest {
 
@@ -39,7 +39,7 @@ class PartialProgressTest {
         assertFalse(PartialProgress.compare(partialTo(55), partialTo(184), START, GOAL, null).oldAhead());
     }
 
-    /** 同じ所まで引けたなら新しい方を採る。古い経路は古い地形の読みで引いたものなので。 */
+    /** If both reach the same point, take the newer one. The old path was drawn from an old reading of the terrain. */
     @Test
     void takesTheNewResultOnATie() {
         assertFalse(PartialProgress.compare(partialTo(100), partialTo(100), START, GOAL, null).oldAhead());

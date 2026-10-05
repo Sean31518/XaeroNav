@@ -5,17 +5,17 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
- * 設定項目の宣言先。{@link XaeroNavConfig}はこの1面だけに対して37項目を書き、
- * 実際の保存先（NeoForgeの{@code ModConfigSpec} / Fabricのnight-config）は
- * {@link NavConfigStore}の実装が受け持つ。
+ * Where config entries are declared. {@link XaeroNavConfig} writes its 37 entries against this one surface only,
+ * and the actual storage (NeoForge's {@code ModConfigSpec} / Fabric's night-config) is handled by the
+ * {@link NavConfigStore} implementation.
  *
- * <p>メソッドの形はNeoForgeの{@code ModConfigSpec.Builder}に意図的に揃えてある。
- * 揃えないと37項目を書き写す際に既定値やレンジがずれても気付けない
- * （その突き合わせは{@code ConfigSpecGoldenTest}が見る）。
+ * <p>The method shapes intentionally mirror NeoForge's {@code ModConfigSpec.Builder}.
+ * Otherwise a default or range could drift while copying the 37 entries over without anyone noticing
+ * ({@code ConfigSpecGoldenTest} checks that they match).
  */
 public interface NavConfigSpec {
 
-    /** 直後に宣言する項目（または{@link #push}するセクション）へ付けるコメント。 */
+    /** Comment attached to the entry declared next (or to the section opened by {@link #push}). */
     NavConfigSpec comment(String... lines);
 
     NavConfigSpec push(String section);

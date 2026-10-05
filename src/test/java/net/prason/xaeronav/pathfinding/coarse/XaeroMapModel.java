@@ -12,44 +12,44 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.xaero.XaeroMapReader;
 
 /**
- * フィクスチャの地形から、<b>Xaeroが保存しているであろう床</b>を{@link VoxelTerrain}へ流し込む。
+ * Feeds <b>the floors Xaero would presumably have saved</b> from a fixture's terrain into a {@link VoxelTerrain}.
  *
- * <p>本番の{@code XaeroMapReader#forEachCaveFloor}と同じ形（1本の柱について、洞窟レイヤーごとに
- * 「いちばん上の固体ブロックのY」を1つずつ）で{@link VoxelTerrain#markFloor}を呼ぶ。実データが
- * 持つのは<b>床のYだけ</b>で、その上下が岩か空洞かは分からない——完全な3次元地形から作った
- * 理想のガイドを本番の保証値にしない、という約束を守るための道具。
+ * <p>Calls {@link VoxelTerrain#markFloor} in the same shape as production's {@code XaeroMapReader#forEachCaveFloor}
+ * (for each column, one "Y of the topmost solid block" per cave layer). Real data
+ * holds <b>only the floor's Y</b>; whether the blocks above and below are rock or air is unknown. This is a tool
+ * for keeping the promise that an ideal guide built from the full 3D terrain is never treated as production's guarantee.
  *
- * <p>{@link #fill}の{@code keepFraction}は<b>未訪問のチャンク</b>を落とす。Xaeroの地図は
- * 歩いた所しか埋まらないので、ガイドの成否は「目的地の周りが欠けていても壊れないか」で決まる。
+ * <p>{@link #fill}'s {@code keepFraction} drops <b>unvisited chunks</b>. Xaero's map only fills in
+ * where you have walked, so whether the guide succeeds depends on "does it hold up even when the area around the destination is missing".
  */
 public final class XaeroMapModel {
 
     /**
-     * 1本の柱から拾う床の数の上限。Xaeroの洞窟レイヤーは{@code CAVE_MODE_DEPTH}(30)ブロックの
-     * スライスに分かれ、レイヤー番号は{@code caveStart >> 4}なので、ネザーの高さ(0..127)では
-     * 最大8枚になる。
+     * Maximum number of floors picked from one column. Xaero's cave layers are split into slices
+     * {@code CAVE_MODE_DEPTH} (30) blocks thick, and the layer number is {@code caveStart >> 4}, so at Nether
+     * height (0..127) there are at most 8.
      *
-     * <p><b>8枚そろうのは「その柱を全部の高さ帯で歩いた」ときだけ</b>で、実際の保存はずっと薄い。
-     * 実機ログ（2026-09-09）のレイヤー別内訳は{@code L4=3408}で他は全部0——<b>1枚だけ</b>だった。
-     * その薄さで測るには{@link #fill(VoxelTerrain, CellSource, int[], double, long)}を使う。
+     * <p><b>All 8 are present only when "that column was walked at every height band"</b>; real saves are much thinner.
+     * The per-layer breakdown in a real-game log (2026-09-09) was {@code L4=3408} with all others 0: <b>just one layer</b>.
+     * To measure at that thinness, use {@link #fill(VoxelTerrain, CellSource, int[], double, long)}.
      */
     private static final int MAX_LAYERS = 8;
 
-    /** Xaeroの{@code CAVE_MODE_DEPTH}既定値。1枚のレイヤーはこの厚さのスライスしか持たない。 */
+    /** Xaero's default {@code CAVE_MODE_DEPTH}. One layer only holds a slice this thick. */
     private static final int CAVE_MODE_DEPTH = 30;
 
-    /** 本番の{@code XaeroMapReader#SAMPLE_STEP}と同じ間引き。 */
+    /** Same subsampling as production's {@code XaeroMapReader#SAMPLE_STEP}. */
     private static final int SAMPLE_STEP = 2;
 
     private XaeroMapModel() {
     }
 
     /**
-     * 箱のYを<b>渡された範囲そのまま</b>にした箱。ネザーの実際の高さ(0..127)を渡す限りは
-     * 本番と同じ形になる（本番は床のある範囲＋余白で、天井の無い空きを含まない）。
+     * A box whose Y is <b>exactly the given range</b>. As long as the actual Nether height (0..127) is passed,
+     * it has the same shape as production (production uses the floor range plus margin, excluding ceiling-less air).
      *
-     * <p>次元の高さがネザーより高い環境まで含めて本番と同じ形を測るなら
-     * {@link #grid(CellSource, BlockPos, BlockPos, LevelHeightAccessor, int[], double, long)}を使う。
+     * <p>To measure the same shape as production including environments whose dimension is taller than the Nether,
+     * use {@link #grid(CellSource, BlockPos, BlockPos, LevelHeightAccessor, int[], double, long)}.
      */
     public static SearchBounds guideBox(BlockPos start, BlockPos goal, int minY, int maxY) {
         return new SearchBounds(
@@ -59,18 +59,18 @@ public final class XaeroMapModel {
                 Math.max(start.getZ(), goal.getZ()) + VoxelTerrain.MARGIN_BLOCKS);
     }
 
-    /** 次元の高さだけを持つ{@link LevelHeightAccessor}。本番の{@code boxFor}をそのまま通すため。 */
+    /** A {@link LevelHeightAccessor} holding only the dimension's height, so production's {@code boxFor} can be used as-is. */
     public static LevelHeightAccessor height(int minY, int maxY) {
         return LevelHeightAccessor.create(minY, maxY - minY + 1);
     }
 
     /**
-     * <b>本番（{@code NetherVoxelGuide#start}）と同じ2段構え</b>で格子を組む。1回目で床のあるYを
-     * 測り、{@link VoxelTerrain#boxFor}に箱を決めさせてから床を流す。
+     * Builds the grid in <b>the same two passes as production ({@code NetherVoxelGuide#start})</b>. The first pass
+     * measures the Ys that have floors, lets {@link VoxelTerrain#boxFor} choose the box, then feeds in the floors.
      *
-     * <p>次元の高さが歩ける高さより広い環境（＝実機で起きていた形）を測れるのはここだけ。
+     * <p>This is the only place that can measure environments where the dimension is taller than the walkable height (= the shape seen in the real game).
      *
-     * @param caveLayers 洞窟レイヤーの番号。{@code null}なら全高から最大8枚拾う濃いモデル
+     * @param caveLayers cave layer numbers. {@code null} gives the dense model that picks up to 8 from the full height
      */
     public static VoxelTerrain grid(CellSource all, BlockPos start, BlockPos goal,
                                      LevelHeightAccessor level, int[] caveLayers,
@@ -94,11 +94,11 @@ public final class XaeroMapModel {
     }
 
     /**
-     * {@link #guideBox}の地形へ{@link #fill}を流し、本番と同じ{@link VoxelCostToGo}を作る。
+     * Feeds {@link #fill} into the {@link #guideBox} terrain and builds the same {@link VoxelCostToGo} as production.
      *
-     * <p>目的地は<b>寄せ直していない生の座標</b>。本番（{@code NetherVoxelGuide}）も同じで、
-     * ガイドを組む時点では目的地のチャンクが読み込まれておらず{@code StanceFinder}を通せない。
-     * 数ブロックのずれは{@code VoxelCostToGo}の起点探しが吸収する。
+     * <p>The destination is the <b>raw, un-resnapped coordinate</b>. Production ({@code NetherVoxelGuide}) does the same:
+     * when the guide is built the destination chunk isn't loaded yet, so it can't go through {@code StanceFinder}.
+     * An offset of a few blocks is absorbed by {@code VoxelCostToGo}'s origin search.
      */
     public static VoxelCostToGo guide(CellSource all, BlockPos start, BlockPos goal, int minY, int maxY,
                                        double keepFraction, long seed) {
@@ -107,28 +107,28 @@ public final class XaeroMapModel {
         return VoxelCostToGo.build(terrain, goal, () -> false);
     }
 
-    /** 全チャンクが訪問済みとしたときの床。 */
+    /** Floors when every chunk counts as visited. */
     public static void fill(VoxelTerrain terrain, CellSource all) {
         fill(terrain, all, 1.0, 0L);
     }
 
     /**
-     * チャンクの{@code keepFraction}だけが訪問済みだったときの床。落としたチャンクからは
-     * 床を1つも報告しない（＝Xaeroがそのリージョンをまだ持っていない）。
+     * Floors when only {@code keepFraction} of chunks were visited. Dropped chunks report
+     * no floors at all (= Xaero doesn't have that region yet).
      */
     public static void fill(VoxelTerrain terrain, CellSource all, double keepFraction, long seed) {
         scan(all, terrain.box(), null, keepFraction, seed, terrain::markFloor);
     }
 
     /**
-     * <b>プレイヤーが特定の高さ帯しか歩いていないときの床。</b>洞窟レイヤー{@code L}が持つのは
-     * {@code [L*16 - CAVE_MODE_DEPTH, L*16]}のスライスにある<b>いちばん上の床1枚だけ</b>で、
-     * 歩いていない高さ帯のレイヤーはタイルごと存在しない。
+     * <b>Floors when the player has walked only certain height bands.</b> Cave layer {@code L} holds
+     * <b>only the single topmost floor</b> in the slice {@code [L*16 - CAVE_MODE_DEPTH, L*16]}, and
+     * layers for unwalked height bands don't exist at all (no tile).
      *
-     * <p>{@link #fill(VoxelTerrain, CellSource, double, long)}が全高から最大8枚拾うのに対し、
-     * こちらは実機の保存と同じ薄さになる。<b>ここで測らないと実機の破綻が回帰で捕まらない</b>
-     * ——8枚拾うモデルでは、ガイドの膨らみが実機の5.84倍に対し2.57倍にしかならず、
-     * 探索が詰まる条件そのものが再現しない。
+     * <p>Whereas {@link #fill(VoxelTerrain, CellSource, double, long)} picks up to 8 from the full height,
+     * this matches the thinness of real saves. <b>Without measuring here, real-game breakdowns aren't caught as regressions</b>:
+     * with the 8-floor model the guide inflates only 2.57x versus 5.84x in the real game,
+     * so the very condition that clogs the search isn't reproduced.
      */
     public static void fill(VoxelTerrain terrain, CellSource all, int[] caveLayers,
                              double keepFraction, long seed) {
@@ -136,8 +136,8 @@ public final class XaeroMapModel {
     }
 
     /**
-     * {@code box}のXZ範囲を柱ごとに走査して床を報告する。{@code caveLayers}が{@code null}なら
-     * 全高から最大{@link #MAX_LAYERS}枚、そうでなければレイヤーごとにスライス1枚ずつ。
+     * Scans the XZ range of {@code box} column by column and reports floors. If {@code caveLayers} is {@code null},
+     * up to {@link #MAX_LAYERS} from the full height; otherwise one slice per layer.
      */
     private static void scan(CellSource all, SearchBounds box, int[] caveLayers,
                               double keepFraction, long seed, XaeroMapReader.FloorVisitor visitor) {
@@ -163,7 +163,7 @@ public final class XaeroMapModel {
         }
     }
 
-    /** 1枚のレイヤーが持つスライスを上から辿り、最初に見つけた床だけを報告する。 */
+    /** Walks one layer's slice from the top and reports only the first floor found. */
     private static void scanSlice(XaeroMapReader.FloorVisitor visitor, CellSource all,
                                    SearchBounds box, SearchBounds world, int x, int z, int caveLayer) {
         boolean airSeen = false;
@@ -186,8 +186,8 @@ public final class XaeroMapModel {
     }
 
     /**
-     * 1本の柱を上から辿り、空気の下にある固体の面を床として報告する。
-     * {@code LiveCoarseSampler#sampleColumnFloors}と同じ規則。
+     * Walks one column from the top and reports solid surfaces below air as floors.
+     * Same rule as {@code LiveCoarseSampler#sampleColumnFloors}.
      */
     private static void scanColumn(XaeroMapReader.FloorVisitor visitor, CellSource all,
                                     SearchBounds box, SearchBounds world, int x, int z) {

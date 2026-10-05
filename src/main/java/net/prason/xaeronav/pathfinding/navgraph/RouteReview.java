@@ -6,13 +6,13 @@ import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 引いてある経路を、組み直した航法グラフのガイドで見直す。
+ * Reviews the drawn path using the guide of the rebuilt nav graph.
  *
- * <p>経路は窓の外を推定（3D粗層・層1・直線距離）で狙って引かれ、以後は末端から継ぎ足すだけで手前を見直さない。
- * 歩いて窓が進むと、推定だった所が正確になり「北へ行く方が近かった」と分かることがあるが、その時点の線は西へ伸びたまま残る
- * （実機のネザー）。ガイドの値はそこから目的地までの最小コストなので、線に沿った値段との差がそのまま遠回りの量になる。
+ * <p>The path is drawn aiming outside the window by estimates (3D coarse layer, layer 1, straight-line distance), and afterwards only extended from the end without reviewing what's behind.
+ * As you walk and the window advances, what was an estimate becomes exact and it may turn out "going north was shorter", but the line at that point keeps stretching west
+ * (real Nether). The guide's value is the minimum cost from there to the destination, so its difference from the price along the line is exactly the amount of detour.
  *
- * <p>見直すのは目的地が窓の中にあり、ガイドが外の推定を含まないときだけ。
+ * <p>Reviews only when the destination is inside the window and the guide includes no outside estimate.
  */
 public final class RouteReview {
 
@@ -20,19 +20,19 @@ public final class RouteReview {
     }
 
     /**
-     * {@code steps[from..]}を辿ったときの、ガイドが知る最短に対する遠回りの量（tick）。比べられる点が無ければ0。
+     * Amount of detour (ticks) relative to the shortest the guide knows, when following {@code steps[from..]}. 0 if there are no comparable points.
      *
-     * <p>見るのは値がグラフのノードから直接引ける点だけ（{@link WindowField#exact}）。置いた・掘ったブロックの上など
-     * グラフに無い点は近くの値から延ばした推定で、それを基準にすると線の側に無い遠回りを作り出す。
+     * <p>Looks only at points whose value comes directly from a graph node ({@link WindowField#exact}). Points not in the graph, such as on placed or dug blocks,
+     * are estimates extended from nearby values, and using them as the reference invents detours that aren't on the line's side.
      *
-     * @param start 比べる起点（プレイヤーの足元）
-     * @param from  起点の次に踏むステップの添字
+     * @param start The origin to compare from (the player's feet)
+     * @param from  Index of the step stepped on after the origin
      */
     public static Detour detour(WindowField field, BlockPos start, List<PathStep> steps, int from) {
         BlockPos goal = field.goal();
         if (!field.measuredInWindow(goal.getX(), goal.getZ())) {
-            // 目的地が窓の外なら、値は窓の縁に置いた外の推定から来る。推定のずれは場所ごとに違うので、差を取ると遠回りでない線を
-            // 遠回りとする（実測: ネザーで3D粗層を外の推定にすると、始点の値が実際の最短全体より大きく、引き直して1.003→1.187倍）
+            // If the destination is outside the window, values come from outside estimates placed at the window edge. Estimate errors vary by place, so taking the difference
+            // calls non-detouring lines detours (measured: using the 3D coarse layer as the outside estimate in the Nether, the start's value exceeded the true overall shortest, and redrawing went 1.003 → 1.187x)
             return Detour.NONE;
         }
         double startValue = field.exact(start.getX(), start.getY(), start.getZ());
@@ -57,18 +57,18 @@ public final class RouteReview {
     }
 
     /**
-     * 遠回りの量。
+     * Amount of detour.
      *
-     * @param extraTicks  線に沿って{@code walkedTicks}ぶん進んでから最短で行くのに、最短より余計にかかる量
-     * @param walkedTicks 比べた点までの線の値段
+     * @param extraTicks  Extra cost over the shortest for advancing {@code walkedTicks} along the line and then taking the shortest
+     * @param walkedTicks Price of the line up to the compared point
      */
     public record Detour(double extraTicks, double walkedTicks) {
 
         static final Detour NONE = new Detour(0.0, 0.0);
 
         /**
-         * 引き直す価値があるか。小さな差で引き直すと、ガイドと探索の細かな食い違い（水中の割増の見積もりなど）で
-         * 歩くたびに線が描き変わる。
+         * Whether it's worth redrawing. Redrawing on small differences makes the line redraw with every step due to minor
+         * disagreements between the guide and the search (estimates of the underwater surcharge, etc.).
          */
         public boolean worthReplanning(double minExtraTicks) {
             return extraTicks > minExtraTicks;

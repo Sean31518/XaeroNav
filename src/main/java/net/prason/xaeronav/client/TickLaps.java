@@ -12,15 +12,15 @@ import net.prason.xaeronav.util.ChangeGate;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * 1tickの中で、名前を付けた処理にかかった時間を積み上げる。{@code tick処理が遅い}のログに内訳を添えるためのもの。
+ * Accumulates the time spent in named work within one tick. Used to attach a breakdown to the slow-tick log.
  *
- * <p>入れ子で測った処理は親にも子にも数える（{@code 再計算}の中の{@code 航法グラフの起動}など）ので、足し合わせると
- * tick全体を超えることがある。{@link #begin}を呼んだスレッド以外からの記録は捨てる——同じ処理が
- * {@code onMainThread}のタスクやワーカーから呼ばれることがあり、それはtickの時間ではない。
+ * <p>Nested measurements count toward both parent and child (e.g. nav graph startup inside recalculation), so the sum can
+ * exceed the whole tick. Records from threads other than the one that called {@link #begin} are dropped: the same work
+ * may be called from {@code onMainThread} tasks or workers, and that is not tick time.
  */
 final class TickLaps {
 
-    /** 内訳に出す下限。これ未満の処理は並べても原因の手がかりにならない。 */
+    /** Lower bound for the breakdown. Work below this is no clue to the cause even if listed. */
     private static final long SHOWN_NANOS = 1_000_000L;
 
     private static final int CAPACITY = 32;
@@ -56,7 +56,7 @@ final class TickLaps {
         }
         long elapsed = System.nanoTime() - startNanos;
         for (int i = 0; i < size; i++) {
-            // 名前は定数なので同一性で引ける
+            // Names are constants, so they can be looked up by identity
             if (NAMES[i] == name) {
                 NANOS[i] += elapsed;
                 CALLS[i]++;
@@ -72,9 +72,9 @@ final class TickLaps {
     }
 
     /**
-     * 探索の結果をメインスレッドで受け取るタスクを測る。tickの中で直に走れば（{@code Minecraft#execute}は描画スレッドから
-     * 呼ばれるとその場で実行する）tickの内訳に数える。tickの外で走った分は{@code tick処理が遅い}に出ないが同じ描画スレッドを
-     * 止めるので、{@link #SLOW_TASK_MILLIS}を超えればその中の内訳を付けて別に知らせる。
+     * Measures tasks that receive search results on the main thread. If run directly within the tick ({@code Minecraft#execute} runs
+     * immediately when called from the render thread), it counts toward the tick breakdown. Runs outside the tick don't show in the slow-tick log
+     * but block the same render thread, so beyond {@link #SLOW_TASK_MILLIS} they are reported separately with their own breakdown.
      */
     static Runnable timed(Runnable task) {
         return () -> {
@@ -86,12 +86,12 @@ final class TickLaps {
             try {
                 task.run();
             } finally {
-                add("結果の受け取り", lap);
+                add("receiving results", lap);
                 long millis = (System.nanoTime() - lap) / 1_000_000L;
                 long now = MonotonicTime.millis();
                 if (!nested && millis > SLOW_TASK_MILLIS
                         && slowTaskGate.changed(true, now, SLOW_TASK_LOG_INTERVAL_MILLIS)) {
-                    XaeroNav.LOGGER.warn("XaeroNav: tickの外の結果の受け取りが遅い ({}ms, 内訳={})", millis, summary());
+                    XaeroNav.LOGGER.warn("XaeroNav: Receiving results outside the tick is slow ({}ms, breakdown={})", millis, summary());
                 }
                 if (!nested) {
                     end();
@@ -100,7 +100,7 @@ final class TickLaps {
         };
     }
 
-    /** 受け取りの中身に名前を付けて測る。どの受け取りが重いかは、ラムダのクラス名からは分からない。 */
+    /** Names and measures what happens inside a receive. Which receive is heavy can't be told from the lambda's class name. */
     static <T> BiConsumer<T, Throwable> timed(String name, BiConsumer<T, Throwable> action) {
         return (result, error) -> {
             long lap = start();
@@ -116,7 +116,7 @@ final class TickLaps {
     private static final long SLOW_TASK_LOG_INTERVAL_MILLIS = 5_000L;
     private static final ChangeGate<Boolean> slowTaskGate = new ChangeGate<>();
 
-    /** 下限以上の処理を、かかった順に。無ければ{@code "内訳なし"}。 */
+    /** Work at or above the lower bound, in order of time spent. {@code "no breakdown"} if none. */
     static String summary() {
         List<Integer> shown = new ArrayList<>();
         for (int i = 0; i < size; i++) {
@@ -124,10 +124,10 @@ final class TickLaps {
                 shown.add(i);
             }
         }
-        // 止まっていた間のGC。処理そのものではなく、その最中に入ったGCの停止で遅く見えることがある
+        // GC while stopped. Things can look slow not because of the work itself but because of a GC pause that hit during it
         long gc = gcPauseMillis() - gcAtBegin;
         if (shown.isEmpty()) {
-            return gc > 0 ? "内訳なし, GC=" + gc + "ms" : "内訳なし";
+            return gc > 0 ? "no breakdown, GC=" + gc + "ms" : "no breakdown";
         }
         shown.sort((a, b) -> Long.compare(NANOS[b], NANOS[a]));
         StringBuilder text = new StringBuilder();
@@ -146,11 +146,11 @@ final class TickLaps {
         return text.toString();
     }
 
-    /** 起動からのGCでスレッドが止まった時間の合計。 */
+    /** Total time threads were stopped by GC since startup. */
     static long gcPauseMillis() {
         long total = 0;
         for (GarbageCollectorMXBean bean : ManagementFactory.getGarbageCollectorMXBeans()) {
-            // G1の"G1 Concurrent GC"はアプリのスレッドを止めない並行処理の時間なので、止まった時間に数えない
+            // G1's "G1 Concurrent GC" is concurrent work that doesn't stop application threads, so it doesn't count as stopped time
             if (!bean.getName().contains("Concurrent")) {
                 total += Math.max(0L, bean.getCollectionTime());
             }

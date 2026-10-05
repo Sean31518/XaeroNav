@@ -21,54 +21,54 @@ import net.prason.xaeronav.pathfinding.astar.SectionMoves;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * 窓の中の、目的地までの残りコスト。{@link NavGraph}の辺を逆向きにDijkstraして作る。
+ * Remaining cost to the goal within the window. Built by running Dijkstra backwards over the {@link NavGraph} edges.
  *
- * <p>窓の外、またはまだ組んでいないセクションへ出る辺は、その先に{@link FarField}の値を置いて種にする。
- * 外の値が分からない点は種にしない（{@link FarField}の約束）。
+ * <p>Edges leaving the window, or into sections not yet built, are seeded with the {@link FarField} value at their far end.
+ * Points whose outside value is unknown are not seeded (the {@link FarField} contract).
  *
- * <p>作った後は読むだけなので、複数のスレッドから引いてよい。
+ * <p>Read-only after construction, so it may be queried from multiple threads.
  */
 public final class WindowField implements CostToGo {
 
     /**
-     * グラフに無い点を、近くのノードの値から延ばすときに見る範囲（ブロック）。
+     * Range (blocks) searched when extending a value from nearby nodes to a point not in the graph.
      *
-     * <p><b>ガイドを0にしてはいけない。</b>掘った・置いたブロックで生まれた立ち位置はグラフに無く、
-     * そこで0を返すと探索と部分経路の終点選びがそこへ吸い寄せられる（実測: 完璧なガイドでも1.30倍に落ちた）。
+     * <p><b>The guide must not return 0.</b> Standing spots created by mined or placed blocks are not in the graph,
+     * and returning 0 there pulls the search and partial-path endpoint selection toward them (measured: even a perfect guide dropped to 1.30x).
      */
     private static final int NEAREST_REACH = 3;
 
     /**
-     * 窓の縁からこの幅（ブロック）の中にある点には、外の値を直接置く。
+     * Points within this width (blocks) of the window edge get the outside value directly.
      *
-     * <p>探索は読み込まれていないセルへの移動を作らないので、縁のセクションからは窓の外へ出る辺が1本も無い。
-     * 辺の先に外の値を置くだけだと種が1つも無く、窓の中のガイドが丸ごと外の値に落ちる
-     * （実測: 広域長距離で2.651倍）。
+     * <p>The search never creates moves into unloaded cells, so edge sections have no edges leaving the window at all.
+     * Seeding only the far ends of edges would leave no seeds, and the guide inside the window would fall back entirely to outside values
+     * (measured: 2.651x on long wide-area routes).
      */
     private static final int EDGE_SEED_BAND = 2;
 
     /**
-     * 窓の縁からこの幅（ブロック）の中は、値が{@link FarField}の推定から来ているとみなす
-     * （{@link #measuredInWindow}）。縁のセクションは外へ出る辺の先に外の値を置いて種にしている
-     * （{@link #EDGE_SEED_BAND}）ので、その周りの値には推定がそのまま残る。
+     * Values within this width (blocks) of the window edge are considered to come from the {@link FarField} estimate
+     * ({@link #measuredInWindow}). Edge sections are seeded with outside values at the far end of edges leaving them
+     * ({@link #EDGE_SEED_BAND}), so the estimate persists in the values around them.
      */
     private static final int EDGE_MARGIN_BLOCKS = 32;
 
-    /** 並べて数える小分けの大きさ（セクション数）。 */
+    /** Size of the chunks counted in parallel (in sections). */
     private static final int SLOTS_PER_TASK = 32;
 
     private static final VarHandle INTS = MethodHandles.arrayElementVarHandle(int[].class);
     private static final VarHandle DOUBLES = MethodHandles.arrayElementVarHandle(double[].class);
 
-    /** Dial法のバケットを並べて回す下限（入る辺の本数）。これより小さいと、並べる手間の方が高くつく。 */
+    /** Minimum number of incoming edges for processing Dial buckets in parallel. Below this, the parallelization overhead costs more. */
     private static final long PARALLEL_BUCKET_EDGES = 1024;
 
-    /** 並べたバケットで、1つの小分けが受け持つノードの数。 */
+    /** Number of nodes handled by one chunk in a parallel bucket. */
     private static final int NODES_PER_TASK = 128;
 
-    /** 窓の外・まだ組んでいないセクション。 */
+    /** Outside the window, or a section not yet built. */
     private static final int OUTSIDE = -1;
-    /** 組んだセクションの中だが、ノードではない（殻の外）。 */
+    /** Inside a built section, but not a node (outside the shell). */
     private static final int NOT_A_NODE = -2;
 
     private final BlockPos goal;
@@ -102,7 +102,7 @@ public final class WindowField implements CostToGo {
         return goal;
     }
 
-    /** 窓の中心と半径（ブロック）。 */
+    /** Window center and radius (blocks). */
     public int centerX() {
         return centerX;
     }
@@ -127,14 +127,14 @@ public final class WindowField implements CostToGo {
         return buildMillis;
     }
 
-    /** 組み立て後も覚えている配列のおおよそのバイト数。 */
+    /** Approximate byte size of the arrays kept after construction. */
     public long bytes() {
         return 8L * distance.length + index.bytes();
     }
 
     /**
-     * 組み立てにだけ使う大きな配列。区間ごとに数千万要素を作り直すと、そのたびに数十MBのごみになる。
-     * 組み立て後のガイドはこれを参照しないので、次の組み立てで上書きしてよい。
+     * Large arrays used only during construction. Recreating tens of millions of elements per segment would produce tens of MB of garbage each time.
+     * The finished guide does not reference these, so the next construction may overwrite them.
      */
     static final class Buffers {
         private int[] start = new int[0];
@@ -175,19 +175,19 @@ public final class WindowField implements CostToGo {
     }
 
     /**
-     * 窓のセクションと、その中のノードの通し番号。セクション{@code s}のノードは
-     * {@code offsets[s]..offsets[s+1]}。
+     * The window's sections and the sequential numbering of their nodes. The nodes of section {@code s} are
+     * {@code offsets[s]..offsets[s+1]}.
      */
     private static final class Index {
         final long[] keys;
         final SectionEdges[] sections;
         final Long2IntOpenHashMap slotOf;
         final int[] offsets;
-        /** セクション{@code s}の隣（各軸-1〜1）のセクションの番号。無ければ-1。 */
+        /** Index of the neighboring section (-1 to 1 on each axis) of section {@code s}, or -1 if none. */
         final int[] neighbor;
         /**
-         * これより下のセクションはグラフに入れていない（{@link NavGraph#floorBelow}）。窓の外（{@link #OUTSIDE}）として扱うと、
-         * 窓の真ん中で下へ抜けて外の推定を読む偽の近道になるので、ノードでない所として扱う。
+         * Sections below this are not in the graph ({@link NavGraph#floorBelow}). Treating them as outside the window ({@link #OUTSIDE}) would
+         * create a false shortcut that drops down in the middle of the window and reads the outside estimate, so they are treated as non-nodes.
          */
         final int lowSectionY;
 
@@ -201,10 +201,10 @@ public final class WindowField implements CostToGo {
             this.lowSectionY = lowSectionY;
         }
 
-        /** セクション{@code slot}の原点から({@code x},{@code y},{@code z})の点のノード番号。 */
+        /** Node index of the point ({@code x},{@code y},{@code z}) relative to the origin of section {@code slot}. */
         int resolve(int slot, int x, int y, int z) {
             if (((x | y | z) & ~15) == 0) {
-                // 辺の大半は同じセクションの中で閉じる
+                // Most edges stay within the same section
                 int node = sections[slot].nodeOf(x | z << 4 | y << 8);
                 return node < 0 ? NOT_A_NODE : offsets[slot] + node;
             }
@@ -249,8 +249,8 @@ public final class WindowField implements CostToGo {
                                        FarField givenFar, Parallel parallel, BooleanSupplier cancelled) {
         long began = MonotonicTime.millis();
         BlockPos goal = graph.goal();
-        // 縁の近くの目的地は窓の外として扱う。縁のセクションは周りが読めないまま仮に組むので、目的地へ入る辺が生成されず、
-        // 窓の中なのに繋がらないと判定して従来の探索へ落ちる（実測: エンドで目的地が縁から5ブロックの区間が2回、1.022→1.050倍）
+        // Treat goals near the edge as outside the window. Edge sections are built provisionally without their surroundings loaded, so no edges into the goal get generated,
+        // and despite being inside the window it is judged unreachable and falls back to the legacy search (measured: two End segments with the goal 5 blocks from the edge, 1.022→1.050x)
         boolean goalInWindow = Math.abs(goal.getX() - centerX) <= radius - NavGraph.READ_MARGIN
                 && Math.abs(goal.getZ() - centerZ) <= radius - NavGraph.READ_MARGIN;
         FarField far = goalInWindow ? givenFar.whenGoalInside() : givenFar;
@@ -270,13 +270,13 @@ public final class WindowField implements CostToGo {
         int insideEdges = 0;
         for (int s = 0; s < slots; s++) {
             SectionEdges edges = graph.section(keys[s]);
-            // 組み立ての途中で捨てられた（チャンクの更新）なら、まだ組んでいないのと同じに扱う
+            // If it was discarded mid-construction (chunk update), treat it the same as not yet built
             sections[s] = edges == null ? SectionEdges.EMPTY : edges;
             slotOf.put(keys[s], s);
             offsets[s + 1] = offsets[s] + sections[s].nodes;
             insideEdges += sections[s].inSize();
         }
-        // 辺の移動の番号は、セクションを覚える前に表へ載っている。セクションを集め終えてから表を取れば全部引ける
+        // Edge move indices are registered in the table before the section is recorded. Taking the table after collecting all sections resolves them all
         MoveTable.View moves = graph.moves().view();
         int[] neighbor = new int[slots * 27];
         for (int s = 0; s < slots; s++) {
@@ -302,9 +302,9 @@ public final class WindowField implements CostToGo {
         }
         AtomicBoolean goalEntered = new AtomicBoolean();
 
-        // 1周目: 窓の中でセクションをまたいで入る辺を行き先ごとに数え（start[行き先+2]）、窓から出る辺は種にする。
-        // セクションの中で閉じる入る辺はセクションが覚えている（SectionEdges#inFirst）。
-        // 種はセクションの自分のノードにしか書かないので、数える所だけ並べたときに原子的に足す
+        // Pass 1: count incoming edges that cross sections inside the window per destination (start[dest+2]), and seed edges leaving the window.
+        // Incoming edges closed within a section are recorded by the section (SectionEdges#inFirst).
+        // Seeds are only written to the section's own nodes, so only the counting needs atomic adds when parallelized
         int[] start = buffers.start(n + 2);
         boolean concurrent = parallel.workers() > 1;
         boolean counted = parallel.forEach(slots, SLOTS_PER_TASK, cancelled, (fromSlot, toSlot) -> {
@@ -333,7 +333,7 @@ public final class WindowField implements CostToGo {
                         int ty = ly + moves.dy[m];
                         int tz = lz + moves.dz[m];
                         if (baseX + tx == goal.getX() && baseY + ty == goal.getY() && baseZ + tz == goal.getZ()) {
-                            // 目的地そのものは殻の外（展開しないセル）にあってもよい。そこへ入る辺は目的地までの値段そのもの
+                            // The goal itself may lie outside the shell (in a cell that is not expanded). The edge into it is the cost to the goal itself
                             distance[from] = Math.min(distance[from], moves.cost[m]);
                             goalEntered.set(true);
                         }
@@ -366,8 +366,8 @@ public final class WindowField implements CostToGo {
         }
         int m = start[n + 1];
         char[] inMove = buffers.inMove(m);
-        // 2周目: 行き先ごとに、セクションをまたいで入ってくる辺の移動を埋める。出発点は行き先から移動を引き戻せば分かる。
-        // 並べると入る辺の並び順は変わるが、距離は変わらない
+        // Pass 2: per destination, fill in the moves of incoming edges that cross sections. The origin is found by undoing the move from the destination.
+        // Parallelizing changes the order of incoming edges, but not the distances
         boolean filled = parallel.forEach(slots, SLOTS_PER_TASK, cancelled, (fromSlot, toSlot) -> {
             for (int s = fromSlot; s < toSlot; s++) {
                 SectionEdges section = sections[s];
@@ -394,7 +394,7 @@ public final class WindowField implements CostToGo {
         if (!filled) {
             return null;
         }
-        // 埋め終えると start[t]..start[t+1] が行き先tへ入る辺になる
+        // Once filled, start[t]..start[t+1] are the edges into destination t
         for (int s = 0; s < slots; s++) {
             for (int i = offsets[s]; i < offsets[s + 1]; i++) {
                 position[i] |= s << 12;
@@ -413,8 +413,8 @@ public final class WindowField implements CostToGo {
         }
         BitSet settled = new BitSet(n);
         if (Double.isFinite(base)) {
-            // 振った移動の値段はどれもこの幅以上なので、バケットを前から空にするだけで確定順になる。
-            // 窓の外のセクションの移動も含む最小値だが、幅が狭いぶんには正しさは変わらない
+            // Every assigned move costs at least this width, so simply emptying the buckets from the front yields the settle order.
+            // This minimum includes moves of sections outside the window, but a narrower width does not affect correctness
             double width = moves.minCost;
             BucketQueue queue = buffers.queue((int) ((top - base) / width) + 1, seeds);
             for (int i = 0; i < n; i++) {
@@ -432,14 +432,14 @@ public final class WindowField implements CostToGo {
     }
 
     /**
-     * バケットを前から空にして距離を確定させる（Dial法）。
+     * Settle distances by emptying the buckets from the front (Dial's algorithm).
      *
-     * <p>大きいバケットは中のノードの緩和を並べる。辺の値段はどれもバケット幅以上なので、あるバケットのノードから
-     * 緩和した先は後ろのバケットへ行き、同じバケットの中どうしは互いの値を使わない（丸めで同じバケットへ戻った
-     * 改善は、そのバケットをもう一度回して拾う）。距離は小さくなるときだけ書くので、並べても1本で回したときと
-     * 同じ最短距離に落ち着く——各経路の値は目的地側から同じ順に足して作られるので、ビットまで一致する。
+     * <p>Large buckets relax their nodes in parallel. Every edge costs at least the bucket width, so relaxing from a node in a bucket
+     * always lands in a later bucket, and nodes in the same bucket do not use each other's values (improvements that round back into
+     * the same bucket are picked up by processing that bucket again). Distances are only written when they decrease, so parallel runs
+     * converge to the same shortest distances as a single-threaded run; each path's value is summed in the same order from the goal side, so they match bit for bit.
      *
-     * @return 打ち切られたら{@code false}
+     * @return {@code false} if aborted
      */
     private static boolean settle(BucketQueue queue, BitSet settled, double[] distance, int[] position, int[] start,
                                   char[] inMove, Index index, MoveTable.View moves, double base, double width,
@@ -491,7 +491,7 @@ public final class WindowField implements CostToGo {
                         double candidate = d + moves.cost[move];
                         if (candidate < distance[p]) {
                             distance[p] = candidate;
-                            // 丸めで同じバケットへ戻ってきた改善は、確定を取り消して解き直す
+                            // An improvement that rounded back into the same bucket: unsettle it and solve again
                             settled.clear(p);
                             queue.push(Math.max(bucket, (int) ((candidate - base) / width)), p);
                         }
@@ -556,7 +556,7 @@ public final class WindowField implements CostToGo {
         return true;
     }
 
-    /** {@code distance[p]}を{@code candidate}へ下げる。下げられたら{@code true}。 */
+    /** Lowers {@code distance[p]} to {@code candidate}. {@code true} if it was lowered. */
     private static boolean lower(double[] distance, int p, double candidate) {
         double current = (double) DOUBLES.getOpaque(distance, p);
         while (candidate < current) {
@@ -569,21 +569,21 @@ public final class WindowField implements CostToGo {
     }
 
     /**
-     * 窓の中にある目的地へ、殻のどこかから入れるか。入れなければ窓全体の値が縁の外の推定だけから来るので、
-     * このガイドで探してはいけない。目的地が窓の外なら常に{@code true}。
+     * Whether the goal inside the window can be entered from somewhere in the shell. If not, every value in the window comes only from the
+     * estimate outside the edge, so this guide must not be used for searching. Always {@code true} if the goal is outside the window.
      */
     public boolean reachesGoal() {
         return !goalCut;
     }
 
     /**
-     * ({@code x},{@code y},{@code z})が、目的地へ繋がる殻の中にあるか。
+     * Whether ({@code x},{@code y},{@code z}) lies inside the shell connected to the goal.
      *
-     * <p>殻（{@link SectionShell}）は自然に立てる点の周りの体積しか持たないので、閉じた洞窟の中や、16ブロックを超える奈落で
-     * 隔てられた島からは繋がらない。そこでは近くのノードがどれも値を持たず、値は外の推定か幾何下限へ落ちる。
+     * <p>The shell ({@link SectionShell}) only holds the volume around naturally standable points, so closed caves and islands separated
+     * by voids wider than 16 blocks are not connected. There, no nearby node has a value, and the value falls back to the outside estimate or the geometric lower bound.
      *
-     * <p><b>近くにノードが1つも無い点は繋がっているものとして扱う。</b>奈落の上に架けた橋の先など、置いたブロックの上は
-     * 殻の外にあるのが普通で、そこでは近くの値を延ばす（{@link #estimate}）。
+     * <p><b>Points with no nearby node at all are treated as connected.</b> Placed blocks, such as the far end of a bridge over a void, normally lie
+     * outside the shell, and there the nearby values are extended ({@link #estimate}).
      */
     public boolean connects(int x, int y, int z) {
         boolean nodeNearby = false;
@@ -604,31 +604,31 @@ public final class WindowField implements CostToGo {
     }
 
     /**
-     * ガイドの値がどこから来たか。{@code exit}は値の出どころ——目的地そのもの、または窓の外の推定を読んだ点。
+     * Where a guide value came from. {@code exit} is the value's source: the goal itself, or the point where the outside-window estimate was read.
      *
-     * @param inside {@code from}から{@code exit}の手前まで、窓の中を辿った値段
-     * @param outside {@code exit}で読んだ窓の外の推定（目的地なら0）
+     * @param inside cost of the path traced inside the window from {@code from} up to just before {@code exit}
+     * @param outside the outside-window estimate read at {@code exit} (0 if it is the goal)
      */
     public record Descent(BlockPos exit, double inside, double outside, boolean reachedGoal) {
     }
 
     /**
-     * {@code (x, y, z)}から、ガイドの値を作った辺を下って値の出どころを探す。ノードでない・値が無いなら{@code null}。
+     * Follows the edges that produced the guide value downhill from {@code (x, y, z)} to find the value's source. {@code null} if not a node or no value.
      *
-     * <p>経路の向きがガイドのどの推定に引かれて決まったかを実機のログで見るためのもの。値は辺の値段の和で確定しているので、
-     * 各ノードで「値段＋行き先の値」が自分の値に一致する辺を辿れば出どころに着く。
+     * <p>Used to see in in-game logs which guide estimate pulled the path direction. Values are exact sums of edge costs, so following
+     * at each node the edge whose "cost + destination value" equals its own value reaches the source.
      */
     public @Nullable Descent descend(int x, int y, int z) {
         return descend(x, y, z, null);
     }
 
-    /** 下る途中で踏む点。 */
+    /** A point visited during the descent. */
     @FunctionalInterface
     public interface Trail {
         void visit(int x, int y, int z);
     }
 
-    /** {@link #descend(int, int, int)}と同じ。踏んだ点を始点から順に{@code trail}へ渡す（窓の外の出口は渡さない）。 */
+    /** Same as {@link #descend(int, int, int)}. Passes visited points to {@code trail} in order from the start (the outside-window exit is not passed). */
     public @Nullable Descent descend(int x, int y, int z, @Nullable Trail trail) {
         int id = index.resolveAbsolute(x, y, z);
         if (id < 0 || !Double.isFinite(distance[id])) {
@@ -693,16 +693,16 @@ public final class WindowField implements CostToGo {
             y = ty;
             z = tz;
         }
-        throw new IllegalStateException("ガイドを下りきれない: " + x + ", " + y + ", " + z);
+        throw new IllegalStateException("Cannot descend the guide: " + x + ", " + y + ", " + z);
     }
 
     /**
-     * {@code (x, y, z)}からガイドを下った道筋の水平の外接箱を{@code pad}広げたもの（{@code {minX, minZ, maxX, maxZ}}）。
-     * 下れない、または道筋が目的地に届かず幾何下限の推定へ出るなら{@code null}。
+     * Horizontal bounding box of the path descended along the guide from {@code (x, y, z)}, padded by {@code pad} ({@code {minX, minZ, maxX, maxZ}}).
+     * {@code null} if it cannot be descended, or if the path does not reach the goal and exits to the geometric lower bound estimate.
      *
-     * <p>探索の箱を始点と目標の外接箱だけで切ると、ガイドが正確でも最適な回り込みが箱の外に落ちる（実測: ネザーで箱の壁に沿って
-     * 14ブロックの橋を架け1.246倍）。幾何下限が指す縁は地形を見ていないので、そこへ向かう道筋では箱を広げない
-     * （エンドの外側の島で11113→15613tick）。
+     * <p>Cutting the search box to just the bounding box of start and target makes optimal detours fall outside it even with an exact guide (measured: in the Nether, a
+     * 14-block bridge was built along the box wall, 1.246x). The edge the geometric lower bound points to ignores terrain, so paths heading there do not widen the box
+     * (outer End islands: 11113→15613 ticks).
      */
     public int @Nullable [] descentBox(int x, int y, int z, int pad) {
         int[] box = {x, z, x, z};
@@ -719,16 +719,16 @@ public final class WindowField implements CostToGo {
     }
 
     /**
-     * この点の値が、窓の中を実際に辿った結果から来ているか。<b>2点の値を引き算するなら、どちらもこれを満たすこと</b>
-     * ——縁の近くと窓の外の値は{@link FarField}の推定で、尺度が窓の中と揃っていない（ネザーの3D粗層は
-     * {@code NavGraphGuide.VOXEL_FAR_SCALE}倍して置いてある）。差を取ると推定のずれがそのまま結論になる。
+     * Whether this point's value comes from actually tracing inside the window. <b>When subtracting two points' values, both must satisfy this</b>:
+     * values near the edge and outside the window are {@link FarField} estimates, not on the same scale as inside the window (the Nether 3D coarse layer
+     * is stored multiplied by {@code NavGraphGuide.VOXEL_FAR_SCALE}). Taking the difference makes the estimate's error the conclusion.
      */
     public boolean measuredInWindow(int x, int z) {
         int limit = radius - EDGE_MARGIN_BLOCKS;
         return Math.abs(x - centerX) <= limit && Math.abs(z - centerZ) <= limit;
     }
 
-    /** グラフのノードから直接引ける値。ノードでないか、目的地へ繋がらなければ{@link Double#NaN}。 */
+    /** Value read directly from a graph node. {@link Double#NaN} if not a node or not connected to the goal. */
     public double exact(int x, int y, int z) {
         int id = index.resolveAbsolute(x, y, z);
         return id >= 0 && Double.isFinite(distance[id]) ? distance[id] : Double.NaN;
@@ -748,10 +748,10 @@ public final class WindowField implements CostToGo {
     }
 
     /**
-     * 組んだセクションの中で値を持たない点（殻の外、または目的地へ繋がらないノード）で、近くにも値が無ければ{@link Double#NaN}。
+     * {@link Double#NaN} for points inside a built section that hold no value (outside the shell, or nodes not connected to the goal) and have no value nearby either.
      *
-     * <p>そこで{@link #outside}（窓の外の推定や幾何下限）を探索の値にすると、隣の島の上のノードより数千tick安く見える穴になる。
-     * 外してしまうとグラフが持たない橋（目的地へ向かないL字の橋など）を探索が架けられなくなるので、値は探索側で親から引き継ぐ。
+     * <p>Using {@link #outside} (outside-window estimate or geometric lower bound) as the search value there creates a hole that looks thousands of ticks cheaper than nodes on the neighboring island.
+     * Excluding those points would prevent the search from building bridges the graph lacks (such as L-shaped bridges not heading toward the goal), so the search side inherits the value from the parent.
      */
     @Override
     public double searchEstimate(int x, int y, int z) {
@@ -766,7 +766,7 @@ public final class WindowField implements CostToGo {
         return Double.isFinite(nearest) ? nearest : Double.NaN;
     }
 
-    /** {@link #NEAREST_REACH}以内のノードの値から延ばした値。無ければ{@link Double#POSITIVE_INFINITY}。 */
+    /** Value extended from node values within {@link #NEAREST_REACH}. {@link Double#POSITIVE_INFINITY} if none. */
     private double nearest(int x, int y, int z) {
         double nearest = Double.POSITIVE_INFINITY;
         for (int dx = -NEAREST_REACH; dx <= NEAREST_REACH; dx++) {
@@ -783,7 +783,7 @@ public final class WindowField implements CostToGo {
         return nearest;
     }
 
-    /** グラフから値を引けない点。外の値があればそれ、無ければ目的地までの幾何下限。 */
+    /** A point whose value cannot be read from the graph. The outside value if present, otherwise the geometric lower bound to the goal. */
     private double outside(int x, int y, int z) {
         double value = far.at(x, y, z);
         return Double.isFinite(value) ? value : Heuristic.estimate(x, y, z, goal.getX(), goal.getY(), goal.getZ());

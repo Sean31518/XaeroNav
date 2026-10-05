@@ -4,14 +4,14 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * {@link CellSource}を包んで「このインスタンスを触ったスレッド」を記録する見張り。
+ * A watchdog that wraps a {@link CellSource} and records "the threads that touched this instance".
  *
- * <p>{@code CellSource}は単一のワーカースレッドが占有する約束（{@code ChunkView}のスレッド契約）で、
- * 破っても症状は非決定的にしか出ない——実機では{@code ArrayIndexOutOfBoundsException}が数分に1回、
- * 出ないときは別のチャンクのブロックを読んだまま経路が出ていた。<b>壊れ方を待ち受けるのではなく、
- * 契約違反そのものを見る</b>ことで、インターリーブに依存しない判定にする。
+ * <p>{@code CellSource} is promised to be owned by a single worker thread ({@code ChunkView}'s thread contract), and
+ * breaking that only shows up nondeterministically: in-game, an {@code ArrayIndexOutOfBoundsException} every few minutes,
+ * and when it didn't appear, a route came out having read blocks from another chunk. <b>By looking at the contract
+ * violation itself rather than waiting for the breakage</b>, the check doesn't depend on interleaving.
  *
- * <p>実装が動的プロキシなのは、{@code CellSource}にメソッドが増えても見張りが素通りしないようにするため。
+ * <p>It's implemented as a dynamic proxy so the watchdog isn't bypassed when methods are added to {@code CellSource}.
  */
 public final class OwnerTrackingCells {
 
@@ -40,12 +40,12 @@ public final class OwnerTrackingCells {
         return view;
     }
 
-    /** このビューを最初に触ったスレッド。一度も触られていなければ{@code null}。 */
+    /** The first thread that touched this view. {@code null} if it has never been touched. */
     public Thread owner() {
         return owner.get();
     }
 
-    /** 占有者以外で触ったスレッド。契約が守られていれば{@code null}。 */
+    /** A thread other than the owner that touched it. {@code null} if the contract is upheld. */
     public Thread intruder() {
         return intruder.get();
     }

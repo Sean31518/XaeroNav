@@ -36,20 +36,20 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
-/** 保存ワールドから書き出した箱の中で、ランダムな始点・目的地を本番の設定で歩き通す。 */
+/** Walks random start/goal pairs all the way through with production settings, inside a box exported from a saved world. */
 @Tag("bench")
 public class RandomSweepBenchTest {
 
-    /** 書き出した箱（{@code <箱>.txt.gz}）を置いたディレクトリ。{@code -Pxaeronav.sweepDir=...}で渡す。 */
+    /** Directory holding the exported boxes ({@code <box>.txt.gz}). Passed via {@code -Pxaeronav.sweepDir=...}. */
     private static final Path DIR = Path.of(System.getProperty("xaeronav.sweepDir", "."));
     private static final int WINDOW = 224;
     private static final int ROUTES = Integer.getInteger("xaeronav.routes", 8);
     private static final boolean UNKNOWN_MAP = Boolean.getBoolean("xaeronav.unknownMap");
     private static final int MIN_BLOCKS = Integer.getInteger("xaeronav.sweepMin", 100);
     private static final int MAX_BLOCKS = Integer.getInteger("xaeronav.sweepMax", 350);
-    /** {@code random}なら実行ごとに変える。引いた値は出力の見出しに残すので、同じ組を後から再現できる。 */
+    /** {@code random} changes it on every run. The drawn value is kept in the output header so the same set can be reproduced later. */
     private static final long SEED = seed(System.getProperty("xaeronav.sweepSeed", "0"));
-    /** 始点・目的地を置く範囲（箱の中心からの半径）。窓が箱の外を見ないよう、既定は768四方の箱で±200。 */
+    /** Range for placing starts/goals (radius from the box center). Defaults to ±200 in a 768-square box so the window does not look outside it. */
     private static final int SPREAD = Integer.getInteger("xaeronav.sweepSpread", 200);
     private static final String TAG = System.getProperty("xaeronav.sweepTag", "");
 
@@ -70,7 +70,7 @@ public class RandomSweepBenchTest {
         sweep(Dim.END, boxes("en0,en1,en2,en3,en4"));
     }
 
-    /** {@code -Pxaeronav.alongPoints=箱:x,y,z:x,y,z;...}のルートを1本ずつ、全視界の最適と比べて歩く。 */
+    /** Walks the routes in {@code -Pxaeronav.alongPoints=box:x,y,z:x,y,z;...} one by one, comparing each with the full-visibility optimum. */
     @Test
     void focus() throws IOException {
         Path out = Path.of(System.getProperty("xaeronav.profileOut", "."), "sweep-focus.txt");
@@ -89,21 +89,21 @@ public class RandomSweepBenchTest {
                         StanceFinder.resolveStart(cells, start), StanceFinder.resolveGoal(cells, goal),
                         new SearchLimits(3_000_000, 300_000, 1.0), true, 0, Carryover.NONE, null).join();
                 best = full.complete() ? ProgressiveWalk.cost(full.steps()) : Double.POSITIVE_INFINITY;
-                log(out, String.format(Locale.ROOT, "  全視界 %s 展開%d 手%d 値段%.0f", full.termination(),
+                log(out, String.format(Locale.ROOT, "  full visibility %s expanded%d steps%d cost%.0f", full.termination(),
                         full.expandedNodes(), full.steps().size(), best));
-                StringBuilder path = new StringBuilder("  最適の道筋");
+                StringBuilder path = new StringBuilder("  optimal path");
                 for (int i = 0; i < full.steps().size(); i += 40) {
                     path.append(' ').append(full.steps().get(i).pos().toShortString().replace(" ", ""));
                 }
                 log(out, path.toString());
             }
-            log(out, String.format(Locale.ROOT, "# %s %s→%s 全視界の最適%.0f (%ds)", p[0], start.toShortString(),
+            log(out, String.format(Locale.ROOT, "# %s %s→%s full-visibility optimum%.0f (%ds)", p[0], start.toShortString(),
                     goal.toShortString(), best, (System.currentTimeMillis() - began) / 1000));
             CoarseMap sampled = dim == Dim.NETHER ? null : LiveCoarseSampler.sample(cells, cells.bounds());
             ProgressiveWalk.Trace trace = ProgressiveWalk.trace(cells, start, goal, WINDOW, ProgressiveWalk.Mode.REPAIR,
                     ProgressiveWalk.Aim.GOAL, guide(cells, dim, start, goal, sampled), 1.0);
             double cost = trace.steps().isEmpty() ? Double.POSITIVE_INFINITY : ProgressiveWalk.cost(trace.steps());
-            log(out, String.format(Locale.ROOT, "  歩き通し 値段%.0f 最適比%.3f 後退%.0f 重複%d %s", cost, cost / best,
+            log(out, String.format(Locale.ROOT, "  walk-through cost%.0f optimalRatio%.3f backtrack%.0f repeats%d %s", cost, cost / best,
                     worstRetreat(trace.steps(), goal), ProgressiveWalk.selfOverlaps(trace.steps()), trace.stopped()));
         }
     }
@@ -128,7 +128,7 @@ public class RandomSweepBenchTest {
         for (String box : boxes) {
             FakeCells cells = load(DIR.resolve(box + ".txt.gz"), dim);
             List<BlockPos[]> routes = routes(cells, dim, box.hashCode() + SEED);
-            log(out, String.format(Locale.ROOT, "# 箱%s %s ルート%d本 種%d", box, cells.bounds(), routes.size(), SEED));
+            log(out, String.format(Locale.ROOT, "# box%s %s routes%d seed%d", box, cells.bounds(), routes.size(), SEED));
             CoarseMap sampled = dim == Dim.NETHER ? null : LiveCoarseSampler.sample(cells, cells.bounds());
             for (BlockPos[] route : routes) {
                 BlockPos start = StanceFinder.resolveStart(cells, route[0]);
@@ -148,7 +148,7 @@ public class RandomSweepBenchTest {
                                 return g;
                             }, 1.0);
                 } catch (RuntimeException | OutOfMemoryError e) {
-                    log(out, String.format(Locale.ROOT, "%s→%s 例外 %s", start.toShortString(), goal.toShortString(), e));
+                    log(out, String.format(Locale.ROOT, "%s→%s exception %s", start.toShortString(), goal.toShortString(), e));
                     continue;
                 }
                 long secs = (System.currentTimeMillis() - began) / 1000;
@@ -157,7 +157,7 @@ public class RandomSweepBenchTest {
                 double cost = steps.isEmpty() ? Double.POSITIVE_INFINITY : ProgressiveWalk.cost(steps);
                 int edge = edgeSteps(cells, start, steps);
                 log(out, String.format(Locale.ROOT,
-                        "%s %s→%s 直線%.0f 到達=%s 値段%.0f 下限比%.2f 手%d 後退%.0f 重複%d 描き変わり%d(足元%d) 繋ぎ目%d ガイド無し区間%d 空のガイド%d 置く%d 掘る%d 縁%d 割増抜き%.0f %ds %s",
+                        "%s %s→%s straight%.0f reached=%s cost%.0f lowerBoundRatio%.2f steps%d backtrack%.0f repeats%d redraws%d(underfoot%d) seams%d unguidedLegs%d emptyGuides%d place%d dig%d edge%d noSurcharge%.0f %ds %s",
                         box, start.toShortString(), goal.toShortString(), ProgressiveWalk.horizontal(start, goal),
                         !steps.isEmpty(), cost, cost / lower, steps.size(), worstRetreat(steps, goal),
                         ProgressiveWalk.selfOverlaps(steps), trace.redraws(), trace.nearRedraws(), trace.joints().size(),
@@ -177,7 +177,7 @@ public class RandomSweepBenchTest {
         }
     }
 
-    /** 本番の{@code PathfindingState#goalGuide}と同じ窓の外の推定で、8ブロック動くごとに組み直す。 */
+    /** Rebuilds every 8 blocks moved, using the same outside-window estimate as production {@code PathfindingState#goalGuide}. */
     private static Function<BlockPos, CostToGo> guide(FakeCells cells, Dim dim, BlockPos start, BlockPos goal,
                                                       CoarseMap sampled) {
         NavGraph graph = new NavGraph(goal, cells.bounds().minY(), cells.bounds().maxY());
@@ -221,7 +221,7 @@ public class RandomSweepBenchTest {
         };
     }
 
-    /** 箱の中央±{@link #SPREAD}に始点・目的地を置く。周り48ブロックに書き出されていない列（未生成のチャンク）がある点は使わない。 */
+    /** Places starts/goals within ±{@link #SPREAD} of the box center. Skips points with unexported columns (ungenerated chunks) within 48 blocks. */
     private static List<BlockPos[]> routes(FakeCells cells, Dim dim, long seed) {
         SearchBounds b = cells.bounds();
         int cx = (b.minX() + b.maxX()) / 2;
@@ -259,7 +259,7 @@ public class RandomSweepBenchTest {
         if (floors.isEmpty()) {
             return null;
         }
-        // 現世・エンドは地表（いちばん上の床）、現世の3本に1本は洞窟の始点。ネザーは床をランダムに選ぶ
+        // Overworld/End use the surface (topmost floor); one in three Overworld routes starts in a cave. The Nether picks a random floor
         int y = switch (dim) {
             case NETHER -> floors.get(random.nextInt(floors.size()));
             case END -> floors.get(0);
@@ -289,8 +289,9 @@ public class RandomSweepBenchTest {
     }
 
     /**
-     * 横が溶岩・奈落・致死落差のマスへ歩いて着いた手の数（{@code AStarPathfinder#edgeHazardPenalty}と同じ判定）。
-     * 落下・跳躍・橋は除くため、水平1マス以内・上下1マス以内の手だけを数える。
+     * Number of steps that arrive by walking onto a cell whose side is lava, void, or a lethal drop (same check as
+     * {@code AStarPathfinder#edgeHazardPenalty}). Falls, jumps, and bridges are excluded, so only steps within 1 cell
+     * horizontally and 1 cell vertically are counted.
      */
     private static int edgeSteps(FakeCells cells, BlockPos start, List<PathStep> steps) {
         int count = 0;
@@ -353,7 +354,7 @@ public class RandomSweepBenchTest {
         return worst;
     }
 
-    /** 実機の既定（経路の再現用ログの設定）に揃える。ネザーは列の最下ブロックより下を石で埋める。 */
+    /** Matches the in-game defaults (the settings from the route replay log). In the Nether, fills below the column's bottom block with stone. */
     public static FakeCells load(Path file, Dim dim) throws IOException {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 new GZIPInputStream(Files.newInputStream(file)), StandardCharsets.UTF_8))) {

@@ -19,35 +19,35 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * 翻訳キーの整合性。
+ * Consistency of translation keys.
  *
- * <p>文言の追加は「コードに1つ、en_usに1つ、ja_jpに1つ」の3箇所へ同時に書く作業なので、
- * どれかが抜けやすい。抜けても例外は出ず、画面に生のキー文字列（{@code hud.xaeronav.foo}）が
- * 出るだけなので、動かして該当の状況を再現しない限り気付けない。
+ * <p>Adding a string means writing it in three places at once, "one in the code, one in en_us, one in ja_jp", so
+ * one of them is easy to miss. A miss throws no exception; the raw key string ({@code hud.xaeronav.foo}) just
+ * appears on screen, so it goes unnoticed unless you run the game and reproduce the situation.
  *
- * <p>JSONの解析にライブラリは使わない。対象は自分で書いた平坦な文字列辞書だけで、
- * そのためにテスト依存を増やす必要はない。
+ * <p>No library is used for JSON parsing. The only targets are flat string dictionaries we wrote ourselves, and
+ * there's no need to add a test dependency for that.
  */
 class LanguageKeyTest {
 
     /**
-     * テストの作業ディレクトリは使い捨ての場所なので、ソースツリーの位置はビルド側から受け取る
-     * （作業ディレクトリをリポジトリのルートにすると、Minecraftのlog4j設定がそこへログを
-     * 書き出してファイルが溜まり続ける）。
+     * The test's working directory is a throwaway location, so the source tree location is received from the build
+     * (making the working directory the repository root makes Minecraft's log4j configuration write logs
+     * there, and files keep piling up).
      */
     private static final Path PROJECT_ROOT = Path.of(System.getProperty("xaeronav.projectRoot", "."));
     private static final Path LANG_DIR = PROJECT_ROOT.resolve("src/main/resources/assets/xaeronav/lang");
     private static final Path SOURCE_DIR = PROJECT_ROOT.resolve("src/main/java");
 
-    /** {@code "key": "value"} の左辺だけを拾う。 */
+    /** Picks up only the left-hand side of {@code "key": "value"}. */
     private static final Pattern JSON_KEY = Pattern.compile("\"([^\"]+)\"\\s*:");
 
     /**
-     * ソース中の翻訳キーらしき文字列リテラル。
+     * String literals in the source that look like translation keys.
      *
-     * <p>呼び出し方（{@code Component.translatable(...)}・{@code RightClickOption}のコンストラクタ・
-     * 三項演算子の枝）で絞り込まず、名前空間で拾う。渡し方は増えるので、そのたびにこの正規表現を
-     * 直す羽目になると、テストが通っているのに実際は見ていない状態に静かに戻る。
+     * <p>They're picked up by namespace rather than narrowed by call form ({@code Component.translatable(...)}, the {@code RightClickOption}
+     * constructor, ternary branches). Ways of passing keys keep growing, and if this regex had to be fixed each time,
+     * it would quietly slip back into a state where the test passes but isn't actually looking.
      */
     private static final Pattern USED_KEY = Pattern.compile(
             "\"((?:gui|hud|commands|key|xaeronav)\\.[a-zA-Z0-9_.]+)\"");
@@ -66,7 +66,7 @@ class LanguageKeyTest {
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new UncheckedIOException("読めませんでした: " + path.toAbsolutePath(), e);
+            throw new UncheckedIOException("Could not read: " + path.toAbsolutePath(), e);
         }
     }
 
@@ -75,15 +75,15 @@ class LanguageKeyTest {
         Set<String> english = keysOf("en_us.json");
         Set<String> japanese = keysOf("ja_jp.json");
 
-        assertTrue(!english.isEmpty(), "en_us.json からキーを1つも読めていない（テスト側の問題）");
+        assertTrue(!english.isEmpty(), "Could not read a single key from en_us.json (a problem in the test itself)");
 
         Set<String> missingInJapanese = new TreeSet<>(english);
         missingInJapanese.removeAll(japanese);
         Set<String> missingInEnglish = new TreeSet<>(japanese);
         missingInEnglish.removeAll(english);
 
-        assertTrue(missingInJapanese.isEmpty(), "ja_jp.json に無いキー: " + missingInJapanese);
-        assertTrue(missingInEnglish.isEmpty(), "en_us.json に無いキー: " + missingInEnglish);
+        assertTrue(missingInJapanese.isEmpty(), "Keys missing from ja_jp.json: " + missingInJapanese);
+        assertTrue(missingInEnglish.isEmpty(), "Keys missing from en_us.json: " + missingInEnglish);
     }
 
     @Test
@@ -91,21 +91,21 @@ class LanguageKeyTest {
         Set<String> declared = keysOf("en_us.json");
         Set<String> used = usedKeys();
 
-        assertTrue(!used.isEmpty(), "ソースから翻訳キーを1つも拾えていない（テスト側の問題）");
+        assertTrue(!used.isEmpty(), "Could not pick up a single translation key from the source (a problem in the test itself)");
 
         Set<String> undeclared = new TreeSet<>(used);
         undeclared.removeAll(declared);
-        // GuiMapRightClickMixinがXaero自身のメニュー項目を判別するために比較対象として持つ、
-        // Xaeroの翻訳キー（"gui.xaero_..."）。うちのlangに declare するものではない
-        // （うちの実際のキーは"gui.xaeronav..."で、間にアンダースコアが入らないため衝突しない）
+        // Xaero's translation keys ("gui.xaero_..."), held by GuiMapRightClickMixin for comparison to identify
+        // Xaero's own menu items. Not something to declare in our lang files
+        // (our actual keys are "gui.xaeronav...", with no underscore in between, so they don't collide)
         undeclared.removeIf(key -> key.startsWith("gui.xaero_"));
-        // 1.16.5のXaeroNavConfigScreen（OptionInstance等が無い旧Screen API向けの
-        // stonecutter分岐、`//? if <1.17`）が使う、Minecraft本体が既に持つ翻訳キー。
-        // うちのlangへ複製する対象ではない
+        // Translation keys Minecraft itself already has, used by the 1.16.5 XaeroNavConfigScreen (the stonecutter branch
+        // for the old Screen API without OptionInstance etc., `//? if <1.17`).
+        // Not something to duplicate into our lang files
         undeclared.removeAll(Set.of("gui.back", "gui.next", "gui.done"));
 
         assertTrue(undeclared.isEmpty(),
-                "コードで参照しているのに lang ファイルに無いキー: " + undeclared);
+                "Keys referenced in code but missing from the lang files: " + undeclared);
     }
 
     @Test
@@ -115,13 +115,13 @@ class LanguageKeyTest {
 
         Set<String> unused = new TreeSet<>(declared);
         unused.removeAll(used);
-        // 設定画面の項目名・説明はNeoForgeが xaeronav.configuration.* を規約で引くので、
-        // ソースには文字列として現れない
+        // NeoForge looks up config screen entry names and descriptions by convention as xaeronav.configuration.*,
+        // so they don't appear as strings in the source
         unused.removeIf(key -> key.startsWith("xaeronav.configuration."));
-        // キーバインドもNeoForgeがKeyMappingの登録名から引く
+        // NeoForge also looks up key bindings from the KeyMapping's registered name
         unused.removeIf(key -> key.startsWith("key."));
 
-        assertTrue(unused.isEmpty(), "lang にあるがコードから参照されていないキー: " + unused);
+        assertTrue(unused.isEmpty(), "Keys in lang but not referenced from code: " + unused);
     }
 
     private static Set<String> usedKeys() {
@@ -138,7 +138,7 @@ class LanguageKeyTest {
                 }
             }
         } catch (IOException e) {
-            throw new UncheckedIOException("ソースを走査できませんでした", e);
+            throw new UncheckedIOException("Could not scan the sources", e);
         }
         return keys;
     }

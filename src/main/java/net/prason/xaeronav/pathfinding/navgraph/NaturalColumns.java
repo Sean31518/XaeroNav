@@ -10,13 +10,13 @@ import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 列ごとの「掘らず・置かずに立てる高さ」のビット。チャンク単位で覚え、殻（{@link SectionShell}）の芯にする。
+ * Per-column bits for "heights you can stand at without digging or placing". Remembered per chunk and used as the core of the shell ({@link SectionShell}).
  *
- * <p>水は<b>全深さ</b>を数える。水面だけにすると窓の辺は3割減る（広域の窓で3,445万→2,459万辺）が、
- * 海底から水面までの水中がグラフから抜け、海底にいる始点が目的地に繋がらなくなる
- * （実測: 広域長距離で閉包の窓1.015倍に対し1.619倍、最悪2.632倍）。
+ * <p>Water counts at <b>every depth</b>. Counting only the surface cuts the window's edges by 30% (34.45M → 24.59M edges in a
+ * wide window), but the water between seabed and surface drops out of the graph and a start on the seabed no longer connects to
+ * the destination (measured: wide long-distance 1.619x, worst 2.632x, against 1.015x for the closure window).
  *
- * <p>ワーカースレッドから並行に呼んでよい。
+ * <p>Safe to call concurrently from worker threads.
  */
 public final class NaturalColumns {
 
@@ -25,19 +25,19 @@ public final class NaturalColumns {
     private final int words;
     private final ConcurrentHashMap<Long, long[]> chunks = new ConcurrentHashMap<>();
     /**
-     * 読み込まれていないセルを含んでいたチャンク。{@link #forgetIncomplete}までの間だけ覚える。
+     * Chunks that contained unloaded cells. Remembered only until {@link #forgetIncomplete}.
      *
-     * <p><b>覚えずに毎回読み直してはいけない。</b>殻1つが32×32列を引くので、窓の縁のチャンクを列ごとに丸ごと読み直すことになり、
-     * 窓全体の構築が15倍遅くなった（実測: ネザーの窓4,410セクションで41.9秒、読み直さなければ数秒）。
+     * <p><b>Don't skip remembering and re-read every time.</b> One shell pulls 32×32 columns, so chunks at the window edge would be
+     * re-read whole column by column, making the whole window build 15x slower (measured: 41.9 s for a 4,410-section Nether window, a few seconds without re-reading).
      */
     private final ConcurrentHashMap<Long, long[]> incomplete = new ConcurrentHashMap<>();
     /**
-     * 列ごとの岸の高さと橋の長さ（{@link #shore}）。後ろの列の中身に依存するので、どこかが変われば全部捨てる。
-     * 読み込み中の列を含むことがあるので、{@link #forgetIncomplete}でも捨てる。
+     * Per-column shore heights and bridge lengths ({@link #shore}). Depends on the contents of columns behind, so everything is dropped if anything changes.
+     * May include columns still loading, so it is also dropped by {@link #forgetIncomplete}.
      */
     private final ConcurrentHashMap<Long, AtomicReferenceArray<int[]>> shores = new ConcurrentHashMap<>();
 
-    /** @param minY ビット0に当たる高さ。{@code maxY}まで含む */
+    /** @param minY Height corresponding to bit 0. Inclusive up to {@code maxY} */
     public NaturalColumns(int minY, int maxY) {
         this.minY = minY;
         this.height = maxY - minY + 1;
@@ -53,29 +53,29 @@ public final class NaturalColumns {
     }
 
     /**
-     * 列({@code x},{@code z})のビットの{@code word}語目。
+     * Word {@code word} of the bits of column ({@code x},{@code z}).
      *
-     * <p>読み込まれていないセルを含むチャンクは<b>覚えない</b>。覚えると、後で読み込まれても空のまま残り、
-     * そこだけ殻が無い＝グラフに穴が空く。
+     * <p>Chunks containing unloaded cells are <b>not remembered</b>. If remembered, they'd stay empty even after loading later,
+     * leaving no shell there = a hole in the graph.
      */
     long word(CellSource cells, int x, int z, int word) {
         return chunkBits(cells, x, z)[(Math.floorMod(x, 16) + Math.floorMod(z, 16) * 16) * words + word];
     }
 
     /**
-     * 溶岩の面から上を見る高さ（ブロック）。溶岩の海を渡る橋は岸の高さに架けるので、面より遥か上の洞窟の床は岸に数えない。
-     * 16では足りない——実機のネザーの小島は面から17〜21ブロック上に立つ所があり、その岸が数えられずに通り道が出来なかった。
+     * Height (blocks) above the lava surface to look at. Bridges across a lava sea are built at shore height, so cave floors far above the surface don't count as shores.
+     * 16 isn't enough: small islands in the real Nether stand 17-21 blocks above the surface in places, and those shores went uncounted so no route formed.
      */
     private static final int LAVA_BRIDGE_BAND = 32;
 
-    /** 列({@code x},{@code z})のいちばん上の、真上が空いている溶岩の1つ上（立つ高さ）のビット。無ければ-1。 */
+    /** Bit one above (the standing height of) the topmost lava with open space directly above in column ({@code x},{@code z}). -1 if none. */
     private int lavaSurface(CellSource cells, int x, int z) {
         long[] bits = chunkBits(cells, x, z);
         int column = Math.floorMod(x, 16) + Math.floorMod(z, 16) * 16;
         return (int) bits[256 * words + 4 + column] - 1;
     }
 
-    /** 列({@code x},{@code z})が底まで空っぽ（ジ・エンドの奈落）か。読み込まれていないセルを含む列は違う。 */
+    /** Whether column ({@code x},{@code z}) is empty all the way down (The End's void). Columns containing unloaded cells are not. */
     boolean voidColumn(CellSource cells, int x, int z) {
         long[] bits = chunkBits(cells, x, z);
         int column = Math.floorMod(x, 16) + Math.floorMod(z, 16) * 16;
@@ -83,8 +83,8 @@ public final class NaturalColumns {
     }
 
     /**
-     * 列({@code x},{@code z})の底から続く空っぽのセルの数（ビット）。浮いた島・自分で架けた橋の下もここまでは奈落。
-     * 底まで空っぽなら高さ全部、底が埋まっていれば0。
+     * Number of empty cells (bits) continuing up from the bottom of column ({@code x},{@code z}). Below floating islands and self-built bridges is void up to here.
+     * The full height if empty to the bottom, 0 if the bottom is filled.
      */
     private int voidBelow(CellSource cells, int x, int z) {
         long[] bits = chunkBits(cells, x, z);
@@ -92,7 +92,7 @@ public final class NaturalColumns {
         return (int) bits[256 * words + 4 + 256 + column];
     }
 
-    /** 列({@code x},{@code z})のいちばん上のブロックの1つ上のビット。ここから上は空っぽ。列が空っぽなら0。 */
+    /** Bit one above the topmost block of column ({@code x},{@code z}). Empty from here up. 0 if the column is empty. */
     private int voidAbove(CellSource cells, int x, int z) {
         long[] bits = chunkBits(cells, x, z);
         int column = Math.floorMod(x, 16) + Math.floorMod(z, 16) * 16;
@@ -111,16 +111,16 @@ public final class NaturalColumns {
     }
 
     /**
-     * 下が奈落の列({@code x},{@code z})のうち、目的地へ向かう橋が通りうる高さのビット。底が埋まった列は溶岩の海だけを見る。
+     * Bits of heights a bridge toward the destination could pass through in column ({@code x},{@code z}) over void. Columns with a filled bottom look only at the lava sea.
      *
-     * <p>{@link SectionShell}は自然に立てる点から水平8ブロックしか持たないので、それより広い奈落を渡る橋の途中が
-     * グラフから抜け、向こう岸の島が目的地へ繋がらない（実機のエンドの外側の島: 島の間が80〜100ブロックで、
-     * ガイドが幾何下限に落ちて経路が1本も出なかった）。
+     * <p>{@link SectionShell} only holds 8 blocks horizontally from naturally standable points, so the middle of a bridge across wider void
+     * drops out of the graph and the island on the far side doesn't connect to the destination (outer End islands in the real game: 80-100 blocks
+     * between islands, the guide fell to the geometric lower bound and not a single path came out).
      *
-     * <p>奈落の上の橋は目的地へ近づく向きにしか張られない（{@code BuildMoves#addBridge}）ので、橋がこの列に来られるのは、
-     * 目的地から遠い側（各軸で後ろ）に{@code reach}以内で岸があるときだけ。L字に折れる橋もあるので、後ろの岸は軸の上だけでなく
-     * 後ろ側の象限から探す（{@link #behind}）。岸の高さが揃っていないと着いた先で柱を積むので、目的地側の軸上の岸の高さまで含め、
-     * 上下{@link SectionShell#VERTICAL}まで埋める。
+     * <p>Bridges over void are only extended toward the destination ({@code BuildMoves#addBridge}), so a bridge can reach this column only
+     * when there's a shore within {@code reach} on the side away from the destination (behind on each axis). Bridges can also bend in an L, so
+     * the shore behind is searched not only along the axes but in the quadrant behind ({@link #behind}). Mismatched shore heights mean stacking a
+     * pillar on arrival, so fill up to the height of the shore on the destination-side axis, plus {@link SectionShell#VERTICAL} above and below.
      */
     long[] bridgeCorridor(CellSource cells, int x, int z, int goalX, int goalZ, int reach, int lavaReach) {
         long[] corridor = new long[words];
@@ -154,7 +154,7 @@ public final class NaturalColumns {
                 closest = bit;
             }
         }
-        // 岸の高さが揃っていないと着いた先で柱を積むので、いちばん近い高さから向こう岸の高さまでを埋める
+        // Mismatched shore heights mean stacking a pillar on arrival, so fill from the nearest height up to the far shore's height
         if (closest >= 0) {
             fill(corridor, Math.min(closest, nearLow) - SectionShell.VERTICAL,
                     Math.max(closest, nearHigh) + SectionShell.VERTICAL);
@@ -176,9 +176,9 @@ public final class NaturalColumns {
     }
 
     /**
-     * 列({@code x},{@code z})で橋が通れる高さ（足場を置くセルと体の2セルが空いている）。下が底まで空いている高さか、
-     * いちばん上のブロックより上。浮いた島の下を潜る橋も、島の上空を渡る橋もある（実機のエンド: 小島の4ブロック下、
-     * 島の頂上の12ブロック上を渡る橋がグラフから抜け、その先が目的地へ繋がらなかった）。
+     * Heights where a bridge can pass in column ({@code x},{@code z}) (the cell for the foothold and the two cells for the body are empty). Heights empty
+     * all the way down, or above the topmost block. There are bridges ducking under floating islands and bridges crossing above them (real End: bridges
+     * 4 blocks below a small island and 12 blocks above an island's top dropped out of the graph, and what lay beyond didn't connect to the destination).
      */
     private long[] passable(CellSource cells, int x, int z) {
         long[] pass = new long[words];
@@ -188,14 +188,14 @@ public final class NaturalColumns {
     }
 
     /**
-     * 1列が覚えておく岸の高さの数。近い岸から残す。
+     * Number of shore heights one column remembers. Nearest shores are kept.
      *
-     * <p>絞らないと、奈落を渡るうちに後ろの象限にある島の高さが次々に運ばれて殻が膨らむ（高さを区間で持った試作では、
-     * 実機のエンドの窓のグラフが2.3倍の約530MBになった。8個なら+13〜37%）。
+     * <p>Without a cap, crossing void carries along the heights of one island after another in the quadrant behind and the shell bloats (in a prototype
+     * holding heights as ranges, the real End window's graph grew 2.3x to about 530 MB. With 8, +13-37%).
      */
     private static final int MAX_SHORE_HEIGHTS = 8;
 
-    /** 橋が届く後ろの岸が無い。 */
+    /** No shore behind within bridge reach. */
     private static final int[] NO_SHORE = new int[0];
 
     private static int shoreEntry(int height, int distance) {
@@ -211,8 +211,8 @@ public final class NaturalColumns {
     }
 
     /**
-     * 列({@code x},{@code z})へ、目的地から遠い側（各軸で後ろ）の隣の列から橋で来られる高さと、その高さの岸からの橋の長さ。
-     * この列で通れない高さ（{@code pass}の外）と、橋の長さが{@code reach}を超える高さは落とす。
+     * Heights at which column ({@code x},{@code z}) can be reached by bridge from the neighbouring columns on the side away from the destination (behind on each axis),
+     * and the bridge length from the shore at that height. Heights not passable in this column (outside {@code pass}) and heights whose bridge exceeds {@code reach} are dropped.
      */
     private int[] behind(CellSource cells, int x, int z, int goalX, int goalZ, int reach, long[] pass) {
         int sx = Integer.signum(goalX - x);
@@ -236,7 +236,7 @@ public final class NaturalColumns {
         return nearest(merged, count);
     }
 
-    /** 同じ高さは短い方を残して足す。 */
+    /** For the same height, keep the shorter one when adding. */
     private static int addShore(int[] entries, int count, int bit, int distance) {
         for (int i = 0; i < count; i++) {
             if (shoreHeight(entries[i]) == bit) {
@@ -250,21 +250,21 @@ public final class NaturalColumns {
         return count + 1;
     }
 
-    /** 近い岸から{@link #MAX_SHORE_HEIGHTS}個。 */
+    /** Up to {@link #MAX_SHORE_HEIGHTS}, from the nearest shore. */
     private static int[] nearest(int[] entries, int count) {
         if (count == 0) {
             return NO_SHORE;
         }
         int[] sorted = Arrays.copyOf(entries, count);
-        // 距離が上位ビットなので、そのまま並べれば近い順
+        // Distance is in the upper bits, so sorting as-is gives nearest first
         Arrays.sort(sorted);
         return sorted.length > MAX_SHORE_HEIGHTS ? Arrays.copyOf(sorted, MAX_SHORE_HEIGHTS) : sorted;
     }
 
     /**
-     * 列({@code x},{@code z})を橋の岸として見たときの高さと橋の長さ。立てる高さは長さ0、下か上が空いていれば、後ろから通り抜けて
-     * 来られる高さ（{@link #behind}）もその長さのまま足す。後ろの列から順に引き継ぐので、L字に折れる橋の岸も列ごとに隣を2つ見るだけで分かる
-     * ——探すたびに軸の上を辿るとL字を拾えず、拾おうとすれば後ろの象限全体（約4,600列）を読むことになる。
+     * Heights and bridge lengths of column ({@code x},{@code z}) seen as a bridge shore. Standable heights have length 0; if open below or above, heights
+     * that can be passed through from behind ({@link #behind}) are added with their length unchanged. Inherited column by column from behind, so even
+     * shores of L-shaped bridges are found by looking at just two neighbours per column; tracing along the axes on every lookup misses L shapes, and catching them would mean reading the whole quadrant behind (about 4,600 columns).
      */
     private int[] shore(CellSource cells, int x, int z, int goalX, int goalZ, int reach) {
         if (!cells.isInBounds(x, minY, z)) {
@@ -297,12 +297,12 @@ public final class NaturalColumns {
     }
 
     /**
-     * 溶岩の海の列で、橋が通りうる高さ。{@link #bridgeCorridor}の奈落と同じ穴が溶岩の海にもある——殻は岸から8ブロックしか持たないので、
-     * 16ブロックより広い溶岩を挟んだ島がグラフで繋がらず、ガイドが遠くの迂回路へ誘う（実機のネザー: 溶岩を挟んだ小島から西の島へ渡る
-     * 近道が無いことになり、溶岩の海の外周へ出ては戻った。3D粗層はその近道を知っているので、窓の外と中で向きが食い違っていた）。
+     * Heights a bridge could pass through in a lava-sea column. The lava sea has the same hole as {@link #bridgeCorridor}'s void: the shell holds only 8 blocks
+     * from shore, so islands separated by lava wider than 16 blocks don't connect in the graph, and the guide lures toward a distant detour (real Nether: the shortcut
+     * from a small island across lava to the island to the west was treated as nonexistent, and the route went out to the lava sea's perimeter and back. The 3D coarse layer knows that shortcut, so the directions inside and outside the window disagreed).
      *
-     * <p>溶岩の橋は目的地の向きに縛られない（{@code BuildMoves#addBridge}）ので、4方向どれかの岸が{@code reach}以内にあれば通る。
-     * 岸は溶岩の面から{@link #LAVA_BRIDGE_BAND}以内に立てる列。見つかった岸の高さの間を上下{@link SectionShell#VERTICAL}まで埋める。
+     * <p>Lava bridges aren't constrained to the destination's direction ({@code BuildMoves#addBridge}), so it's passable if a shore lies within {@code reach} in any of the 4 directions.
+     * A shore is a column standable within {@link #LAVA_BRIDGE_BAND} of the lava surface. Between the found shore heights, fill up to {@link SectionShell#VERTICAL} above and below.
      */
     private long[] lavaCorridor(CellSource cells, int x, int z, int reach, long[] corridor) {
         int surface = lavaSurface(cells, x, z);
@@ -341,7 +341,7 @@ public final class NaturalColumns {
                     break;
                 }
                 if (chunk[256 * words + 4 + column] == 0) {
-                    // 溶岩の海が途切れたのに立てる所が無い（壁・読み込まれていない列）。その先へは架けない
+                    // The lava sea ended but there's nowhere to stand (a wall, an unloaded column). Don't bridge beyond it
                     break;
                 }
             }
@@ -358,11 +358,11 @@ public final class NaturalColumns {
     }
 
     /**
-     * ({@code x},{@code z})から({@code dx},{@code dz})の向きに最初に当たる岸の列の、立てる高さの最小・最大ビット。
+     * Min and max standable-height bits of the first shore column hit from ({@code x},{@code z}) in direction ({@code dx},{@code dz}).
      *
-     * <p>{@code ceiling}は、この列で橋が通れるいちばん上のビット。立てる所がすべてそれより上で、自分も下が空いている列
-     * （奈落に浮いた小島・自分で架けた橋）は岸に数えずその先を探す——そこの下を潜る橋の高さを決めるのは、さらに先の岸
-     * （実機のエンド: 小島の上の高さ66を岸にして、4ブロック下の高さ60を通る橋が抜けていた）。
+     * <p>{@code ceiling} is the topmost bit at which a bridge can pass in this column. Columns where every standable spot is above that and which are themselves open below
+     * (small islands floating in void, self-built bridges) aren't counted as shores and the search continues past them: the height of a bridge ducking under them is decided by a shore further on
+     * (real End: with height 66 on top of a small island taken as the shore, the bridge passing at height 60, 4 blocks below, was missing).
      */
     private int @Nullable [] nearestShoreSpan(CellSource cells, int x, int z, int dx, int dz, int reach,
                                               int ceiling) {
@@ -387,13 +387,13 @@ public final class NaturalColumns {
             if (low <= high && low > ceiling + SectionShell.VERTICAL && voidBelow(cells, px, pz) >= 3) {
                 continue;
             }
-            // 立てる所の無い岸（読み込まれていない列・浮いた柱）からは橋を架けない
+            // Don't bridge from shores with nowhere to stand (unloaded columns, floating pillars)
             return low > high ? null : new int[] {low, high};
         }
         return null;
     }
 
-    /** チャンクの中身が変わった。次に引かれたときに読み直す。 */
+    /** A chunk's contents changed. Re-read next time it is looked up. */
     public void invalidateChunk(int chunkX, int chunkZ) {
         long key = ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
         chunks.remove(key);
@@ -401,7 +401,7 @@ public final class NaturalColumns {
         shores.clear();
     }
 
-    /** 読み込みの途中だったチャンクを忘れる。読める範囲が変わる前（組み直しの頭）に呼ぶ。 */
+    /** Forget chunks that were mid-load. Called before the readable range changes (at the start of a rebuild). */
     public void forgetIncomplete() {
         incomplete.clear();
         shores.clear();
@@ -414,8 +414,8 @@ public final class NaturalColumns {
     }
 
     private long[] scan(CellSource cells, int chunkX, int chunkZ, long key) {
-        // 末尾の4語は列ごとの「底まで空っぽ」の印、その後の256語は列ごとの溶岩の面（lavaSurfaceの値+1）、
-        // さらに256語は列ごとの底から続く空っぽの数（voidBelow）、256語はいちばん上のブロックの1つ上（voidAbove）
+        // The last 4 words are per-column "empty to the bottom" flags, the next 256 words per-column lava surfaces (lavaSurface + 1),
+        // a further 256 words per-column count of empty cells from the bottom (voidBelow), and 256 words the bit one above the topmost block (voidAbove)
         long[] bits = new long[256 * words + 4 + 256 + 256 + 256];
         boolean absent = false;
         for (int lx = 0; lx < 16; lx++) {
@@ -461,7 +461,7 @@ public final class NaturalColumns {
         return bits;
     }
 
-    /** 足・頭のセルに掘らずに入れて、足元が床か、水の中か、掴まれるもの。 */
+    /** Feet and head cells enterable without digging, and below the feet is a floor, water, or something climbable. */
     static boolean natural(long below, long feet, long head) {
         if (!CellData.occupiableWithoutDigging(feet) || !CellData.occupiableWithoutDigging(head)) {
             return false;

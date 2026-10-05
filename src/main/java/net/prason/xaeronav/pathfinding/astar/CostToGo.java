@@ -1,14 +1,14 @@
 package net.prason.xaeronav.pathfinding.astar;
 
 /**
- * ゴールまでの残りコストの見積もり。{@link AStarPathfinder}へ注入する
- * ヒューリスティックの差し替え口——既定は{@link Heuristic}（幾何学的な下限、admissible）だが、
- * 層1の粗い地図から作った{@code costToGo}テーブル（{@code CoarseRouter#costToGo}）を
- * 併用すると、壁や溶岩の海を回避した「実際の地形に沿った」見積もりに近づく。
+ * Estimate of the remaining cost to the goal. The hook for swapping the heuristic injected into
+ * {@link AStarPathfinder}: the default is {@link Heuristic} (a geometric lower bound, admissible), but
+ * using it together with the {@code costToGo} table built from layer 1's coarse map ({@code CoarseRouter#costToGo})
+ * brings it closer to a "following the actual terrain" estimate that routes around walls and lava seas.
  *
- * <p>ゴール座標を引数に含めないのは、実装側に閉じ込めるため——{@link AStarPathfinder}の
- * ゴールはコンストラクタではなく{@link AStarPathfinder#search}で決まるので、コンストラクタで
- * 座標を渡す形にすると「テーブルのゴール」と「探索のゴール」の食い違いを防げない。
+ * <p>The goal coordinates aren't an argument so they stay confined to the implementation: {@link AStarPathfinder}'s
+ * goal is decided by {@link AStarPathfinder#search}, not the constructor, so passing coordinates to the constructor
+ * couldn't prevent a mismatch between "the table's goal" and "the search's goal".
  */
 @FunctionalInterface
 public interface CostToGo {
@@ -16,8 +16,8 @@ public interface CostToGo {
     double estimate(int x, int y, int z);
 
     /**
-     * 探索のノードに付ける値。見積もりの材料を持たないセルでは{@link Double#NaN}を返してよい。
-     * {@link AStarPathfinder}はそこで{@link #estimate}を使い、さらに親の値から1手のコストより下がらないよう引き上げる。
+     * The value attached to a search node. May return {@link Double#NaN} for cells with nothing to base an estimate on.
+     * {@link AStarPathfinder} then uses {@link #estimate} there, and also raises it so it doesn't drop below the parent's value minus one move's cost.
      */
     default double searchEstimate(int x, int y, int z) {
         return estimate(x, y, z);

@@ -9,7 +9,7 @@ import net.minecraft.world.level.LevelHeightAccessor;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * 探索範囲の制限。開始地点と目的地を含むバウンディングボックス+マージン。
+ * Limits on the search range. A bounding box containing the start and destination, plus a margin.
  */
 public record SearchBounds(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
 
@@ -20,13 +20,13 @@ public record SearchBounds(int minX, int minY, int minZ, int maxX, int maxY, int
     }
 
     /**
-     * 始点と終点を含むバウンディングボックスに水平マージンを足し、さらに始点を中心とする
-     * {@code maxRadius}の正方形で切り取る。
+     * Adds a horizontal margin to the bounding box containing the start and end, then clips it to a square of
+     * {@code maxRadius} centered on the start.
      *
-     * <p>切り取るのは、遠いゴールを一度に解こうとしても意味がないため。読み込み済みチャンクの外は
-     * そもそも読めないので、そこまで探索範囲を広げても未ロード扱いのセルを舐めるだけになる。
-     * 範囲を切ると経路はゴール手前で打ち切られるが、プレイヤーが進めば次の区間が計算し直される
-     * （暫定経路と同じ扱い）。
+     * <p>It's clipped because trying to solve a distant goal in one go is pointless. Outside the loaded chunks
+     * nothing can be read anyway, so widening the search range that far just scans cells treated as unloaded.
+     * Clipping the range cuts the path off short of the goal, but as the player advances the next leg is recalculated
+     * (handled the same as a provisional path).
      */
     public static SearchBounds around(
             //? if >=1.17 {

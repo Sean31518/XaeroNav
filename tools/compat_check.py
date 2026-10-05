@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""ノードのjarを、そのノードより前のMinecraftでも使う版（minecraftCompatFor）を実機で確かめるための
-Prism Launcherのインスタンスを作る。
+"""Creates Prism Launcher instances for checking in-game the builds whose node jar is also used for Minecraft versions
+older than the node (minecraftCompatFor).
 
-    tools/compat_check.py            # インスタンスを作る（手で起動して確かめる用）
-    tools/compat_check.py --auto     # 作ったうえで順に起動し、Xaeroのフックが当たって動いたかを表で出す
-    tools/compat_check.py --auto 1.21.9-fabric   # 名前で絞る
+    tools/compat_check.py            # create the instances (for launching by hand to check)
+    tools/compat_check.py --auto     # create them, then launch each in turn and print a table of whether the Xaero hooks applied and ran
+    tools/compat_check.py --auto 1.21.9-fabric   # filter by name
 
-配布jarと、そのノードのXaero（xaerolibを含む）はGradleの`stageRuntimeTestMods`から取る。
-更新の止まった版のXaeroを使う版だけ、XaeroをModrinthから取る。
---autoはmc-runtime-test（CIの起動テストと同じもの）を入れてワールドへ入り、runtime hook probeの結果を読む。
-終わったらmc-runtime-testとprobeを外し、手で遊べる状態へ戻す。
+The distribution jar and the node's Xaero (including xaerolib) come from Gradle's `stageRuntimeTestMods`.
+Only for versions using a Xaero build that is no longer updated is Xaero taken from Modrinth.
+--auto installs mc-runtime-test (the same one as CI's launch test), enters a world, and reads the runtime hook probe results.
+Afterwards it removes mc-runtime-test and the probe, returning the instance to a hand-playable state.
 """
 import argparse
 import json
@@ -29,7 +29,7 @@ FABRIC_LOADER = "0.19.5"
 RUNTIME_TEST_RELEASE = "4.5.1"
 PROBE_ARG = "-Dxaeronav-ci.runtimeHookProbe=true"
 OFFLINE_NAME = "XaeroNavCheck"
-# 初めて使う版はPrismがアセットを取り終えるまでゲームが始まらない（10分ほどかかることがある）
+# For a version used for the first time, the game won't start until Prism finishes fetching assets (this can take about 10 minutes)
 STARTUP_TIMEOUT_SECONDS = 1800
 TIMEOUT_SECONDS = 600
 
@@ -39,15 +39,15 @@ class Target:
     minecraft: str
     loader: str
     node: str
-    # Fabricはfabric-apiの版、Forge・NeoForgeはローダー自身の版
+    # For Fabric, the fabric-api version; for Forge and NeoForge, the loader's own version
     version: str
-    # ModrinthのXaeroの版。Noneなら`stageRuntimeTestMods`が集めた現行の版を使う
+    # The Xaero version on Modrinth. If None, the current version collected by `stageRuntimeTestMods` is used
     worldmap: str | None = None
     minimap: str | None = None
-    # 古い系統のXaero（World Map 1.39.x・Minimap 25.2.x）はxaerolibを使わず、ステージングされた
-    # 現行のxaerolibはその版のMinecraftを拒むので入れない
+    # Older Xaero lines (World Map 1.39.x, Minimap 25.2.x) don't use xaerolib, and the staged
+    # current xaerolib rejects that Minecraft version, so it isn't installed
     xaerolib: bool = True
-    # mc-runtime-testの配布物が無い版は、受け付ける範囲の広い隣の版のものを使う
+    # For versions without an mc-runtime-test release, use the neighboring version's, which accepts a wider range
     runtime_test_minecraft: str | None = None
 
     @property
@@ -59,7 +59,7 @@ class Target:
         return f"xaeronav-check-{self.name}"
 
 
-# 下側の版と、比較用にノード本来の版を並べる（Accessor・描画のmixinはノード本来の版の動きも変えるため）
+# List the lower versions alongside the node's own version for comparison (the Accessor and rendering mixins also change behavior on the node's own version)
 TARGETS = [
     Target("1.20.2", "fabric", "1.20.2-fabric", "0.91.6+1.20.2"),
     Target("1.20.2", "forge", "1.20.2-forge", "48.1.0"),
@@ -67,7 +67,7 @@ TARGETS = [
     Target("1.20.6", "fabric", "1.20.6-fabric", "0.100.8+1.20.6"),
     Target("1.20.6", "forge", "1.20.6-forge", "50.2.10"),
     Target("1.20.6", "neoforge", "1.20.6-neoforge", "20.6.141"),
-    # Minimap 25.3.2と一緒に動くWorld Mapは1.41.2まで（1.42.0以降は古いMinimapを拒む）
+    # The World Map that works with Minimap 25.3.2 goes up to 1.41.2 (1.42.0 and later reject the old Minimap)
     Target("1.20.3", "fabric", "1.20.4-fabric", "0.91.1+1.20.3",
            worldmap="fabric-1.20.4-1.41.2", minimap="25.3.2_Fabric_1.20.4"),
     Target("1.20.4", "fabric", "1.20.4-fabric", "0.97.3+1.20.4"),
@@ -109,7 +109,7 @@ def modrinth_file(project: str, version_number: str) -> Path:
         versions = json.load(response)
     match = next((v for v in versions if v["version_number"] == version_number), None)
     if match is None:
-        raise SystemExit(f"Modrinthの{project}に{version_number}が無い")
+        raise SystemExit(f"{version_number} not found in Modrinth project {project}")
     primary = next((f for f in match["files"] if f["primary"]), match["files"][0])
     return download(primary["url"], dest)
 
@@ -124,7 +124,7 @@ def runtime_test_jar(target: Target) -> Path:
 
 def stage_nodes(nodes: list[str]) -> None:
     tasks = [f":{node}:stageRuntimeTestMods" for node in nodes]
-    # Stonecutterは有効ノードが構成に含まれていないと設定の段階で止まる
+    # Stonecutter stops at the configuration stage unless the active node is included in the configuration
     active = (PROJECT / ".sc_active_version").read_text().strip()
     only = ",".join(sorted(set(nodes) | {active}))
     subprocess.run(["./gradlew", *tasks, f"-Pxaeronav.onlyNodes={only}", "--console=plain", "-q"],
@@ -150,8 +150,8 @@ def components(target: Target) -> list[dict]:
 
 
 def java_path(minecraft: str) -> Path:
-    # Prism全体の既定のJavaは17のことがある。Prismが持つMojangのランタイムから版に合うものを明示する
-    # Prismは版のメタデータが許すJavaのメジャー版しか受け付けない（1.20.4以前に21を渡すと起動を断る）
+    # Prism's global default Java may be 17. Explicitly pick the matching one from the Mojang runtimes Prism has
+    # Prism only accepts the Java major versions the version metadata allows (passing 21 to 1.20.4 or earlier makes it refuse to launch)
     if minecraft.startswith("26."):
         runtime = "java-runtime-epsilon"
     elif minecraft.startswith("1.21") or minecraft in ("1.20.5", "1.20.6"):
@@ -160,13 +160,13 @@ def java_path(minecraft: str) -> Path:
         runtime = "java-runtime-gamma"
     path = PRISM_DATA / "java" / runtime / "bin/java"
     if not path.exists():
-        raise SystemExit(f"{runtime}が無い。Prismで一度その版のMinecraftを起動してJavaを入れること: {path}")
+        raise SystemExit(f"{runtime} not found. Launch that Minecraft version in Prism once to install Java: {path}")
     return path
 
 
 def ensure_options(game_dir: Path) -> None:
-    # ウィンドウからフォーカスが外れると一時停止メニューが開き、mc-runtime-testがワールドで待ち続ける。
-    # 初回起動の案内画面もクイックプレイを止める
+    # When the window loses focus the pause menu opens, and mc-runtime-test keeps waiting in the world.
+    # The first-launch welcome screen also stops Quick Play
     wanted = {"pauseOnLostFocus": "false", "onboardAccessibility": "false"}
     options = game_dir / "options.txt"
     lines = options.read_text().splitlines() if options.exists() else []
@@ -181,8 +181,8 @@ def write_instance(target: Target, auto: bool) -> Path:
     mods.mkdir(parents=True, exist_ok=True)
     ensure_options(root / "minecraft")
     pack = root / "mmc-pack.json"
-    # Prismは起動時にこのファイルへ解決済みの依存（LWJGLなど）を書き足す。毎回書き直すと、初回起動と同じく
-    # メタデータの取得が起動に間に合わず「ゲームが見つからない」で落ちることがある
+    # On launch, Prism appends resolved dependencies (LWJGL and such) to this file. Rewriting it every time can, as on first launch,
+    # make the metadata fetch miss the launch and fail with "game not found"
     if not pack.exists():
         pack.write_text(json.dumps({"formatVersion": 1, "components": components(target)}, indent=4))
     config = {
@@ -220,32 +220,32 @@ HOOKS = ["WORLD_MAP_RENDER", "MINIMAP_RENDER", "WORLD_MAP_KEY", "WORLD_MAP_MENU"
 
 
 def quit_prism() -> None:
-    # Prismは起動中、読み込んだインスタンスの設定をメモリに持ち、保存のたびにinstance.cfgを上書きする。
-    # 外からJavaやJVM引数を書き換えるときは、先に閉じておかないと元へ戻される
+    # While running, Prism keeps the loaded instances' settings in memory and overwrites instance.cfg on every save.
+    # When rewriting Java or JVM arguments from outside, it must be closed first or the changes get reverted
     if subprocess.run(["pgrep", "-f", str(PRISM_APP)], capture_output=True).returncode != 0:
         return
-    print("Prism Launcherを閉じる（インスタンスの設定を書き換えるため）", flush=True)
+    print("Closing Prism Launcher (to rewrite the instance settings)", flush=True)
     subprocess.run(["osascript", "-e", 'tell application "Prism Launcher" to quit'], capture_output=True, check=False)
     for k in range(30):
-        # 終了を確認するダイアログなどで断られたら、プロセスへ終了を送る
+        # If refused, e.g. by an exit confirmation dialog, send the process a termination signal
         if k == 5:
             subprocess.run(["pkill", "-TERM", "-f", str(PRISM_APP)], check=False)
         if subprocess.run(["pgrep", "-f", str(PRISM_APP)], capture_output=True).returncode != 0:
             return
         time.sleep(1)
-    raise SystemExit("Prism Launcherが閉じない。手で閉じてからやり直すこと")
+    raise SystemExit("Prism Launcher won't close. Close it by hand and try again")
 
 
 def launch(target: Target, offline: bool) -> None:
-    # Prismはオフライン起動ではライブラリを取りに行かない。初めて起動する版はPrismの既定のアカウントで起動する
+    # Prism doesn't fetch libraries for offline launches. A version launched for the first time is launched with Prism's default account
     extra = ["--offline", OFFLINE_NAME] if offline else []
     subprocess.Popen([str(PRISM_APP), "--launch", target.instance_id, *extra],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def stop_game(target: Target) -> None:
-    # 確認用のゲームはこのインスタンスのパスを引数に持つ。前回の打ち切りで残ったものがいると、新しい起動が
-    # Prismに無視され、ログも取れない
+    # The check game has this instance's path in its arguments. If one left over from a previous aborted run is still around, the new launch
+    # is ignored by Prism and no log can be captured
     subprocess.run(["pkill", "-f", f"instances/{target.instance_id}/"], check=False)
     time.sleep(2)
 
@@ -254,7 +254,7 @@ def game_running(target: Target) -> bool:
     return subprocess.run(["pgrep", "-f", f"instances/{target.instance_id}/"], capture_output=True).returncode == 0
 
 
-# 結果が決まる行。mc-runtime-testの終わり方は版で違う（1.20.2は"No tests found"を出さずに閉じる）ので頼らない
+# Lines that determine the result. How mc-runtime-test exits differs by version (1.20.2 closes without printing "No tests found"), so it isn't relied on
 DECIDED = ("XAERONAV_RUNTIME_HOOK_PROBE_SUCCESS", "XAERONAV_RUNTIME_HOOK_PROBE_FAILED",
            "---- Minecraft Crash Report ----", "Incompatible mods found", "ModLoadingException")
 
@@ -274,8 +274,8 @@ def run_instance(target: Target, root: Path, offline: bool) -> str:
     while time.time() < deadline:
         time.sleep(3)
         if not log.exists():
-            # その版を初めて起動したときは、Prismのメタデータの取得が起動に間に合わず本体の無いまま起動することがある。
-            # 取得は済んでいるので、起動し直せば通る
+            # The first time a version is launched, Prism's metadata fetch may miss the launch and it may start without the game itself.
+            # The fetch has completed by then, so relaunching gets through
             if not relaunched and loader_log.exists() and "couldn't locate the game" in loader_log.read_text(errors="replace"):
                 loader_log.unlink()
                 relaunched = True
@@ -288,20 +288,20 @@ def run_instance(target: Target, root: Path, offline: bool) -> str:
         text = log.read_text(errors="replace")
         if any(marker in text for marker in DECIDED):
             break
-        # マーカーを出さずに閉じた（固まらずに終わった）ら、そこで判定する
+        # If it closed without printing the marker (finished without hanging), decide there
         gone = 0 if game_running(target) else gone + 1
         if gone >= 3:
             break
     else:
         stop_game(target)
-        return "時間切れ（ログを見ること: " + str(log) + "）"
+        return "timed out (see the log: " + str(log) + ")"
 
     time.sleep(5)
     stop_game(target)
     text = log.read_text(errors="replace")
 
     if "XAERONAV_RUNTIME_HOOK_PROBE_SUCCESS" in text:
-        return "OK（全フック実行）"
+        return "OK (all hooks ran)"
     failed = [line for line in text.splitlines() if "XAERONAV_RUNTIME_HOOK_PROBE_FAILED" in line]
     if failed:
         return "NG: " + failed[0].split("XAERONAV_RUNTIME_HOOK_PROBE_FAILED", 1)[1].strip()
@@ -310,27 +310,27 @@ def run_instance(target: Target, root: Path, offline: bool) -> str:
         hit = next((k for k, line in enumerate(lines) if marker in line), None)
         if hit is not None:
             detail = next((line.strip() for line in lines[hit:] if line.strip().startswith("- Mod ")), lines[hit].strip())
-            return f"NG（起動前に失敗）: {detail}"
+            return f"NG (failed before launch): {detail}"
     if "---- Minecraft Crash Report ----" in text:
-        return f"NG（クラッシュ）: {log}"
+        return f"NG (crash): {log}"
     missing = [hook for hook in HOOKS if f"XAERONAV_HOOK_EXECUTED {hook}" not in text]
-    return f"NG: 未実行 {missing}（{log}）"
+    return f"NG: not run {missing} ({log})"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--auto", action="store_true", help="起動してフックの結果を確かめる")
+    parser.add_argument("--auto", action="store_true", help="launch and check the hook results")
     parser.add_argument("--offline", action="store_true",
-                        help="アカウントを使わずに起動する（その版を一度オンラインで起動してライブラリが揃っている場合だけ）")
-    parser.add_argument("names", nargs="*", help="対象の名前（例: 1.21.9-fabric）。省略すると全部")
+                        help="launch without using an account (only if that version has been launched online once and its libraries are present)")
+    parser.add_argument("names", nargs="*", help="target names (e.g. 1.21.9-fabric). All if omitted")
     args = parser.parse_args()
 
     targets = [t for t in TARGETS if not args.names or t.name in args.names]
     unknown = set(args.names) - {t.name for t in targets}
     if unknown:
-        raise SystemExit(f"知らない対象: {sorted(unknown)}。一覧: {[t.name for t in TARGETS]}")
+        raise SystemExit(f"unknown targets: {sorted(unknown)}. Available: {[t.name for t in TARGETS]}")
     if not PRISM_APP.exists():
-        raise SystemExit(f"Prism Launcherが無い: {PRISM_APP}")
+        raise SystemExit(f"Prism Launcher not found: {PRISM_APP}")
 
     stage_nodes(sorted({t.node for t in targets}))
 
@@ -339,7 +339,7 @@ def main() -> None:
     results = {}
     if args.auto:
         for target in targets:
-            print(f"{target.name}: 起動中…", flush=True)
+            print(f"{target.name}: launching…", flush=True)
             results[target.name] = run_instance(target, roots[target.name], args.offline)
             print(f"{target.name}: {results[target.name]}", flush=True)
         quit_prism()
@@ -350,11 +350,11 @@ def main() -> None:
             print(f"{target.name}: {roots[target.name]}")
 
     if args.auto:
-        print("\n| 版 | 結果 |\n|---|---|")
+        print("\n| Version | Result |\n|---|---|")
         for name, result in results.items():
             print(f"| {name} | {result} |")
-    print("\nPrism Launcherに「XaeroNav check …」のインスタンスができている。手で起動すれば遊んで確かめられる。")
-    if any("NG" in r or "時間切れ" in r for r in results.values()):
+    print("\nPrism Launcher now has the \"XaeroNav check …\" instances. Launch them by hand to play and check.")
+    if any("NG" in r or "timed out" in r for r in results.values()):
         sys.exit(1)
 
 

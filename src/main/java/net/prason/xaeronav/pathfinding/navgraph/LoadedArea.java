@@ -1,25 +1,26 @@
 package net.prason.xaeronav.pathfinding.navgraph;
 
 /**
- * 読める列の範囲。セクションを組んだときに周りがどれだけ読めていたかを数え、後で多く読めるようになったら
- * 組み直すのに使う（{@link NavGraph#missingSections}）。
+ * The range of readable columns. Used to count how much of the surroundings was readable when a section was built,
+ * and to rebuild it later once more becomes readable ({@link NavGraph#missingSections}).
  *
- * <p>窓（中心からの正方形）の縁で欠けるのに加えて、実機では<b>窓の中でもまだ届いていないチャンク</b>で欠ける。
- * 後者を数えないと、読み込みの途中で組んだセクションが穴の空いたまま残る。
+ * <p>Besides gaps at the edge of the window (a square around the center), in practice there are gaps from
+ * <b>chunks inside the window that have not arrived yet</b>. Without counting the latter, sections built
+ * mid-load stay behind with holes in them.
  */
 @FunctionalInterface
 public interface LoadedArea {
 
-    /** {@code [minX, maxX]×[minZ, maxZ]}のうち読める列の数。 */
+    /** Number of readable columns within {@code [minX, maxX]×[minZ, maxZ]}. */
     int columns(int minX, int maxX, int minZ, int maxZ);
 
-    /** チャンクが読み込まれているか。 */
+    /** Whether the chunk is loaded. */
     @FunctionalInterface
     interface ChunkLoaded {
         boolean test(int chunkX, int chunkZ);
     }
 
-    /** 中心から水平{@code radius}の正方形が全部読めている。 */
+    /** The whole square of horizontal {@code radius} around the center is readable. */
     static LoadedArea square(int centerX, int centerZ, int radius) {
         return (minX, maxX, minZ, maxZ) -> {
             int width = Math.min(maxX, centerX + radius) - Math.max(minX, centerX - radius) + 1;
@@ -28,7 +29,7 @@ public interface LoadedArea {
         };
     }
 
-    /** 中心から水平{@code radius}の正方形のうち、読み込まれたチャンクの列。 */
+    /** Columns of loaded chunks within the square of horizontal {@code radius} around the center. */
     static LoadedArea chunks(int centerX, int centerZ, int radius, ChunkLoaded loaded) {
         return (minX, maxX, minZ, maxZ) -> {
             int x0 = Math.max(minX, centerX - radius);

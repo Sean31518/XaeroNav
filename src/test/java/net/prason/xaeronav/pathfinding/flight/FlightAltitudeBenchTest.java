@@ -16,7 +16,7 @@ import net.prason.xaeronav.pathfinding.cost.FlightCosts;
 import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
-/** 開けた平地の上で、本番設定の表示経路の高度を計測する。判定のない診断bench。 */
+/** Measures the altitude of the displayed route with production settings over open flat ground. A diagnostic bench with no assertions. */
 @Tag("bench")
 class FlightAltitudeBenchTest {
 

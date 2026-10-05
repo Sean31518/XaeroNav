@@ -10,37 +10,37 @@ import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
- * 空中経路を求める入口。粒度を落としながら数回試す段取りだけを持つ。
+ * Entry point for finding a flight route. Only holds the sequencing of a few attempts at decreasing granularity.
  *
- * <p>{@code CoarseRouter.BridgePolicy}と同じ形のエスカレーション。既定の粒度で解けなかったのは
- * たいてい「その粗さでは抜けられない隙間しか無い」ケースなので、半分の粒度で一度だけ解き直す。
- * 細かくすると1セルあたりの余白は減るが、通れない経路を出すよりは狭い経路を出す方がまし——
- * 案内が消えるのが一番困る、という既存の優先順に合わせてある。
+ * <p>The same shape of escalation as {@code CoarseRouter.BridgePolicy}. Failing at the default granularity is
+ * usually the case of "only gaps that can't be passed at this coarseness", so it is solved once more at half the
+ * granularity. Finer means less clearance per cell, but a narrow route beats one that can't be flown; this matches
+ * the existing priority that guidance disappearing is the worst outcome.
  */
 public final class FlightRouter {
 
     /**
-     * ゴール領域の半径をセル幅の何倍にするか。目的地はたいてい着地する地面そのもの＝飛行不可なので、
-     * 「あとは自力で降りられる所まで寄れたか」で判定する。
+     * Radius of the goal region as a multiple of the cell width. The destination is usually the landing ground
+     * itself = not flyable, so the check is "did it get close enough to descend on its own from there".
      */
     static final double GOAL_RADIUS_CELLS = 1.5;
 
     /**
-     * 目的地が閉じた小部屋の中にあるときに、目的地とみなす水平半径（ブロック）。先は歩行が空から
-     * 引き継ぐ距離（{@code PathfindingState.LANDING_APPROACH_ENTER_BLOCKS}）、後は歩行が1回の探索で
-     * 解ける距離（{@code detailHorizonBlocks}の既定）。
+     * Horizontal radii (blocks) treated as the destination when it is inside a closed small room. The first is the
+     * distance at which walking takes over from the sky ({@code PathfindingState.LANDING_APPROACH_ENTER_BLOCKS}), the
+     * second is the distance walking can solve in one search (the default of {@code detailHorizonBlocks}).
      */
     private static final double[] ENCLOSED_APPROACH_RADII = {48.0, 96.0};
 
-    /** 粒度を落とす下限（ブロック）。これより細かくしても格子の意味（クリアランス）が無くなる。 */
+    /** Lower limit (blocks) for reducing granularity. Finer than this, the grid's meaning (clearance) is lost. */
     private static final int MIN_CELL_BLOCKS = 2;
 
     /**
-     * 2回目の挑戦に踏み切るために残っていてほしい時間（ミリ秒）。
+     * Time (milliseconds) that should remain in order to commit to a second attempt.
      *
-     * <p>段階ごとに期限を取り直すと、呼び出し1回の総時間が段数ぶん膨らむ。飛んでいる相手への案内
-     * なので、<b>全体で1回ぶんの時間に収める</b>方が正しい——遅れて出てくる完璧な線より、
-     * 今出てくる粗い線の方が役に立つ。
+     * <p>Resetting the deadline per stage inflates the total time of one call by the number of stages. This is
+     * guidance for someone flying, so it's right to <b>fit the whole thing in one attempt's time</b>: a rough
+     * line now is more useful than a perfect line that comes late.
      */
     private static final long MIN_RETRY_BUDGET_MILLIS = 500L;
 
@@ -48,8 +48,8 @@ public final class FlightRouter {
     }
 
     /**
-     * {@code start}から{@code goal}への空中経路。引けなければ{@link FlightRoute#NONE}を返す
-     * （呼び出し側は従来どおり目的地への点線へ落とすこと）。
+     * Flight route from {@code start} to {@code goal}. Returns {@link FlightRoute#NONE} if none can be drawn
+     * (the caller should fall back to the dotted line to the destination as before).
      */
     public static FlightRoute route(CellSource view, Vec3 start, Vec3 goal, boolean rockets,
                                      FlightTuning tuning, BooleanSupplier cancelled) {
@@ -57,8 +57,8 @@ public final class FlightRouter {
     }
 
     /**
-     * 粗い地図の残りコストの場で出口を選ぶ版。出口の見積もりは読める範囲の内側を通らない回り道で測り直す
-     * （{@link HorizonGuide}参照）。{@code field}が{@code null}なら直線の見積もりだけで選ぶ。
+     * Version that picks the exit using the remaining-cost field of the coarse map. Exit estimates are re-measured
+     * with detours that don't pass inside the readable area (see {@link HorizonGuide}). If {@code field} is {@code null}, picks by straight-line estimate only.
      */
     public static FlightRoute route(CellSource view, Vec3 start, Vec3 goal, boolean rockets,
                                      FlightTuning tuning, FlightHorizon horizon, @Nullable CoarseFlightField field,
@@ -66,7 +66,7 @@ public final class FlightRouter {
         if (field == null) {
             return route(view, start, goal, rockets, tuning, horizon, FlightGuide.NONE, cancelled);
         }
-        // 塗り広げで判定したセルは、続く探索がほぼ同じ所を触るので、同じ格子を渡してmemoを使い回す
+        // Cells judged by the flood fill are touched again in nearly the same places by subsequent searches, so pass the same grid and reuse the memo
         AirGrid grid = new AirGrid(view, tuning.cellBlocks());
         HorizonGuide.Plan plan = HorizonGuide.plan(grid, start, goal, horizon, field, rockets);
         if (plan.enclosed()) {
@@ -76,12 +76,12 @@ public final class FlightRouter {
     }
 
     /**
-     * 目的地が閉じた小部屋の中にあるとき（{@link HorizonGuide}）、空から寄れる所までの経路。目的地そのものは
-     * 狙わず、{@link #ENCLOSED_APPROACH_RADII}の近い方から順に、その半径に入る空中のセルを目的地とみなす。
+     * Route to where the destination can be approached from the sky, when it is inside a closed small room
+     * ({@link HorizonGuide}). It doesn't aim at the destination itself; going from the nearer of {@link #ENCLOSED_APPROACH_RADII}, airborne cells within that radius are treated as the destination.
      *
-     * <p>目的地を狙ったまま最も寄れた所で打ち切る形だと、限られた予算で塗った範囲の中で選ぶので、
-     * 小部屋の反対側から回れば寄れる場合でも手前の壁の前で止まる。半径の中を目的地にすれば、届く所が
-     * あればA*がそこまで引き切る。
+     * <p>Aiming at the destination and cutting off at the closest approach chooses within the area filled on a
+     * limited budget, so it stops in front of the near wall even when going around to the far side of the room
+     * would get closer. With the radius as the destination, A* pulls all the way there if any reachable spot exists.
      */
     private static FlightRoute approach(AirGrid grid, Vec3 start, Vec3 goal, boolean rockets, FlightTuning tuning,
                                         FlightGuide guide, BooleanSupplier cancelled) {
@@ -105,14 +105,14 @@ public final class FlightRouter {
         return best;
     }
 
-    /** {@code horizon}の外へ出たところで打ち切ってよい版（{@link FlightHorizon}参照）。 */
+    /** Version that may cut off once outside {@code horizon} (see {@link FlightHorizon}). */
     public static FlightRoute route(CellSource view, Vec3 start, Vec3 goal, boolean rockets,
                                      FlightTuning tuning, FlightHorizon horizon, FlightGuide guide,
                                      BooleanSupplier cancelled) {
         return route(view, null, start, goal, rockets, tuning, horizon, guide, cancelled);
     }
 
-    /** {@code firstGrid}は最初の粒度で使う格子（{@code null}なら作る）。 */
+    /** {@code firstGrid} is the grid used at the first granularity (created if {@code null}). */
     private static FlightRoute route(CellSource view, @Nullable AirGrid firstGrid, Vec3 start, Vec3 goal,
                                      boolean rockets, FlightTuning tuning, FlightHorizon horizon, FlightGuide guide,
                                      BooleanSupplier cancelled) {
@@ -124,7 +124,7 @@ public final class FlightRouter {
             }
             long remaining = deadline - MonotonicTime.millis();
             if (best != FlightRoute.NONE && remaining < MIN_RETRY_BUDGET_MILLIS) {
-                // 既に何か出せていて時間も無い。ここで粘るより今ある線を返す
+                // Something has already been produced and there's no time left. Return the current line rather than persisting here
                 break;
             }
             SearchLimits limits = new SearchLimits(tuning.limits().maxExpandedNodes(),
@@ -137,15 +137,15 @@ public final class FlightRouter {
                 return route;
             }
             if (best.isEmpty() && !route.isEmpty()) {
-                // 届かなかった部分経路も案内には使える。粗い側で出た（＝余白の広い）方を残す
+                // Partial routes that didn't reach can still be used for guidance. Keep the one from the coarser side (= wider clearance)
                 best = route;
             }
             if (route.budgetExhausted()) {
-                // 予算を焼き切ったのなら、細かい格子で解き直しても<b>同じ上限に、より早く</b>当たる
-                // だけ——同じ体積のセル数が8倍になるので、届く距離はむしろ縮む。細かくして意味が
-                // あるのは「その粗さでは抜けられる隙間が無い」と証明された（EXHAUSTED）ときだけ。
-                // 実機ログ: ネザーで4ブロック格子が10万ノードを2.1秒焼いた後、2ブロック格子でも
-                // 同じだけ焼いて1回の引き直しに4秒かかっていた
+                // If the budget was burned through, re-solving on a finer grid only hits <b>the same limit, sooner</b>:
+                // the same volume has 8x as many cells, so the reachable distance actually shrinks. Going finer only
+                // makes sense when it has been proven (EXHAUSTED) that "there's no passable gap at this coarseness".
+                // In-game log: in the Nether, a 4-block grid burned 100k nodes in 2.1 s, and then a 2-block grid
+                // burned the same again, so one recompute took 4 seconds
                 break;
             }
         }

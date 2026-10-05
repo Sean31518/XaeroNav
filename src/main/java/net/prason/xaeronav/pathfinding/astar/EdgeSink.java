@@ -1,18 +1,18 @@
 package net.prason.xaeronav.pathfinding.astar;
 
 /**
- * {@link AStarPathfinder}が生成した移動（辺）を、採否に関わらず全部受け取る口。
+ * Receives every move (edge) {@link AStarPathfinder} generates, whether accepted or not.
  *
- * <p>航法グラフのクラスタ構築と、その正しさを測る完璧なcost-to-goの閉包が使う。
- * <b>経路探索と同じ移動生成から辺を得る</b>ことに意味がある——別のコストモデルで辺を張り直すと、
- * 層1・層2と同じく「真のコストを粗くしたもの」ではなく「別の推測」になる。
+ * <p>Used by the nav graph's cluster construction and by the perfect cost-to-go closure that measures its correctness.
+ * <b>Getting edges from the same move generation as pathfinding</b> is what matters: re-laying edges with a different cost model would,
+ * like layers 1 and 2, give "a different guess" rather than "a coarsened version of the true cost".
  *
- * <p>報告は{@link AStarPathfinder#relax}の入口で行う。改善しない辺も捨てる前に報告するので、
- * 閉包を回し切れば到達したノードから出る辺は全部そろう。ただし移動の生成が経路に依存する上限
- * （橋の連続長・設置総数・潜水時間）で捨てた辺は、そこへ最安で到達した状態から見た分しか出ない。
+ * <p>Reporting happens at the entry of {@link AStarPathfinder#relax}. Edges that don't improve are also reported before being discarded, so
+ * running the closure to completion yields every edge leaving the reached nodes. However, edges discarded by path-dependent caps on move generation
+ * (consecutive bridge length, total placements, submersion time) only appear as seen from the state that reached there most cheaply.
  *
- * <p>{@code cost}は水中の割増（{@code ActionCosts#SUBMERGED_TRAVEL_PENALTY}）を掛ける前の値。
- * 割増は到達経路の息の勘定に依存するので、辺の値段として一意に決まらない。
+ * <p>{@code cost} is the value before the underwater surcharge ({@code ActionCosts#SUBMERGED_TRAVEL_PENALTY}).
+ * The surcharge depends on the air accounting of the path taken, so it isn't uniquely determined as an edge price.
  */
 @FunctionalInterface
 interface EdgeSink {

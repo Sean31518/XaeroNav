@@ -4,7 +4,7 @@ import org.apache.logging.log4j.Logger;
 
 import org.apache.logging.log4j.LogManager;
 
-/** MOD全体で使う識別子とロガー。ローダーごとの起動処理は{@code net.prason.xaeronav.platform}にある。 */
+/** Mod-wide identifier and logger. Per-loader startup code lives in {@code net.prason.xaeronav.platform}. */
 public final class XaeroNav {
 
     public static final String MOD_ID = "xaeronav";

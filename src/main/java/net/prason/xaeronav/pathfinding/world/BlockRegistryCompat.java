@@ -12,9 +12,9 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 
 /**
- * ブロックレジストリの読み書き。1.20.1-forgeだけ{@code BuiltInRegistries.BLOCK}がdeprecated
- * （Forge独自の{@code ForgeRegistries.BLOCKS}への誘導）で、他ノードはdeprecatedではないので
- * 素のまま使う——このローダー分岐を複数箇所へ書き写さないための共通口。
+ * Block registry reads and writes. Only on 1.20.1-forge is {@code BuiltInRegistries.BLOCK} deprecated
+ * (steering toward Forge's own {@code ForgeRegistries.BLOCKS}); other nodes aren't deprecated, so they
+ * use it as-is. A shared entry point so this loader branch isn't copied into multiple places.
  */
 public final class BlockRegistryCompat {
 
@@ -31,7 +31,7 @@ public final class BlockRegistryCompat {
         //?}
     }
 
-    /** 未知のIDには{@code null}を返す。 */
+    /** Returns {@code null} for unknown IDs. */
     public static Block byId(ResourceLocation id) {
         //? if forge && <1.21 {
         /*return ForgeRegistries.BLOCKS.containsKey(id) ? ForgeRegistries.BLOCKS.getValue(id) : null;

@@ -20,132 +20,137 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>実機の地形で、案内される経路が最良からどれだけ離れているかを測る。</b>
- * 地形は{@code tools/dump_terrain_columns.py}で保存データから書き出したもの。
+ * <b>Measures how far guided paths on real terrain are from the best.</b>
+ * The terrain was exported from save data with {@code tools/dump_terrain_columns.py}.
  *
- * <p>個別の地形で「この経路が出てほしい」を書く他のテストと違い、<b>基準との比</b>だけを見る。
- * 人間が期待経路を書けない規模——12の地形へ、種を固定した乱数で振った始点・終点——で崩れを
- * 捕まえるため。
+ * <p>Unlike other tests that state "this path should come out" for individual terrain, this looks only
+ * at <b>the ratio to the baseline</b>. It's for catching regressions at a scale where humans can't write
+ * expected paths: 12 terrains, with start and end points drawn by a fixed-seed random generator.
  *
- * <p><b>地形はバイオームごとに性格が違う</b>ので、1つの地形で測っても足りない。山岳（起伏168）は
- * 昇降の値付けを、海岸（水65%）は水の渡り方を、玄武岩の三角州は溶岩と細かい起伏を、
- * ジャングルは天蓋（層1が見る代表高さが葉の上になる）を、沼地は浅い水（{@code WALK_ONE_IN_WATER}）を、
- * それぞれ別の形で突く。1つずつ「この地形では」と書くのではなく、まとめて比だけ見るのがこの形の狙い。
+ * <p><b>Terrain differs in character by biome</b>, so measuring on one terrain isn't enough. Mountains
+ * (relief 168) probe the pricing of climbing and descending, the coast (65% water) how water is crossed,
+ * the basalt deltas lava and fine relief, the jungle the canopy (layer 1's representative height lands on
+ * the leaves), and the swamp shallow water ({@code WALK_ONE_IN_WATER}), each in its own way. Rather than
+ * writing "on this terrain..." one by one, the aim of this form is to look only at the ratios together.
  *
- * <p><b>ここで測るのは40〜90ブロックを1回の探索で解いた経路。</b>実機がその距離を1回で解くのは
- * 探索の地平（96ブロック）までで、それより長い経路の質は{@code LongRouteOptimalityTest}が
- * 層1＋区間分割まで含めて測る。
+ * <p><b>What's measured here is 40-90-block paths solved in a single search.</b> The real game solves that
+ * distance in one go only up to the search horizon (96 blocks); the quality of longer paths is measured by
+ * {@code LongRouteOptimalityTest}, including layer 1 and segmentation.
  *
- * <p><b>基準は同じ{@code CellSource}に対する重み1.0・層1ガイド無し・予算実質無制限の探索。</b>
- * 実運用の構成（重み{@link AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}・ガイド有り・既定予算）との
- * 差は、まるごと<b>実装が持ち込んだ最適でなさ</b>になる。基準も同じ探索器なので厳密な最適では
- * ない（{@code orderingCost}の量子化とclosedを開き直さない性質のぶん）。
+ * <p><b>The baseline is a search on the same {@code CellSource} with weight 1.0, no layer 1 guide and an
+ * effectively unlimited budget.</b> The difference from the production configuration (weight
+ * {@link AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}, guide on, default budget) is entirely
+ * <b>non-optimality introduced by the implementation</b>. The baseline uses the same search engine, so it
+ * isn't strictly optimal either (by the quantization of {@code orderingCost} and not reopening closed nodes).
  *
- * <p><b>捕まえられないもの: コスト模型そのものの間違い。</b>両側が同じ模型なので比は1.00のまま
- * 出る。「掘るか迂回するか」の交換レートのような値の妥当性は人間が見るしかない
- * （{@code TerrainEditVersusDetourTest}）。
+ * <p><b>What it can't catch: errors in the cost model itself.</b> Both sides share the same model, so the
+ * ratio stays at 1.00. Whether values like the "dig or detour" exchange rate are sensible can only be
+ * judged by a human ({@code TerrainEditVersusDetourTest}).
  */
 @Tag("slow")
 class PathOptimalityTest {
 
     private static final BooleanSupplier NEVER = () -> false;
 
-    /** 実機の既定予算（{@code PathfindingState}）。 */
+    /** The real game's default budget ({@code PathfindingState}). */
     private static final int PRODUCTION_NODE_BUDGET = 100_000;
 
     /**
-     * 実機が<b>この距離の経路に対して実際に使う</b>重み。{@code PathfindingState}は通常予算と
-     * 深い予算を並列に走らせ、通常側だけ軽い重み(1.2)にしている——ここで測る40〜90ブロックの
-     * 経路はまず通常側が勝つので、そちらの重みで測るのが実機に近い。
-     * 通常側が届かない長距離では深い側の{@link AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}に落ちる。
+     * The weight the real game <b>actually uses for paths of this distance</b>. {@code PathfindingState}
+     * runs the normal budget and the deep budget in parallel, with a lighter weight (1.2) only on the normal
+     * side. For the 40-90-block paths measured here the normal side usually wins, so measuring with its
+     * weight is closest to the real game. For long distances the normal side can't reach, it falls back to the
+     * deep side's {@link AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}.
      */
     private static final double PRODUCTION_WEIGHT = 1.2;
 
-    /** 基準の探索に渡す予算。実測で最大30万ノード程度なので、実質無制限。 */
+    /** Budget for the baseline search. Measured at most around 300k nodes, so effectively unlimited. */
     private static final int UNLIMITED_NODE_BUDGET = 3_000_000;
 
-    /** {@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}と同じ値。deep fallbackの予算倍率。 */
+    /** Same value as {@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}. Budget multiplier for the deep fallback. */
     private static final int DEEP_SEARCH_BUDGET_FACTOR = 8;
 
     /**
-     * 乱数の種。<b>固定するのが要点</b>——毎回違う経路を測ると、落ちたときに再現できないうえ、
-     * たまたま厳しい組が引かれただけなのか本当に悪化したのかを区別できない。
+     * Random seed. <b>Fixing it is the point</b>: measuring different paths every time means failures can't be
+     * reproduced, and you can't tell whether a harsh set just happened to be drawn or things really got worse.
      */
     private static final long SEED = 20260904L;
 
-    /** 地形ごとに測る経路の本数。 */
+    /** Number of paths measured per terrain. */
     private static final int ROUTES_PER_TERRAIN = 20;
 
     private static final int MIN_ROUTE_BLOCKS = 40;
     private static final int MAX_ROUTE_BLOCKS = 90;
 
-    /** 全体の悪化を捕まえる線。実測は0.823〜1.014。 */
+    /** Line catching overall regressions. Measured 0.823-1.014. */
     private static final double MEAN_LIMIT = 1.05;
 
-    /** 1本でも破滅的なら落とす線。実測は1.020〜1.067。 */
+    /** Line that fails if even one path is catastrophic. Measured 1.020-1.067. */
     private static final double WORST_LIMIT = 1.15;
 
     /**
-     * 無駄な上下（正味の高低差を引いた上り＋下り）が、基準の経路より何倍まで許されるか。
+     * How many times the baseline path's wasted up-and-down (ascent + descent minus net elevation change) is allowed.
      *
-     * <p>ユーザー報告「平地で1〜2マス下がって上がるルートが出る」に対する番人。<b>地形そのものの
-     * 起伏ではなく、基準との比で見る</b>のが要点——山岳では上下して当たり前なので絶対量では測れない。
-     * コスト模型が上下に値段を付けている（{@code ActionCosts#STEP_TRANSITION_TICKS}）以上、
-     * 基準の経路は無駄な上下を避けているはずで、そこから離れるぶんは実装側の取り分。
+     * <p>Guards against the user report "on flat ground the route dips down 1-2 blocks and back up". <b>The
+     * point is to compare against the baseline rather than the terrain's own relief</b>: going up and down is
+     * natural in mountains, so it can't be measured in absolute terms. Since the cost model prices climbing
+     * and descending ({@code ActionCosts#STEP_TRANSITION_TICKS}), the baseline path should avoid wasted
+     * up-and-down, and any deviation from it is the implementation's share.
      *
-     * <p><b>1.00にはならない。</b>残っているのは重み（{@link #PRODUCTION_WEIGHT}）そのもので、
-     * 下げるほど真っ直ぐになる（サバンナ: 1.5→1.62倍 / 1.2→1.24倍 / 1.0→1.05倍）。ただし
-     * 下げると展開ノードが3〜5倍に増え、山岳の長距離では既定予算で届かない経路が出る
-     * （20本中1本→3本）。実機はそのぶんを深い予算の並列探索で受けている
-     * （{@code PathfindingState#QUALITY_HEURISTIC_WEIGHT}）。
+     * <p><b>It won't be 1.00.</b> What remains is the weight ({@link #PRODUCTION_WEIGHT}) itself: the lower it
+     * is, the straighter (savanna: 1.5 → 1.62x / 1.2 → 1.24x / 1.0 → 1.05x). But lowering it expands 3-5x more
+     * nodes, and long mountain paths start failing to reach within the default budget (1 → 3 out of 20). The
+     * real game absorbs that with the parallel deep-budget search
+     * ({@code PathfindingState#QUALITY_HEURISTIC_WEIGHT}).
      *
-     * <p>実測は地上/平原1.05・山岳0.96・サバンナ0.93・海岸1.04・森0.67・ジャングル0.99・沼地1.01・
-     * ネザー0.43〜1.00・エンド1.40。
+     * <p>Measured: Overworld/plains 1.05, mountains 0.96, savanna 0.93, coast 1.04, forest 0.67, jungle 0.99,
+     * swamp 1.01, Nether 0.43-1.00, End 1.40.
      */
     private static final double WOBBLE_LIMIT = 1.50;
 
     /**
-     * 地形1本あたり、基準が届いたのに実運用(深い予算フォールバック込み)が届かない本数の許容数。
+     * Allowed number of paths per terrain that the baseline reached but production (including the deep-budget fallback) didn't.
      *
-     * <p>0にはできない——ネザー/ソウルサンドバレーに探索空間が桁違いに広い経路が1本あり
-     * （深い予算80万でもガイド有無に関わらず届かず、重み1.5・無制限予算でようやく100万ノード超で
-     * 到達する）、20本中1本はその地形固有の限界。原因（Soul Sandの減速とネザー特有の入り組んだ
-     * 地形が絡んで探索が肥大化している）は未調査。ここでは悪化（2本以上）だけを検知する。
+     * <p>It can't be 0: Nether/soul sand valley has one path with an orders-of-magnitude larger search space
+     * (unreachable even with a deep budget of 800k regardless of the guide, reached only past 1M nodes with
+     * weight 1.5 and an unlimited budget), and 1 in 20 is a limit specific to that terrain. The cause (soul
+     * sand slowdown combined with the Nether's peculiarly convoluted terrain bloating the search) has not been
+     * investigated. Here only regressions (2 or more) are detected.
      */
     private static final int UNREACHABLE_LIMIT_PER_TERRAIN = 1;
 
     private record Terrain(String name, String resource, boolean ceiling) {
     }
 
-    /** 道具を持って普通に歩いている状態。地形によらず同じにして、差が地形だけから出るようにする。 */
+    /** Walking normally with tools. Kept the same regardless of terrain so differences come only from the terrain. */
     private static FakeCells walkingPlayer(SearchBounds bounds, boolean ceiling) {
         FakeCells cells = FakeCells.empty(bounds).canPlaceBlocks(true).maxBridgeRunBlocks(96)
                 .maxFallDamagePoints(6);
-        // ネザーは岩盤天井が書き出した箱より上にある。実装の`ChunkView`と同じく空が開けていない状態にする
+        // In the Nether the bedrock ceiling is above the exported box. Like the implementation's `ChunkView`, make the sky not open
         return ceiling ? cells.openSkyYOverride(bounds.maxY()) : cells;
     }
 
     private static List<Terrain> terrains() {
         return List.of(
-                new Terrain("地上/平原丘陵", "/overworld_terrain_columns.txt.gz", false),
-                new Terrain("地上/山岳", "/overworld_mountains.txt.gz", false),
-                new Terrain("地上/サバンナ", "/overworld_savanna.txt.gz", false),
-                new Terrain("地上/海岸", "/overworld_coast.txt.gz", false),
-                new Terrain("地上/森", "/overworld_forest.txt.gz", false),
-                new Terrain("地上/ジャングル", "/overworld_jungle.txt.gz", false),
-                new Terrain("地上/沼地", "/overworld_swamp.txt.gz", false),
-                new Terrain("ネザー/荒地", "/nether_terrain_columns.txt.gz", true),
-                new Terrain("ネザー/玄武岩", "/nether_basalt_deltas.txt.gz", true),
-                new Terrain("ネザー/ソウル", "/nether_soul_sand_valley.txt.gz", true),
-                new Terrain("ネザー/深紅の森", "/nether_crimson_forest.txt.gz", true),
-                new Terrain("エンド", "/end_terrain_columns.txt.gz", false));
+                new Terrain("Overworld/plains-hills", "/overworld_terrain_columns.txt.gz", false),
+                new Terrain("Overworld/mountains", "/overworld_mountains.txt.gz", false),
+                new Terrain("Overworld/savanna", "/overworld_savanna.txt.gz", false),
+                new Terrain("Overworld/coast", "/overworld_coast.txt.gz", false),
+                new Terrain("Overworld/forest", "/overworld_forest.txt.gz", false),
+                new Terrain("Overworld/jungle", "/overworld_jungle.txt.gz", false),
+                new Terrain("Overworld/swamp", "/overworld_swamp.txt.gz", false),
+                new Terrain("Nether/wastes", "/nether_terrain_columns.txt.gz", true),
+                new Terrain("Nether/basalt", "/nether_basalt_deltas.txt.gz", true),
+                new Terrain("Nether/soul", "/nether_soul_sand_valley.txt.gz", true),
+                new Terrain("Nether/crimson forest", "/nether_crimson_forest.txt.gz", true),
+                new Terrain("End", "/end_terrain_columns.txt.gz", false));
     }
 
     private static double cost(PathResult result) {
         return result.steps().stream().mapToDouble(PathStep::cost).sum();
     }
 
-    /** 正味の高低差を引いた上り＋下り。まっすぐ登る経路では0になる。 */
+    /** Ascent + descent minus net elevation change. Zero for a path climbing straight up. */
     private static int wobble(BlockPos start, PathResult result) {
         int up = 0;
         int down = 0;
@@ -172,10 +177,11 @@ class PathOptimalityTest {
     }
 
     /**
-     * {@code PathfindingState#submitWithDeepFallback}と同じ二段構え。通常予算(重み
-     * {@link #PRODUCTION_WEIGHT})が届かなければ、深い予算(倍率{@link #DEEP_SEARCH_BUDGET_FACTOR}・
-     * 重み{@link AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT})を試す。実機はこの2つを並列に走らせるが、
-     * 採用される結果（通常が届けばそれ、届かなければ深い方）は直列でも同じなのでそのまま模せる。
+     * The same two-stage approach as {@code PathfindingState#submitWithDeepFallback}. If the normal budget
+     * (weight {@link #PRODUCTION_WEIGHT}) doesn't reach, try the deep budget (multiplier
+     * {@link #DEEP_SEARCH_BUDGET_FACTOR}, weight {@link AStarPathfinder#DEFAULT_HEURISTIC_WEIGHT}). The real
+     * game runs the two in parallel, but the adopted result (the normal one if it reaches, otherwise the deep
+     * one) is the same when run sequentially, so it can be imitated as-is.
      */
     private static PathResult solveProduction(FakeCells cells, BlockPos start, BlockPos goal) {
         PathResult normal = solve(cells, start, goal, PRODUCTION_WEIGHT, true, PRODUCTION_NODE_BUDGET);
@@ -222,33 +228,33 @@ class PathOptimalityTest {
                 if (ratio > worst) {
                     worst = ratio;
                     worstRoute = route[0].toShortString() + "→" + route[1].toShortString()
-                            + String.format(Locale.ROOT, " (基準%.0f 実運用%.0f)",
+                            + String.format(Locale.ROOT, " (baseline %.0f production %.0f)",
                                     cost(best), cost(production));
                 }
             }
             if (measured == 0) {
-                failures.add(terrain.name() + ": 経路が1本も出ない（地形か座標がおかしい）");
+                failures.add(terrain.name() + ": no paths at all (terrain or coordinates are wrong)");
                 continue;
             }
             double mean = total / measured;
             double wobbleRatio = bestWobble == 0 ? 1.0 : (double) productionWobble / bestWobble;
             report.add(String.format(Locale.ROOT,
-                    "%-12s %2d本 平均%.3f倍 最悪%.3f倍 無駄な上下%d/%d(%.2f倍) 未到達%d本 %s",
+                    "%-12s %2d paths avg %.3fx worst %.3fx wasted up/down %d/%d (%.2fx) unreached %d %s",
                     terrain.name(), measured, mean, worst, productionWobble, bestWobble,
                     wobbleRatio, unreachable, worstRoute));
             if (mean > MEAN_LIMIT) {
-                failures.add(terrain.name() + ": 経路が全体に遠回りになっている");
+                failures.add(terrain.name() + ": paths are detouring overall");
             }
             if (worst > WORST_LIMIT) {
-                failures.add(terrain.name() + ": 破滅的に遠回りな経路がある " + worstRoute);
+                failures.add(terrain.name() + ": a catastrophically detouring path exists " + worstRoute);
             }
             if (wobbleRatio > WOBBLE_LIMIT) {
-                failures.add(terrain.name() + ": 無駄な上下が基準より多い " + productionWobble
-                        + " 対 " + bestWobble);
+                failures.add(terrain.name() + ": more wasted up/down than the baseline " + productionWobble
+                        + " vs " + bestWobble);
             }
             if (unreachable > UNREACHABLE_LIMIT_PER_TERRAIN) {
-                failures.add(terrain.name() + ": 基準到達済みなのに実運用が届かない経路が増えている "
-                        + unreachable + "本 " + unreachableRoute);
+                failures.add(terrain.name() + ": more paths that production can't reach though the baseline did "
+                        + unreachable + " paths " + unreachableRoute);
             }
         }
         System.out.println(String.join("\n", report));

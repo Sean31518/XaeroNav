@@ -34,7 +34,7 @@ public abstract class ForgeLevelRendererMixin {
             //?}
     ) {
         PoseStack poseStack = new PoseStack();
-        // 1.21.4ではmodelViewをRenderSystem側が描画時に掛けるので、ここで積むと二重に回って線が画面外へ出る
+        // On 1.21.4 RenderSystem applies modelView at draw time, so pushing it here applies it twice and the line goes off screen
         //? if >=1.21.5 {
         /^poseStack.last().pose().set(RenderSystem.getModelViewMatrix());
         ^///?}

@@ -17,14 +17,14 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * <b>崖から飛び降りたあと、崖の上へ登り直させないこと。</b>
+ * <b>After jumping off a cliff, don't make the player climb back up it.</b>
  *
- * <p>ユーザー報告「行き先が左上なんだけど、崖から降りたら崖に戻される」。逸脱したときの合流は
- * 「最も近いステップ」を狙うので、飛び降りた直後は<b>真上の経路</b>が最も近いままになる。
- * そこへ合流できてしまうと、案内は登り直す道を出す。
+ * <p>User report: "The destination is to the upper left, but after dropping off a cliff I get sent back up
+ * the cliff." A join after deviating aims at "the nearest step", so right after jumping down <b>the path
+ * directly above</b> remains nearest. If joining there is allowed, guidance shows a way to climb back up.
  *
- * <p>合流そのものは要る（島渡りのように高くついた経路を逸脱のたびに捨てると、同じ経路を
- * 引き当て直せる保証が無い）。止めたいのは<b>引き返しになる合流だけ</b>。
+ * <p>Joining itself is needed (throwing away an expensive path like island hopping on every deviation gives
+ * no guarantee of drawing the same path again). What we want to stop is <b>only joins that backtrack</b>.
  */
 class CliffSpliceTest {
 
@@ -34,8 +34,8 @@ class CliffSpliceTest {
     private static final int BOTTOM = 60;
 
     /**
-     * 北側(z≦20)が高台、南側(z≧26)が低地。<b>西端(x≦20)の坂だけ</b>が両者を繋ぐ。
-     * 目的地は高台の西、出発は高台の東。途中で崖から飛び降りると低地に立つ。
+     * North (z≦20) is a plateau, south (z≧26) lowland. <b>Only the slope at the west end (x≦20)</b> connects them.
+     * The destination is west on the plateau, the start east on it. Jumping off the cliff partway puts you on the lowland.
      */
     private static FakeCells terrain() {
         SearchBounds bounds = new SearchBounds(-8, 40, -8, 208, 120, 68);
@@ -75,23 +75,23 @@ class CliffSpliceTest {
         FakeCells cells = terrain();
         BlockPos goal = new BlockPos(10, TOP + 1, 10);
         PathResult onTheCliff = solve(cells, new BlockPos(190, TOP + 1, 10), goal);
-        assertTrue(onTheCliff.complete(), "高台を西へ向かう経路が出るはず");
+        assertTrue(onTheCliff.complete(), "a path heading west along the plateau should come out");
 
         BlockPos player = new BlockPos(140, BOTTOM + 1, 34);
         int join = Splice.joinableStepIndex(onTheCliff.steps(),
                 new net.minecraft.world.phys.Vec3(player.getX() + 0.5, player.getY() + 0.5,
                         player.getZ() + 0.5), 0, i -> true);
         BlockPos joinPos = onTheCliff.steps().get(join).pos();
-        assertTrue(joinPos.getY() >= TOP, "合流先は崖の上のはず（この地形では他に経路が無い）");
+        assertTrue(joinPos.getY() >= TOP, "the join target should be on top of the cliff (no other path on this terrain)");
 
         PathResult toJoin = solve(cells, player, joinPos);
-        assertTrue(toJoin.complete(), "登り直す道自体は存在する（だから黙って採用されてしまう）");
+        assertTrue(toJoin.complete(), "the way to climb back up does exist (which is why it gets silently adopted)");
 
         assertFalse(Splice.spliceWorthTaking(cost(toJoin.steps()), player, joinPos, goal, null),
-                "崖を登り直す合流が採用されている: 合流区間=" + Math.round(cost(toJoin.steps())) + "tick");
+                "a join climbing back up the cliff is adopted: join segment=" + Math.round(cost(toJoin.steps())) + "tick");
     }
 
-    /** 経路の横数ブロックへずれただけなら、合流はそのまま採る（合流を殺してはいけない）。 */
+    /** If only a few blocks to the side of the path, take the join as-is (joining must not be killed). */
     @Test
     void ordinaryDeviationStillSplices() {
         FakeCells cells = terrain();
@@ -106,6 +106,6 @@ class CliffSpliceTest {
         PathResult toJoin = solve(cells, player, joinPos);
 
         assertTrue(Splice.spliceWorthTaking(cost(toJoin.steps()), player, joinPos, goal, null),
-                "普通の逸脱で合流が拒まれている: 合流区間=" + Math.round(cost(toJoin.steps())) + "tick");
+                "join refused on an ordinary deviation: join segment=" + Math.round(cost(toJoin.steps())) + "tick");
     }
 }

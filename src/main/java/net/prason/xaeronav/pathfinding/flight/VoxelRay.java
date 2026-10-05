@@ -4,29 +4,29 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * 線分が通るセルを1つ残らず列挙する（Amanatides–Wooのボクセル走査）。
+ * Enumerates every cell a line segment passes through (Amanatides–Woo voxel traversal).
  *
- * <p>一定間隔で点を打つ方式では、サンプルとサンプルの間にある壁や尾根をまるごと跨いで見落とす。
- * エリトラは秒速30マス級で飛ぶので、見落とした壁は激突と同義になる。判定の粗さがそのまま事故に
- * なる場所なので、ここは間引かずに全セルを見る。
+ * <p>Sampling points at fixed intervals misses walls and ridges that fall entirely between samples.
+ * An elytra flies at around 30 blocks per second, so a missed wall means a crash. Coarse checks turn
+ * directly into accidents here, so this looks at every cell without skipping.
  *
- * <p>セルの大きさは1に固定してある。粗い格子で走査したい呼び出し側は、座標をセル幅で割ってから
- * 渡すこと（{@link AirGrid#clearLine}がそうしている）。座標系の変換を走査側に持ち込むと、
- * 境界までの距離の計算にセル幅が混ざって読みにくくなるだけで、得るものが無い。
+ * <p>The cell size is fixed at 1. Callers that want to traverse a coarser grid should divide the coordinates
+ * by the cell width before passing them in ({@link AirGrid#clearLine} does this). Bringing the coordinate
+ * conversion into the traversal only mixes the cell width into the boundary-distance math, for no gain.
  */
 public final class VoxelRay {
 
     @FunctionalInterface
     public interface CellTest {
 
-        /** そのセルを通ってよいか。falseを返した時点で走査は打ち切られる。 */
+        /** Whether the cell may be passed through. Traversal stops as soon as this returns false. */
         boolean passable(int x, int y, int z);
     }
 
     private VoxelRay() {
     }
 
-    /** 線分が通る全セルが{@code test}を満たすか。 */
+    /** Whether every cell the segment passes through satisfies {@code test}. */
     public static boolean traverse(Vec3 from, Vec3 to, CellTest test) {
         int x = Mth.floor(from.x);
         int y = Mth.floor(from.y);
@@ -41,7 +41,7 @@ public final class VoxelRay {
         int stepX = (int) Math.signum(dx);
         int stepY = (int) Math.signum(dy);
         int stepZ = (int) Math.signum(dz);
-        // 線分の長さを1としたときの、次のセル境界までの距離とセル1つ分の距離
+        // Distance to the next cell boundary and the distance of one cell, with the segment length taken as 1
         double nextX = boundaryFraction(from.x, stepX, dx);
         double nextY = boundaryFraction(from.y, stepY, dy);
         double nextZ = boundaryFraction(from.z, stepZ, dz);
@@ -56,7 +56,7 @@ public final class VoxelRay {
             if (x == lastX && y == lastY && z == lastZ) {
                 return true;
             }
-            // 最も近い境界を1つだけ跨ぐ。1を超えたらもう線分の外
+            // Cross exactly one boundary, the nearest. Past 1 we are outside the segment
             if (nextX <= nextY && nextX <= nextZ) {
                 if (nextX > 1.0) {
                     return true;
@@ -79,7 +79,7 @@ public final class VoxelRay {
         }
     }
 
-    /** 進行方向にある最初のセル境界までの距離（線分の長さを1とした比率）。 */
+    /** Distance to the first cell boundary in the direction of travel (as a fraction of the segment length). */
     private static double boundaryFraction(double position, int step, double delta) {
         if (step == 0) {
             return Double.POSITIVE_INFINITY;

@@ -21,13 +21,13 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * <b>橋を架けないと進めない地形で、前へ進む合流を「引き返し」と取り違えないこと。</b>
+ * <b>On terrain that can't be crossed without bridging, a forward-moving splice must not be mistaken for "backtracking".</b>
  *
- * <p>実機ログ（2026-09-18、ネザーの溶岩の海）で合流8回のうち5回が引き返し扱いになり、うち2回は
- * その場で完走ルートの破棄に直結した。橋1本は約35.6tick＝疾走10ブロック相当なので、幾何下限で測る限り
- * 「進んだぶん」は実コストの1/10にしかならず、{@code Splice#SPLICE_DETOUR_ALLOWANCE_TICKS}でも埋まらない。
+ * <p>In an in-game log (2026-09-18, a Nether lava sea), 5 of 8 splices were treated as backtracking, and 2 of those
+ * led directly to discarding a complete route on the spot. One bridge is about 35.6 ticks = 10 blocks of sprinting, so as long as it's measured with the geometric lower bound,
+ * "the progress made" is only 1/10 of the real cost, and even {@code Splice#SPLICE_DETOUR_ALLOWANCE_TICKS} doesn't cover it.
  *
- * <p>地形は南の陸（z≦6）と北の島（18≦z≦24）が溶岩11マスで隔てられたもの。目的地は南の陸の東端。
+ * <p>The terrain is southern land (z≤6) and a northern island (18≤z≤24) separated by 11 blocks of lava. The destination is the east end of the southern land.
  */
 class LavaBridgeSpliceTest {
 
@@ -36,13 +36,13 @@ class LavaBridgeSpliceTest {
     private static final int FLOOR_Y = 63;
     private static final int STAND_Y = FLOOR_Y + 1;
 
-    /** 実機の既定（{@code XaeroNavConfig}）。溶岩の幅11マスはこの中に収まる。 */
+    /** The in-game default ({@code XaeroNavConfig}). The 11-block-wide lava fits within it. */
     private static final int LAVA_BRIDGE_BLOCKS = 30;
 
     private static final BlockPos GOAL = new BlockPos(60, STAND_Y, 3);
-    /** 島の上。目的地へ行くにも、経路へ戻るにも、同じ溶岩を渡ることになる。 */
+    /** On the island. Going to the destination or returning to the path both mean crossing the same lava. */
     private static final BlockPos ON_THE_ISLAND = new BlockPos(30, STAND_Y, 21);
-    /** 南の陸の上。目的地は同じ陸の東なので、ここから島へ渡るのは純粋な寄り道。 */
+    /** On the southern land. The destination is to the east on the same land, so crossing to the island from here is a pure detour. */
     private static final BlockPos ON_THE_MAINLAND = new BlockPos(30, STAND_Y, 3);
 
     private static final int WINDOW_CENTER_X = 32;
@@ -78,7 +78,7 @@ class LavaBridgeSpliceTest {
         PathResult result = new AStarPathfinder(cells,
                 new SearchLimits(200_000, 30_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT))
                 .search(from, to, NEVER);
-        assertTrue(result.complete(), "橋を架ければ繋がるはずの区間が出ていない");
+        assertTrue(result.complete(), "The stretch that should connect by bridging didn't come out");
         return result.steps().stream().mapToDouble(PathStep::cost).sum();
     }
 
@@ -88,12 +88,12 @@ class LavaBridgeSpliceTest {
         double cost = spliceCost(cells, ON_THE_ISLAND, ON_THE_MAINLAND);
 
         assertTrue(Splice.spliceWorthTaking(cost, ON_THE_ISLAND, ON_THE_MAINLAND, GOAL, guide(cells)),
-                "橋が要るだけの前進する合流が引き返し扱いになっている: 合流区間=" + Math.round(cost) + "tick");
+                "A forward-moving splice that merely needs a bridge is treated as backtracking: splice stretch=" + Math.round(cost) + "tick");
     }
 
     /**
-     * ガイドが無ければ幾何下限で測るしかなく、同じ合流が拒まれる。<b>この地形でガイドが要る理由</b>が
-     * ここに出ている——直したのは物差しであって、余裕（{@code SPLICE_DETOUR_ALLOWANCE_TICKS}）ではない。
+     * Without a guide, it can only be measured by the geometric lower bound, and the same splice is rejected. <b>Why this terrain needs a guide</b>
+     * shows up here: what was fixed is the yardstick, not the allowance ({@code SPLICE_DETOUR_ALLOWANCE_TICKS}).
      */
     @Test
     void theGeometricYardstickAloneRefusesTheSameSplice() {
@@ -101,16 +101,16 @@ class LavaBridgeSpliceTest {
         double cost = spliceCost(cells, ON_THE_ISLAND, ON_THE_MAINLAND);
 
         assertFalse(Splice.spliceWorthTaking(cost, ON_THE_ISLAND, ON_THE_MAINLAND, GOAL, null),
-                "幾何下限でも通ってしまうなら、この地形はガイドの要否を測れていない");
+                "If it passes even with the geometric lower bound, this terrain can't measure whether a guide is needed");
     }
 
-    /** 橋が安く見えるようになっても、目的地から遠ざかる合流は断ること（崖の判定を殺していない）。 */
+    /** Even once bridges look cheap, a splice moving away from the destination is refused (the cliff check isn't killed). */
     @Test
     void stillRefusesASpliceThatLeadsAwayFromTheGoal() {
         FakeCells cells = terrain();
         double cost = spliceCost(cells, ON_THE_MAINLAND, ON_THE_ISLAND);
 
         assertFalse(Splice.spliceWorthTaking(cost, ON_THE_MAINLAND, ON_THE_ISLAND, GOAL, guide(cells)),
-                "陸から島へ渡る寄り道が採用されている: 合流区間=" + Math.round(cost) + "tick");
+                "A detour crossing from the land to the island was adopted: splice stretch=" + Math.round(cost) + "tick");
     }
 }

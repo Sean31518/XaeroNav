@@ -19,15 +19,15 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 /**
- * NeoForgeの{@code ModConfigSpec}が持っていない場所（Fabric）での保存先。
+ * Where settings are stored in places that lack NeoForge's {@code ModConfigSpec} (Fabric).
  *
- * <p>読み書きにはnight-configを使う——NeoForgeの{@code ModConfigSpec}が内部で使っているのと
- * 同じライブラリなので、生成されるTOMLはローダーが違っても同じ形になる（コメントの
- * {@code Default:} / {@code Range:} 行まで含めて揃えてある）。
+ * <p>Reading and writing use night-config, the same library NeoForge's {@code ModConfigSpec} uses
+ * internally, so the generated TOML has the same shape regardless of loader (down to the
+ * {@code Default:} / {@code Range:} comment lines).
  *
- * <p>ローダー固有のクラスには触れない。設定ファイルの場所だけ呼び出し側から受け取る
- * ——そうしておくと、Fabricノードでしかコンパイルされないコードにならず、正典ノードの
- * 単体テストで読み書きの挙動をそのまま確かめられる。
+ * <p>Touches no loader-specific classes; only the config file location comes from the caller.
+ * That keeps this from becoming code that only compiles on the Fabric node, so canonical-node
+ * unit tests can check the read/write behavior directly.
  */
 public final class NightConfigStore implements NavConfigStore, NavConfigSpec {
 
@@ -68,16 +68,16 @@ public final class NightConfigStore implements NavConfigStore, NavConfigSpec {
         file.save();
     }
 
-    /** 構文が壊れた元ファイルを残したまま、既定値で再生成できる空の設定へ戻す。 */
+    /** Falls back to an empty config that regenerates from defaults, keeping the original file with broken syntax. */
     private void recoverBrokenFile(RuntimeException parseError) {
         Path broken = path.resolveSibling(path.getFileName() + ".broken-" + System.currentTimeMillis());
         try {
             Files.move(path, broken, StandardCopyOption.REPLACE_EXISTING);
             file.clear();
-            LOGGER.warn("XaeroNav: 壊れた設定ファイルを {} へ退避し、既定値で再生成します", broken, parseError);
+            LOGGER.warn("XaeroNav: Moved the broken config file to {} and regenerating it with defaults", broken, parseError);
         } catch (java.io.IOException moveError) {
             moveError.addSuppressed(parseError);
-            throw new IllegalStateException("壊れた設定ファイルを退避できませんでした: " + path, moveError);
+            throw new IllegalStateException("Could not move the broken config file aside: " + path, moveError);
         }
     }
 
@@ -157,8 +157,8 @@ public final class NightConfigStore implements NavConfigStore, NavConfigSpec {
             if (!(value instanceof List<?> list)) {
                 return defaultValue;
             }
-            // 1つでも壊れた要素があればリストごと既定値へ戻す（ModConfigSpecと同じ扱い）。
-            // 壊れた要素だけ落とすと、直したつもりの設定が黙って一部無視されることになる
+            // If even one element is broken, reset the whole list to its default (same as ModConfigSpec).
+            // Dropping only the broken elements would silently ignore part of a config the user thought they fixed
             return list.stream().allMatch(elementValidator) ? list : defaultValue;
         });
         return () -> file.<List<String>>get(path);
@@ -178,7 +178,7 @@ public final class NightConfigStore implements NavConfigStore, NavConfigSpec {
         return comment;
     }
 
-    /** ModConfigSpecが既定値とレンジをコメント末尾へ足すのに合わせる。 */
+    /** Matches how ModConfigSpec appends the default and range to the end of the comment. */
     private static String rangeComment(String comment, Object defaultValue, String range) {
         return comment + "\n Default: " + defaultValue + "\n Range: " + range;
     }

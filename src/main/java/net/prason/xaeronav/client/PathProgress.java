@@ -8,14 +8,14 @@ import net.prason.xaeronav.pathfinding.astar.PathResult;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * 「いま経路のどこにいるか」を1tickに1度だけ求めて共有する。
+ * Computes "where on the path are we now" only once per tick and shares it.
  *
- * <p>再計算の要否（{@link PathfindingState}）・案内表示（{@link NavGuidance}）・描画の切り詰め
- * （{@link PathRenderer}）はどれも同じ問いへの答えを必要とする。別々に求めると、同じフレームでも
- * 3者が違うステップを指しうる（案内は次の角を出しているのに線は手前から描かれる、など）。
+ * <p>Whether to recalculate ({@link PathfindingState}), the guidance display ({@link NavGuidance}) and render
+ * trimming ({@link PathRenderer}) all need the answer to the same question. Computing it separately lets the
+ * three point at different steps even within the same frame (guidance showing the next corner while the line is drawn from further back, etc.).
  *
- * <p>探すのは直前の対応づけの周りだけにする。経路全体から最も近い点を選ぶと、経路が自分自身の
- * 近くを通る地形（洞窟の折り返し階段など）で遠くの区間へ飛び移ってしまう。
+ * <p>The search looks only around the previous mapping. Picking the closest point on the whole path would jump
+ * to a distant segment on terrain where the path passes near itself (switchback stairs in caves, etc.).
  */
 final class PathProgress {
 
@@ -24,7 +24,7 @@ final class PathProgress {
     private static final int WINDOW_AHEAD = 32;
     private static final int WINDOW_BEHIND = 8;
 
-    /** 窓の中に近い点が無ければ経路から外れたとみなし、全体を探し直す（ブロック、<b>水平距離</b>）。 */
+    /** If there's no near point in the window, treat as off the path and search the whole thing again (blocks, <b>horizontal distance</b>). */
     private static final double FULL_SCAN_DISTANCE = 8.0;
 
     private PathResult source;
@@ -61,29 +61,29 @@ final class PathProgress {
     }
 
     /**
-     * この{@code result}に対して測った値を持っているか。
+     * Whether this holds a value measured against this {@code result}.
      *
-     * <p>{@link #distance()}は「直近に{@link #update}へ渡された経路までの距離」でしかない。
-     * 経路が差し替わった直後や、{@link #update}が呼ばれない状況（到着後など）では、
-     * <b>別の経路に対して測った距離</b>が残っている。それを逸脱の判断に使うと、いま出ている
-     * 経路とは無関係な理由で経路を捨てることになる。
+     * <p>{@link #distance()} is only "the distance to the path most recently passed to {@link #update}".
+     * Right after the path is swapped, or when {@link #update} isn't called (after arrival, etc.), a
+     * <b>distance measured against a different path</b> remains. Using it to judge deviation would throw away
+     * the path for reasons unrelated to the one currently shown.
      */
     boolean tracking(PathResult result) {
         return result != null && result == source;
     }
 
-    /** {@code result}に対応づけ済みのステップ。違う経路なら先頭。 */
+    /** The step mapped for {@code result}. The first step if it's a different path. */
     int indexFor(PathResult result) {
         return result == source ? index : 0;
     }
 
     /**
-     * 末尾に区間を継ぎ足しただけの経路へ、対応づけをそのまま引き継ぐ。継ぎ足しは手前のステップの
-     * 添字を変えないので、いま指している位置はそのまま通用する。
+     * Carries the mapping over as-is to a path that only had a segment appended at the end. Appending doesn't change
+     * earlier steps' indices, so the current position remains valid.
      *
-     * <p>これを呼ばずに新しい{@link PathResult}を渡すと、{@link #update}が別経路とみなして
-     * 添字を0に戻し、窓の外なので全体走査に落ちる。全体走査は経路が自分自身の近くを通る地形
-     * （洞窟の折り返し階段）で遠くの区間へ飛び移る——先読みで経路が長くなるほど確率が上がる。
+     * <p>Passing a new {@link PathResult} without calling this makes {@link #update} treat it as a different path,
+     * resetting the index to 0, and since it's outside the window it falls to a full scan. A full scan jumps to a
+     * distant segment on terrain where the path passes near itself (cave switchback stairs); the longer lookahead makes the path, the likelier this gets.
      */
     void carryOver(PathResult extended) {
         if (source == null) {
@@ -92,17 +92,17 @@ final class PathProgress {
         source = extended;
     }
 
-    /** 直近に測った経路までの距離（ブロック）。対応づけが無ければ{@link Double#MAX_VALUE}。 */
+    /** Most recently measured distance to the path (blocks). {@link Double#MAX_VALUE} if there's no mapping. */
     double distance() {
         return distance;
     }
 
     /**
-     * 縦のずれを数えない、経路までの距離（ブロック）。
+     * Distance to the path (blocks) ignoring vertical offset.
      *
-     * <p>上下に自由に動ける場面——水の中——でだけ使う。そこでは経路のYは指示ではなく、
-     * 息継ぎで浮上したことを「経路から外れた」と数えると引き直しが止まらない
-     * （{@code PathfindingState#offPathDistance}）。
+     * <p>Used only where you can move freely up and down: in water. There the path's Y isn't an instruction,
+     * and counting surfacing for air as "off the path" would make redraws never stop
+     * ({@code PathfindingState#offPathDistance}).
      */
     double horizontalDistance() {
         return horizontalDistance;
@@ -121,7 +121,7 @@ final class PathProgress {
         return best;
     }
 
-    /** ステップはブロック座標、プレイヤーは連続座標。マスの中心とプレイヤーの足元で比べる。 */
+    /** Steps are block coordinates, the player continuous coordinates. Compares block center with the player's feet. */
     private static double distanceSq(BlockPos step, Vec3 position) {
         double dx = step.getX() + 0.5 - position.x;
         double dy = step.getY() - position.y;
@@ -130,15 +130,15 @@ final class PathProgress {
     }
 
     /**
-     * 縦のずれを数えない距離。全体走査へ落ちるかの判定（{@link #FULL_SCAN_DISTANCE}）と、
-     * 水の中での逸脱の判定（{@link #horizontalDistance()}）が使う。
+     * Distance ignoring vertical offset. Used for deciding whether to fall to a full scan ({@link #FULL_SCAN_DISTANCE})
+     * and for deciding deviation in water ({@link #horizontalDistance()}).
      *
-     * <p>ここでYを見ると、水面を泳いでいて経路が水中を通る場面（高低差だけで8ブロックを超える）で
-     * 毎tick全体走査に落ちる。全体走査は経路が自分自身の近くを通る地形で遠くの区間へ飛び移るので、
-     * 手前の案内がまるごと描かれなくなる。<b>真上にいるなら経路を辿れている</b>と見るのが正しい。
+     * <p>Looking at Y here would fall to a full scan every tick when swimming on the surface while the path runs
+     * underwater (the height difference alone exceeds 8 blocks). A full scan jumps to distant segments on terrain where
+     * the path passes near itself, so the guidance ahead disappears entirely. The right view is <b>if you're directly above, you're following the path</b>.
      *
-     * <p>{@link #nearest}の側はYを見たままにしてある。折り返し階段のように同じXZを高さ違いで
-     * 通る経路では、Yが唯一の手がかりになる。
+     * <p>{@link #nearest} keeps looking at Y. For paths passing the same XZ at different heights, like switchback
+     * stairs, Y is the only clue.
      */
     private static double horizontalDistanceSq(BlockPos step, Vec3 position) {
         double dx = step.getX() + 0.5 - position.x;

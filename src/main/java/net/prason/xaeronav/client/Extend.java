@@ -33,87 +33,87 @@ import net.prason.xaeronav.pathfinding.world.PlannedCellSource;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * いま表示している経路を、その<b>末端から</b>次の区間ぶん伸ばす（プレイヤーからではない）継ぎ足し。
+ * Extension: extends the currently displayed path by the next leg <b>from its end</b> (not from the player).
  *
- * <p>{@link PathfindingState#recalculate}との違いはそこだけだが、結果は大きく変わる。プレイヤーから
- * 引き直すとすでに歩いている手前側まで毎回作り直され、目標が少し動くだけで案内全体が描き変わる。
- * 末端から継ぎ足せば手前は定義上そのまま残り、探索は必ず新しい土地だけを見る。
+ * <p>That's the only difference from {@link PathfindingState#recalculate}, but the result differs greatly. Replanning
+ * from the player rebuilds even the near part already being walked every time, and the whole guidance is redrawn when the
+ * target moves slightly. Extending from the end leaves the near part untouched by definition, and the search only ever looks at new ground.
  *
- * <p>{@link PathfindingState}の目的地/経路/計算中フラグは{@link Host}経由でしか触らない
- * （{@link FlightNavState}/{@link SeamRepair}/{@link Splice}と同じ構成）。長距離ルート選定
- * （{@code selectDetailTarget}・{@code preparedVoxelGuide}・詰み判定への反映）はPathfindingState
- * 本体に残っている状態機械の中核なので、こちらもHost経由で問い合わせる。
+ * <p>{@link PathfindingState}'s destination/path/computing flag are touched only via {@link Host}
+ * (same structure as {@link FlightNavState}/{@link SeamRepair}/{@link Splice}). Long-distance route selection
+ * ({@code selectDetailTarget}, {@code preparedVoxelGuide}, feeding into the stuck check) is the core of the state machine
+ * still living in PathfindingState itself, so it's also queried via Host.
  */
 final class Extend {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
     /**
-     * 末端から伸ばせなかったあと、同じ末端でもう一度試すまでにプレイヤーが動く距離（ブロック）。
+     * Distance (blocks) the player must move after a failed extension from the end before trying again at the same end.
      *
-     * <p>継ぎ足しの失敗はたいてい一時的で、その先のチャンクがまだ読み込まれていないだけ。
-     * 歩けば読み込まれて成功しうるのに、失敗を末端の座標だけで覚えると経路が差し替わるまで
-     * 二度と試さない——他の再計算トリガー（逸脱・末端への到達・地形変化）はどれも成立しないので、
-     * 実際には末端まで歩き切るまで探索が一切走らなくなる。
+     * <p>Extension failures are usually temporary: the chunks beyond simply haven't loaded yet.
+     * Walking can load them and make it succeed, but if failures are remembered only by the end's coordinates, it never
+     * tries again until the path is replaced; none of the other recalculation triggers (deviation, reaching the end, terrain
+     * changes) fire, so in practice no search runs at all until the player walks all the way to the end.
      */
     private static final double EXTEND_RETRY_MOVE_BLOCKS = 16.0;
 
     /**
-     * {@link #noteLoop}が「戻ってきた」とみなす水平の距離（各軸）。窓の縁の先の行き止まりから引き返す線は、来た線と十数ブロック
-     * 離れて並ぶことがある（実機のエンドのV字）。
+     * Horizontal distance (per axis) at which {@link #noteLoop} considers the path to have "come back". A line turning back from a dead end
+     * beyond the window's edge can run parallel to the incoming line a dozen or so blocks apart (the V shape in the real-game End).
      */
     private static final int LOOP_NEAR_BLOCKS = 16;
 
-    /** {@link #noteLoop}が「戻ってきた」とみなす高さの差。 */
+    /** Height difference at which {@link #noteLoop} considers the path to have "come back". */
     private static final int LOOP_NEAR_Y = 6;
 
-    /** 両端が1ブロック離れるごとに要求する、経路に沿った遠回りのステップ数。離れた2点の間を普通に歩いた線を輪とみなさない。 */
+    /** Detour steps along the path required per block of separation between the two ends. So a line normally walked between two distant points isn't treated as a loop. */
     private static final int LOOP_GAP_PER_BLOCK = 3;
 
     /**
-     * {@link #noteLoop}が輪とみなす、経路に沿った最小のステップ数。末端の近くで向きを変えるだけの
-     * 継ぎ足しは、末端の数ステップ手前に必ず近づくので、それでは鳴らない長さにする。
+     * Minimum steps along the path for {@link #noteLoop} to consider it a loop. An extension that merely changes direction
+     * near the end always comes close to a few steps before the end, so this is a length that doesn't trigger on that.
      */
     private static final int LOOP_MIN_GAP_STEPS = 20;
 
     /**
-     * {@link #noteRetreatingTail}が「遠ざかった」とみなす、目的地までの水平距離の増え幅。回り込みで数ブロック
-     * 遠ざかるのは普通なので、それでは鳴らない幅にする。
+     * Increase in horizontal distance to the destination at which {@link #noteRetreatingTail} considers it to have "moved away".
+     * Moving a few blocks away while going around is normal, so this is a width that doesn't trigger on that.
      */
     private static final double RETREATING_TAIL_LOG_BLOCKS = 16.0;
 
-    /** {@link PathfindingState}が持つ、非同期完了時に読み書きする必要のある可変状態と長距離ルート選定。 */
+    /** Mutable state held by {@link PathfindingState} that must be read and written on async completion, plus long-distance route selection. */
     interface Host {
-        /** 現在の目的地。 */
+        /** The current destination. */
         @Nullable BlockPos goal();
 
-        /** 現在表示中の経路。 */
+        /** The currently displayed path. */
         PathfindingState.DisplayedPath displayed();
 
-        /** 表示中の経路を差し替える。 */
+        /** Replaces the displayed path. */
         void setDisplayed(PathfindingState.DisplayedPath path);
 
-        /** 探索中フラグを立て下げする。 */
+        /** Raises and lowers the searching flag. */
         void setComputing(boolean computing);
 
         /**
-         * この目的地に対する長距離ルートが、地図の読み込み待ちで欠けたままか。
-         * 一致する長距離ルートが無ければ{@code -1}、あれば未読み込みリージョン数
-         * （0なら読み込み待ちではない）。
+         * Whether the long-distance route for this destination is still incomplete, waiting for the map to load.
+         * {@code -1} if there's no matching long-distance route, otherwise the number of unloaded regions
+         * (0 means not waiting for loading).
          */
         int coarseRoutePendingRegions(BlockPos currentGoal);
 
-        /** 詳細探索のゴールを決める（{@code PathfindingState#selectDetailTarget}への委譲）。 */
+        /** Decides the detailed search's goal (delegates to {@code PathfindingState#selectDetailTarget}). */
         PathfindingState.DetailTarget selectDetailTarget(BlockPos start, BlockPos currentGoal, int renderRadius,
                                                            int reach, boolean boatAvailable, boolean playerAnchored,
                                                            int minWaypointIndex, boolean ceilingDimension,
                                                            boolean navGraphGuided);
 
-        /** 目的地をそのまま狙う探索のガイド（{@code PathfindingState#goalGuide}への委譲）。 */
+        /** The guide for a search aiming directly at the destination (delegates to {@code PathfindingState#goalGuide}). */
         PathfindingState.@Nullable GoalGuide goalGuide(Level level, Player player, BlockPos from,
                                                        BlockPos currentGoal, int renderRadius);
 
-        /** この探索の結果を詰みの判定へ反映する（{@code PathfindingState#noteSearchOutcome}への委譲）。 */
+        /** Feeds this search's result into the stuck check (delegates to {@code PathfindingState#noteSearchOutcome}). */
         void noteSearchOutcome(BlockPos start, BlockPos planEnd, PathResult result);
     }
 
@@ -126,15 +126,15 @@ final class Extend {
     private final RecentFailures recentFailures;
 
     /**
-     * 経路の末端から先へ伸ばせなかった地点。同じ末端で延長を試み続けないための歯止めで、
-     * 経路が差し替わる（＝別の末端になる）と自然に外れる。
+     * The point beyond which the path's end couldn't be extended. A brake against repeatedly trying to extend at the same end;
+     * it clears naturally when the path is replaced (= a different end).
      */
     private volatile BlockPos blockedAt;
 
-    /** {@link #blockedAt}を立てたときのプレイヤー位置。{@link #EXTEND_RETRY_MOVE_BLOCKS}参照。 */
+    /** Player position when {@link #blockedAt} was set. See {@link #EXTEND_RETRY_MOVE_BLOCKS}. */
     private volatile BlockPos blockedFrom;
 
-    // goto直後、地図の読み込み待ちで継ぎ足しの先を1レグに留めている間だけ真。ログを1回だけ出す印
+    // True only right after goto, while extension is held to one leg waiting for the map to load. Marker for logging just once
     private boolean heldForStreaming;
 
     Extend(PathfindingExecutor executor, AtomicLong generation, GenerationGate generationGate,
@@ -148,7 +148,7 @@ final class Extend {
         this.recentFailures = recentFailures;
     }
 
-    /** 目的地の変更・全引き直しで、継ぎ足しに関する歯止めを全て捨てる。 */
+    /** Discards all extension brakes on a destination change or full replan. */
     void clear() {
         blockedAt = null;
         blockedFrom = null;
@@ -156,15 +156,15 @@ final class Extend {
     }
 
     /**
-     * いま経路を末端から継ぎ足すべきか。
+     * Whether the path should be extended from its end now.
      *
-     * <p>深い先読み（{@code deepLookAheadEnabled}）では<b>末端が読み込み済みチャンクの縁に届くまで</b>
-     * 伸ばし続ける。マジックナンバーを置かずに済むうえ、歩けば新しいチャンクが読まれてまた伸びるので、
-     * そのまま「進むほど先が見える」になる。伸ばし切ったら自然に止まる。
+     * <p>With deep look-ahead ({@code deepLookAheadEnabled}), it keeps extending <b>until the end reaches the edge of the loaded
+     * chunks</b>. This avoids a magic number, and since walking loads new chunks and it extends again, it naturally becomes
+     * "the farther you go, the farther you see". Once fully extended, it stops on its own.
      *
-     * <p>浅い先読みでは従来どおり{@link PathfindingState#EXTEND_DISTANCE_BLOCKS}手前から。ただしこの値は
-     * 経路が数百ブロックある地上世界を前提にしており、{@code detailReach}が縮む次元（ネザーの実測で24）
-     * では経路長より長くなって「常に手前」＝先読みとして機能しない。経路長そのものを下限に使う。
+     * <p>With shallow look-ahead, it starts {@link PathfindingState#EXTEND_DISTANCE_BLOCKS} before the end as before. However, that value
+     * assumes a surface world with paths hundreds of blocks long, and in dimensions where {@code detailReach} shrinks (24 measured in the Nether)
+     * it exceeds the path length, becoming "always before the end" = not working as look-ahead. The path length itself is used as a lower bound.
      */
     boolean shouldExtend(Player player, PathfindingState.DisplayedPath shown, int renderRadius) {
         PathResult result = shown.result();
@@ -181,28 +181,28 @@ final class Extend {
         boolean streaming = pendingRegions > 0;
         if (heldForStreaming && !streaming) {
             heldForStreaming = false;
-            LOGGER.debug("XaeroNav: 地図が揃ったので通常の継ぎ足しに戻します");
+            LOGGER.debug("XaeroNav: Map is complete, returning to normal extension");
         }
         if (streaming
                 && PathfindingState.horizontalDistance(player.blockPosition(), end)
                         > PathfindingState.detailHorizon(renderRadius)) {
-            // goto直後、地図がまだストリーミングで届いている間は末端を1レグ先までに留める。
-            // extendLeadは読み込み済みの余地しか見ないので、放っておくとチャンクが届くたびに継ぎ足しが
-            // 連鎖し、末端が数百手先まで伸びて繋ぎ目が毎tick動く（実機ログ「101→334→467手」・
-            // 「完走した経路を手放しました」）。プレイヤーは常にdetailHorizonぶんの案内を持っているので
-            // 途切れない。pendingRegionsが0になれば通常の先読みへ戻る
+            // Right after goto, while the map is still streaming in, the end is held to one leg ahead.
+            // extendLead only looks at the loaded margin, so left alone, extensions chain every time a chunk arrives,
+            // the end grows hundreds of steps ahead, and the seam moves every tick (real-game log "101->334->467 steps",
+            // "Dropped the completed path"). The player always has detailHorizon's worth of guidance, so it
+            // doesn't break off. Returns to normal look-ahead once pendingRegions reaches 0
             if (!heldForStreaming) {
                 heldForStreaming = true;
-                LOGGER.debug("XaeroNav: 地図の読み込み中は継ぎ足しの先を{}ブロックに留めます"
-                                + " (未読み込みリージョン={}, 末端まで{}ブロック, {}ステップ)",
+                LOGGER.debug("XaeroNav: Holding extension to {} blocks while the map is loading"
+                                + " (unloaded regions={}, {} blocks to the end, {} steps)",
                         PathfindingState.detailHorizon(renderRadius), pendingRegions,
                         Math.round(PathfindingState.horizontalDistance(player.blockPosition(), end)), steps.size());
             }
             return false;
         }
         if (XaeroNavConfig.INSTANCE.deepLookAheadEnabled()) {
-            // 案内として意味のある長さぶん読み込み済みの土地が残っているときだけ伸ばす。
-            // renderRadiusぎりぎりまで許すと、目標が読み込み済み正方形の外へ出る（extendLeadを参照）
+            // Extend only while enough loaded ground remains to be meaningful as guidance.
+            // Allowing it right up to renderRadius puts the target outside the loaded square (see extendLead)
             return extendLead(player, end, renderRadius) >= PathfindingState.MIN_DETAIL_REACH_BLOCKS;
         }
         double lead = Math.min(PathfindingState.EXTEND_DISTANCE_BLOCKS, pathLength(steps));
@@ -210,48 +210,48 @@ final class Extend {
     }
 
     /**
-     * {@link #shouldExtend}が断った理由。末端まで歩いてしまった原因を実機ログから追うためだけに使う。
-     * 判定の順序は{@link #shouldExtend}と揃えること——ずれると、実際に効いた条件と違う理由が出る。
+     * Why {@link #shouldExtend} declined. Used only to trace from real-game logs why the player walked all the way to the end.
+     * Keep the order of checks the same as {@link #shouldExtend}; if they diverge, a reason other than the condition that actually applied is reported.
      */
     String extendRefusal(Player player, PathfindingState.DisplayedPath shown, int renderRadius) {
         PathResult result = shown.result();
         if (!extendableTail(result)) {
-            return "打ち切り方が" + result.termination();
+            return "termination was " + result.termination();
         }
         List<PathStep> steps = result.steps();
         BlockPos end = steps.get(steps.size() - 1).pos();
         BlockPos currentGoal = host.goal();
         if (end.equals(currentGoal)) {
-            return "末端が目的地そのもの";
+            return "end is the destination itself";
         }
         if (extendBlocked(player, end)) {
-            return "直前の継ぎ足しが失敗した末端";
+            return "end where the previous extension failed";
         }
         int pendingRegions = host.coarseRoutePendingRegions(currentGoal);
         if (pendingRegions > 0
                 && PathfindingState.horizontalDistance(player.blockPosition(), end)
                         > PathfindingState.detailHorizon(renderRadius)) {
-            return "地図の読み込み待ち (未読み込みリージョン" + pendingRegions + ")";
+            return "waiting for map to load (unloaded regions " + pendingRegions + ")";
         }
         if (XaeroNavConfig.INSTANCE.deepLookAheadEnabled()) {
-            return "読み込み済みの余地が足りない (残り" + extendLead(player, end, renderRadius)
-                    + "ブロック, 要" + PathfindingState.MIN_DETAIL_REACH_BLOCKS + ")";
+            return "not enough loaded margin (remaining " + extendLead(player, end, renderRadius)
+                    + " blocks, need " + PathfindingState.MIN_DETAIL_REACH_BLOCKS + ")";
         }
-        return "末端まで" + Math.round(PathfindingState.distanceTo(player.position(), end)) + "ブロック (継ぎ足しは"
-                + Math.round(Math.min(PathfindingState.EXTEND_DISTANCE_BLOCKS, pathLength(steps))) + "ブロック手前から)";
+        return "to the end: " + Math.round(PathfindingState.distanceTo(player.position(), end)) + " blocks (extension starts "
+                + Math.round(Math.min(PathfindingState.EXTEND_DISTANCE_BLOCKS, pathLength(steps))) + " blocks before)";
     }
 
     /**
-     * この末端から先へ伸ばしてよいか。
+     * Whether it's OK to extend beyond this end.
      *
-     * <p>「到達した経路だけ」ではない。<b>予算切れで打ち切った末端は正当なフロンティア</b>——
-     * そこまでは実際に歩ける経路が引けていて（{@code buildResult}は先行ノードの鎖を辿るだけ）、
-     * 続きを解くのに必要なのは資源であって別の場所ではない。目標を固定の地平で切る以上、
-     * 遠い目的地では予算切れが常態になるので、ここで止めると継ぎ足しが一度も起きない。
+     * <p>Not "only paths that arrived". <b>An end cut off by running out of budget is a legitimate frontier</b>:
+     * a path that can actually be walked has been drawn up to there ({@code buildResult} only follows the chain of predecessor nodes),
+     * and what's needed to solve the rest is resources, not a different place. Since the target is cut at a fixed horizon,
+     * running out of budget is the norm for distant destinations, so stopping here would mean extension never happens.
      *
-     * <p>{@code EXHAUSTED}（範囲内のオープンセットが尽きた＝行き止まりが証明済み）と
-     * {@code CANCELLED}（結果自体を捨てる）だけは別。前者から伸ばすのは同じ袋小路を掘り続けること
-     * になるので、既存の再挑戦（範囲拡大・粗い経由地チェーン）に任せる。
+     * <p>Only {@code EXHAUSTED} (the open set within range ran out = a dead end is proven) and
+     * {@code CANCELLED} (the result itself is discarded) are different. Extending from the former would mean digging the same dead end
+     * over and over, so it's left to the existing retries (range expansion, coarse via-point chain).
      */
     private static boolean extendableTail(PathResult result) {
         return switch (result.termination()) {
@@ -261,22 +261,22 @@ final class Extend {
     }
 
     /**
-     * 経路の末端から更に先へ探索してよい水平距離（ブロック）。
+     * Horizontal distance (blocks) the search may go beyond the path's end.
      *
-     * <p><b>読み込み済みチャンクはプレイヤー中心の正方形</b>なので、末端を始点にする継ぎ足しでは
-     * その半径から「プレイヤーから末端までの距離」を引いた残りしか使えない。ここを引かずに
-     * {@code renderRadius}や{@code detailReach}をそのまま末端基準の上限として渡すと、目標は
-     * プレイヤーから最大{@code renderRadius + reach}の位置＝<b>必ず未ロードチャンクの中</b>に落ちる。
-     * 未ロードのセルは{@code CellData.ABSENT}＝進入不可なので、探索はオープンセットを尽くして
-     * {@code EXHAUSTED}で終わり、{@code complete()}は決して真にならない。
+     * <p><b>Loaded chunks form a square centered on the player</b>, so an extension starting at the end can only use
+     * that radius minus "the distance from the player to the end". If this isn't subtracted and
+     * {@code renderRadius} or {@code detailReach} is passed as-is as an end-relative cap, the target lands up to
+     * {@code renderRadius + reach} from the player = <b>always inside unloaded chunks</b>.
+     * Unloaded cells are {@code CellData.ABSENT} = impassable, so the search exhausts the open set and
+     * ends with {@code EXHAUSTED}, and {@code complete()} is never true.
      */
     private static int extendLead(Player player, BlockPos end, int renderRadius) {
         return renderRadius - (int) Math.round(PathfindingState.horizontalDistance(player.blockPosition(), end));
     }
 
     /**
-     * この末端は「伸ばせなかった」印が立っていて、まだ失効していないか。
-     * {@link #EXTEND_RETRY_MOVE_BLOCKS}ぶん歩けば新しいチャンクが読まれるので、そこで印を捨てる。
+     * Whether this end is marked "couldn't extend" and the mark hasn't expired yet.
+     * Walking {@link #EXTEND_RETRY_MOVE_BLOCKS} loads new chunks, so the mark is dropped then.
      */
     private boolean extendBlocked(Player player, BlockPos end) {
         if (!end.equals(blockedAt)) {
@@ -292,7 +292,7 @@ final class Extend {
         return true;
     }
 
-    /** 経路の端から端までの直線距離。先読みの余裕を経路長より長く取らないための目安。 */
+    /** Straight-line distance from one end of the path to the other. A guide so the look-ahead margin isn't taken longer than the path. */
     private static double pathLength(List<PathStep> steps) {
         BlockPos first = steps.get(0).pos();
         BlockPos last = steps.get(steps.size() - 1).pos();
@@ -300,24 +300,24 @@ final class Extend {
     }
 
     /**
-     * いま表示している経路を、その<b>末端から</b>次の区間ぶん伸ばす（プレイヤーからではない）。
+     * Extends the currently displayed path by the next leg <b>from its end</b> (not from the player).
      *
-     * <p>区間ごとに解くこと自体は元々そうで、大局的な最適性は層1の粗いルートが持っている。
-     * だから継ぎ足しで失うものは無い——むしろ「毎回プレイヤーから、動く目標へ」引き直す方が
-     * ジグザグを生む。
+     * <p>Solving leg by leg was always the case; global optimality is held by layer 1's coarse route.
+     * So nothing is lost by extending; if anything, replanning "every time from the player toward a moving target"
+     * is what creates zigzags.
      *
-     * <p>継ぎ足しの<b>元</b>になれるのは末端が目標に到達した経路だけ（{@link #shouldExtend}）。
-     * 未到達の末端から更に伸ばすのは行き止まりの続きを掘ることになるので、既存の再挑戦
-     * （範囲拡大・粗い経由地チェーン）に任せる。一方で継ぎ足した<b>結果</b>が未到達だった場合は、
-     * そこまで引けたぶんを繋ぐ——{@link PathfindingState#recalculate}が暫定経路をそのまま見せるのと
-     * 同じ扱いで、合成後の{@code complete}がfalseになることで次からは自然に上のトリガーへ引き継がれる。
+     * <p>Only paths whose end reached the target can be the <b>source</b> of an extension ({@link #shouldExtend}).
+     * Extending further from an unreached end would mean digging on into a dead end, so it's left to the existing retries
+     * (range expansion, coarse via-point chain). On the other hand, if the <b>result</b> of the extension didn't arrive,
+     * whatever could be drawn is attached: the same treatment as {@link PathfindingState#recalculate} showing a provisional path as-is,
+     * and since the combined {@code complete} becomes false, the triggers above naturally take over from then on.
      */
     void extendPath(PathfindingState.DisplayedPath shown) {
         long lap = TickLaps.start();
         try {
             extendPathNow(shown);
         } finally {
-            TickLaps.add("継ぎ足し", lap);
+            TickLaps.add("extend", lap);
         }
     }
 
@@ -333,22 +333,22 @@ final class Extend {
         BlockPos from = steps.get(steps.size() - 1).pos();
         boolean boatAvailable = ChunkView.boatAvailable(player);
         int renderRadius = ClientCompat.renderDistance(mc.options) * 16;
-        // 継続はワーカースレッドで走るので、プレイヤー・次元はここで写し取ってから渡す
+        // The continuation runs on a worker thread, so copy the player and dimension here before passing them
         BlockPos playerAt = player.blockPosition();
         ResourceKey<Level> searchDimension = level.dimension();
         boolean ceilingDimension = level.dimensionType().hasCeiling();
 
-        // 末端基準の上限は、プレイヤー中心の読み込み済み正方形の「残り」で切る（extendLead参照）
+        // The end-relative cap is cut by the "remainder" of the loaded square centered on the player (see extendLead)
         int lead = extendLead(player, from, renderRadius);
-        // 探索の地平と、読み込み済みチャンクの残りの小さい方。どちらも地形の実測ではないので、
-        // かつての detailReach のように成功／失敗で振動することがない
+        // The smaller of the search horizon and the remainder of the loaded chunks. Neither is a terrain measurement,
+        // so it doesn't oscillate with success/failure the way detailReach once did
         int reach = Math.min(PathfindingState.detailHorizon(renderRadius), lead);
         PathfindingState.GoalGuide goalGuide = host.goalGuide(level, player, from, currentGoal, renderRadius);
         boolean navGraphGuided = goalGuide != null && goalGuide.navGraph();
         if (navGraphGuided && extendLead(player, from, NavGraphGuide.window(renderRadius))
                 < PathfindingState.MIN_DETAIL_REACH_BLOCKS) {
-            // 航法グラフで探す箱は描画距離ではなく窓で切られる（navGraphBounds）。描画距離で測った余地のまま投げると、
-            // 末端が箱の縁にある継ぎ足しが10万ノードを焼いて1歩も進まない（実機: 描画距離15のネザー・エンドで数秒おきに繰り返した）
+            // The box searched with the nav graph is cut by the window, not the render distance (navGraphBounds). Passing the margin as measured by render distance,
+            // an extension whose end is at the box's edge burns 100,000 nodes without moving a step (real game: repeated every few seconds in the Nether and End at render distance 15)
             blockExtend(from, playerAt);
             return;
         }
@@ -356,18 +356,18 @@ final class Extend {
                 host.selectDetailTarget(from, currentGoal, lead, reach, boatAvailable, false, shown.waypointIndex(),
                         ceilingDimension, navGraphGuided));
         BlockPos target = detail.target();
-        // 目的地をそのまま狙っているときは、遠くても止めない（箱が切るので探索は有限）。
-        // 中間目標を狙うときだけ「伸ばす先が読み込み済みチャンクの外」を歯止めにする。
-        // 着地点は窓のグラフのノード＝読み込み済みなので止めない
+        // When aiming directly at the destination, don't stop even if it's far (the box cuts it, so the search is finite).
+        // Only when aiming at an intermediate target is "extending beyond the loaded chunks" used as a brake.
+        // The landing point is a node of the window's graph = loaded, so don't stop
         boolean aimingAtGoal = target.equals(currentGoal);
         boolean landing = goalGuide != null && goalGuide.landing() != null
                 && target.equals(goalGuide.landing().target());
         if (target.equals(from)
                 || (!aimingAtGoal && !landing && PathfindingState.horizontalDistance(from, target) > lead)) {
-            // これ以上伸ばす先が無いか、伸ばす先が読み込み済みチャンクの外（中間目標が1つも
-            // 残りの中に無いとselectDetailTargetは本来の目的地へフォールバックする）。
-            // 歯止めを立てないと、shouldExtendが毎tick真を返し続け、そのたびに
-            // selectDetailTarget（＝メインスレッドの地図読み）を回すことになる
+            // There's nowhere further to extend, or the extension target is outside the loaded chunks (if no intermediate target
+            // lies within the remainder, selectDetailTarget falls back to the real destination).
+            // Without setting the brake, shouldExtend would keep returning true every tick, each time
+            // running selectDetailTarget (= map reads on the main thread)
             blockExtend(from, playerAt);
             return;
         }
@@ -380,7 +380,7 @@ final class Extend {
                         PathfindingState.verticalSearchMargin(level, false), renderRadius);
         long captureLap = TickLaps.start();
         ChunkView view = ChunkView.capture(level, player, bounds, tuning.movementOptions());
-        TickLaps.add("チャンク集め", captureLap);
+        TickLaps.add("chunk capture", captureLap);
         SearchLimits limits = navGraphGuided ? PathfindingState.navGraphLimits(tuning.searchLimits())
                 : tuning.searchLimits();
 
@@ -389,8 +389,8 @@ final class Extend {
         boolean reachesGoal = aimingAtGoal;
         int newWaypointIndex = reachesGoal ? -1 : detail.waypointIndex();
         boolean costToGoGuideEnabled = tuning.costToGoGuideEnabled();
-        // 手前の経路がこれから使うぶんを差し引いた資源で続きを解く。数えるのは<b>いる場所から先</b>
-        // だけ——通り過ぎたぶんは既に置き終わっていて、手持ちの枚数からも減っている
+        // Solve the continuation with resources minus what the near path will use. Only count <b>from where the player is onward</b>;
+        // what's already passed has already been placed and has also been deducted from the count on hand
         Carryover carried = new Carryover(Carryover.trailingBridgeRun(steps),
                 Carryover.placements(steps, PathProgress.INSTANCE.indexFor(shown.result()) + 1));
         PlannedCellSource futureTerrain = new PlannedCellSource(view, steps,
@@ -399,17 +399,17 @@ final class Extend {
         CompletableFuture<PathResult> extendFuture = executor.submit(
                 AvoidedCellSource.wrap(futureTerrain, recentFailures.avoided()), from, target, limits,
                 costToGoGuideEnabled, detail.goalRadius(), carried, prepared);
-        generationGate.whenStillCurrent(extendFuture, myGeneration, TickLaps.timed("受け取り/継ぎ足し", (result, error) -> {
+        generationGate.whenStillCurrent(extendFuture, myGeneration, TickLaps.timed("receive/extend", (result, error) -> {
             try {
                 host.setComputing(false);
                 if (error != null) {
                     if (!(error instanceof CancellationException)) {
-                        LOGGER.error("XaeroNav: 経路の延長に失敗しました", error);
+                        LOGGER.error("XaeroNav: Failed to extend the path", error);
                     }
                     return;
                 }
-                // 継ぎ足す先が入れ替わっていたら捨てる。世代が同じでも、目的地の変更や逸脱で
-                // displayedごと差し替わっていることがある
+                // Discard if what we were extending has been replaced. Even with the same generation, displayed may have
+                // been replaced wholesale by a destination change or deviation
                 PathfindingState.DisplayedPath current = host.displayed();
                 if (current != shown || !currentGoal.equals(host.goal())) {
                     return;
@@ -417,50 +417,50 @@ final class Extend {
                 PathfindingState.logSearchReach(from, target, result);
                 List<PathStep> tail = result.steps();
                 if (result.complete()) {
-                    // 継ぎ足しが狙った先まで届いた＝前へ出られている。詰みの目印はここで落とす。
-                    // 届かなかったことは逆に詰みの根拠にしない——継ぎ足しの失敗はたいていその先が
-                    // まだ未ロードなだけで、表示中の経路はそのまま歩ける。「ここから目的地へ行けるか」
-                    // に答えているのはプレイヤーから引き直す側（recalculate）だけ
+                    // The extension reached its target = we can move forward. Clear the stuck marker here.
+                    // Conversely, not reaching isn't grounds for being stuck: extension failures are usually just that
+                    // what's beyond isn't loaded yet, and the displayed path can still be walked. Only the side replanning from the player
+                    // (recalculate) answers "can we get to the destination from here"
                     host.noteSearchOutcome(playerAt, PathfindingState.endOf(result, from), result);
                 }
                 if (tail.isEmpty()) {
-                    // 1歩も進めなかった。手前の経路はそのまま残し、通常の再計算に委ねる
+                    // Couldn't advance a single step. Keep the near path as-is and leave it to normal recalculation
                     blockExtend(from, playerAt);
                     return;
                 }
                 if (!result.complete()
                         && PathfindingState.horizontalDistance(from, tail.get(tail.size() - 1).pos())
                                 < PathfindingState.MIN_EXTEND_PROGRESS_BLOCKS) {
-                    // 予算切れの末端からは伸ばしてよいが、ほとんど前へ出ていないならそれ以上は無駄。
-                    // selectFallbackは「始点から5ブロック以上離れた最良点」を返すので、行き止まりの
-                    // 袋小路でも毎回わずかに進んだ経路が返る——歯止めが無いと数ブロックずつ這い続ける
+                    // Extending from an out-of-budget end is OK, but if it barely moved forward, going further is pointless.
+                    // selectFallback returns "the best point at least 5 blocks from the start", so even in a dead-end
+                    // pocket a slightly advanced path comes back every time; without a brake it keeps crawling a few blocks at a time
                     //
-                    // 繋がずに捨てる。completeは末尾の区間のものなので、這うだけの尻尾を繋ぐと
-                    // 完走していた経路まで未到達扱いになり、「打ち切られた末端に近づいたら引き直す」に
-                    // 落ちて経路全体が作り直される。数ブロックの得のために証明済みの経路を失う
+                    // Discard without attaching. complete belongs to the last leg, so attaching a merely crawling tail
+                    // would treat even a path that had arrived as unreached, falling into "replan when nearing a cut-off end"
+                    // and rebuilding the whole path. A proven path would be lost for a gain of a few blocks
                     blockExtend(from, playerAt);
                     return;
                 }
-                // 未到達でも引けたぶんは繋ぐ。recalculate側は元々そうしている（暫定経路）。
-                // 捨ててしまうと、読み込み済みの縁まで引けていた経路を毎回無駄にすることになる
-                // 繋ぎ目はここ（手前の末端）。落ち着いてから解き直す（{@link SeamRepair}）
+                // Even if unreached, attach whatever could be drawn. The recalculate side already does this (provisional path).
+                // Throwing it away would waste, every time, a path that had been drawn up to the loaded edge
+                // The seam is here (the near end). Re-solve it once things settle ({@link SeamRepair})
                 long loopLap = TickLaps.start();
                 SeamRepair.Loop loop = noteLoop(steps, tail, PathProgress.INSTANCE.indexFor(current.result()) + 1,
                         target, result, navGraphGuided);
-                TickLaps.add("輪の検出", loopLap);
+                TickLaps.add("loop detection", loopLap);
                 long retreatLap = TickLaps.start();
                 noteRetreatingTail(from, tail.get(tail.size() - 1).pos(), currentGoal, target, result, goalGuide);
-                TickLaps.add("遠ざかりの点検", retreatLap);
+                TickLaps.add("retreat check", retreatLap);
                 seamRepair.queue(from);
                 if (loop != null) {
                     seamRepair.queueLoop(loop);
                 }
-                RouteExplain.log("継ぎ足し", level, from, target, currentGoal, result, prepared,
+                RouteExplain.log("extend", level, from, target, currentGoal, result, prepared,
                         goalGuide == null ? null : goalGuide.costToGo(), view,
                         tuning.movementOptions(), renderRadius);
                 long appendLap = TickLaps.start();
                 host.setDisplayed(append(current, result, newWaypointIndex, reachesGoal));
-                TickLaps.add("継ぎ足しの連結", appendLap);
+                TickLaps.add("extension append", appendLap);
                 blockedAt = null;
                 blockedFrom = null;
             } finally {
@@ -470,11 +470,11 @@ final class Extend {
     }
 
     /**
-     * 継ぎ足した区間の末端が、継ぎ足す前の末端より目的地から遠いなら、そのときガイドが両端をどう見ていたかを1行残す。
+     * If the extended leg's end is farther from the destination than the end before extension, logs one line on how the guide saw both ends at that time.
      *
-     * <p>継ぎ足しの終点選びはガイドの上で必ず目的地へ近づく点を選ぶので、遠ざかる向きへ伸びたなら
-     * 「ガイドが遠回りの方を近いと評価した」のか「窓の外の推定で比べていた」のかのどちらか。
-     * 両端の値と、それが窓の中で実際に辿った値か（{@link WindowField#measuredInWindow}）を並べると1行で割れる。
+     * <p>Extension's endpoint selection always picks a point that gets closer to the destination on the guide, so if it extended in a receding direction,
+     * either "the guide rated the detour as closer" or "it was comparing estimates outside the window".
+     * Listing both ends' values alongside whether they were actually traced inside the window ({@link WindowField#measuredInWindow}) settles it in one line.
      */
     private static void noteRetreatingTail(BlockPos from, BlockPos end, BlockPos currentGoal, BlockPos target,
             PathResult result, PathfindingState.@Nullable GoalGuide goalGuide) {
@@ -487,17 +487,17 @@ final class Extend {
             return;
         }
         NavGraphGuide.logOffThread(() -> {
-            String guide = "無し";
+            String guide = "none";
             if (goalGuide != null) {
                 CostToGo costToGo = goalGuide.costToGo();
-                guide = "%s 継ぎ足す前=%d%s 継ぎ足し後=%d%s, 継ぎ足す前の値の出どころ=%s, 継ぎ足し後の値の出どころ=%s".formatted(
-                        goalGuide.navGraph() ? "航法グラフ" : "3D粗層など",
+                guide = "%s before=%d%s after=%d%s, source of value before=%s, source of value after=%s".formatted(
+                        goalGuide.navGraph() ? "nav graph" : "3D coarse layer etc.",
                         Math.round(costToGo.estimate(from.getX(), from.getY(), from.getZ())), windowNote(costToGo, from),
                         Math.round(costToGo.estimate(end.getX(), end.getY(), end.getZ())), windowNote(costToGo, end),
                         NavGraphGuide.origin(costToGo, from), NavGraphGuide.origin(costToGo, end));
             }
-            LOGGER.debug("XaeroNav: 継ぎ足しが目的地から遠ざかりました (継ぎ足す前の末端={}で目的地まで{}, 継ぎ足し後の末端={}で{}, "
-                            + "{}ステップ/{}, 狙った先={}, ガイド={})",
+            LOGGER.debug("XaeroNav: Extension moved away from the destination (end before={} at {} from destination, end after={} at {}, "
+                            + "{} steps/{}, target={}, guide={})",
                     from.toShortString(), Math.round(fromLeft), end.toShortString(), Math.round(endLeft),
                     result.steps().size(), result.termination(), target.toShortString(), guide);
         });
@@ -507,17 +507,17 @@ final class Extend {
         if (!(costToGo instanceof WindowField field)) {
             return "";
         }
-        return field.measuredInWindow(pos.getX(), pos.getZ()) ? "(窓の中)" : "(窓の外の推定)";
+        return field.measuredInWindow(pos.getX(), pos.getZ()) ? "(in window)" : "(estimate outside window)";
     }
 
     /**
-     * 継ぎ足す区間が既存の経路の手前の近くへ戻ってくるなら1行残す。継ぎ足しは末端から先だけを解くので、
-     * 戻ってきても手前の経路は見直されず、線が輪を描いたまま表示される。輪は後で繋ぎ目の解き直しが
-     * 切ることもあるが、「なぜ継ぎ足しが戻る向きへ伸びたか」はそこからは分からない。
-     * 経路に沿って最も多くのステップを遠回りしている組を出す。
+     * Logs one line if the extended leg comes back near the earlier part of the existing path. Extension only solves beyond the end,
+     * so even if it comes back the near path isn't reviewed, and the line is displayed still drawing a loop. The loop may later be cut by
+     * seam repair, but "why the extension extended in a returning direction" can't be learned from there.
+     * Reports the pair that detours the most steps along the path.
      *
-     * @param fromIndex プレイヤーの次に踏むステップの添字。歩き終えた所へ戻る輪は切り落とせない
-     * @return 輪の両端（{@link SeamRepair#queueLoop}へ渡して切り落とす）。輪が無ければ{@code null}
+     * @param fromIndex index of the step the player steps on next. Loops back to already-walked places can't be cut off
+     * @return both ends of the loop (passed to {@link SeamRepair#queueLoop} to cut it off). {@code null} if there's no loop
      */
     private static SeamRepair.@Nullable Loop noteLoop(List<PathStep> route, List<PathStep> tail, int fromIndex,
             BlockPos target, PathResult result, boolean navGraphGuided) {
@@ -526,8 +526,8 @@ final class Extend {
         if (found == null) {
             return null;
         }
-        LOGGER.debug("XaeroNav: 継ぎ足しが経路の手前へ戻ってきました (継ぎ足しの{}ステップ目={}, 経路の{}ステップ目={}の近く, "
-                        + "経路に沿って{}ステップの輪, 経路={}ステップ, 継ぎ足し={}ステップ/{}, 末端={}, 狙った先={}, 航法グラフ={})",
+        LOGGER.debug("XaeroNav: Extension came back toward the earlier path (extension step {}={}, near path step {}={}, "
+                        + "loop of {} steps along the path, path={} steps, extension={} steps/{}, end={}, target={}, nav graph={})",
                 found.rejoin(), tail.get(found.rejoin()).pos().toShortString(), found.entry(),
                 route.get(found.entry()).pos().toShortString(), found.gap(), route.size(), tail.size(),
                 result.termination(), route.get(route.size() - 1).pos().toShortString(), target.toShortString(),
@@ -536,10 +536,10 @@ final class Extend {
     }
 
     /**
-     * この末端からは伸ばせなかった、と記録する。{@link #EXTEND_RETRY_MOVE_BLOCKS}ぶん歩けば失効する。
+     * Records that this end couldn't be extended. Expires after walking {@link #EXTEND_RETRY_MOVE_BLOCKS}.
      *
-     * <p>ここで「経路を引き直しました」の通知は出さない。手前の経路は1ブロックも変わっておらず、
-     * ユーザーから見て変化が無いのに警告だけ点滅することになる。
+     * <p>No "Path recalculated" notification is shown here. The near path hasn't changed by a single block, so
+     * only the warning would flash even though nothing changed from the user's point of view.
      */
     private void blockExtend(BlockPos end, BlockPos playerAt) {
         blockedAt = end;
@@ -547,20 +547,20 @@ final class Extend {
     }
 
     /**
-     * 継ぎ足した経路を組み立てる。ステップ列は連結し、区間の境目を記録する。
+     * Assembles the extended path. Concatenates the step lists and records the leg boundaries.
      *
-     * <p>{@link PathProgress}へ引き継ぎを伝えるのはここ。継ぎ足しは手前の添字を変えないので
-     * 対応づけはそのまま通用するが、伝えないと別経路とみなされて全体走査に落ちる。
+     * <p>This is where the carry-over is communicated to {@link PathProgress}. Extension doesn't change earlier indices,
+     * so the mapping stays valid, but without telling it, it's treated as a different path and falls back to a full scan.
      */
     private static PathfindingState.DisplayedPath append(PathfindingState.DisplayedPath current, PathResult tail,
                                                            int tailWaypointIndex, boolean reachesGoal) {
         List<PathStep> merged = new ArrayList<>(current.result().steps());
         merged.addAll(tail.steps());
-        // 継ぎ足す区間は手前がどこを通ったかを知らないので、繋ぎ目で同じ位置を踏み直しうる
+        // The extended leg doesn't know where the near part went, so it may step on the same position again at the seam
         PathLoops.Folded folded = PathLoops.fold(merged);
-        // completeは「この経路が狙った先まで届いたか」であって「最終目的地に着いたか」ではない
-        // （中間目標へ向かう経路も、その中間目標に届いていればcomplete）。ここを reachesGoal に
-        // すると、継ぎ足した瞬間に未到達扱いになってshouldExtendが止まり、1回しか伸びなくなる
+        // complete means "did this path reach its target", not "did it reach the final destination"
+        // (a path toward an intermediate target is also complete if it reached that target). Making this reachesGoal
+        // would treat it as unreached the moment it's extended, stopping shouldExtend so it only extends once
         PathResult combined = new PathResult(List.copyOf(folded.steps()), tail.termination(),
                 tail.expandedNodes(), tail.distinctNodes(), tail.limitsHeld());
         List<PathfindingState.PathSegment> segments = new ArrayList<>();

@@ -6,43 +6,43 @@ import java.util.List;
 import net.minecraft.core.BlockPos;
 
 /**
- * 探索内部での移動の種類。{@link MovementType}が表示用の粗い分類なのに対し、こちらは
- * 到着ノードから「身体が通過したセル」と「設置したブロック」を復元できる粒度を持つ。
+ * Kinds of movement inside the search. Whereas {@link MovementType} is a coarse classification for display, this one has
+ * enough granularity to reconstruct, from the arrival node, "the cells the body passed through" and "the blocks placed".
  *
- * <p>探索中はこの列挙値だけをノードに持たせ、{@link BlockPos}のリストは最終経路を組み立てる
- * ときにだけ生成する。探索中に作ると、展開したノードの数だけ捨てられるリストが生まれる。
+ * <p>During the search, nodes hold only this enum value; the {@link BlockPos} lists are generated only when assembling
+ * the final path. Creating them during the search would produce throwaway lists for every expanded node.
  */
 enum MoveKind {
 
     TRAVERSE(MovementType.TRAVERSE),
     DIAGONAL(MovementType.TRAVERSE),
     BRIDGE(MovementType.TRAVERSE),
-    /** 足元にブロックを置いて真上へ登る（Pillar）。{@link #BRIDGE}の垂直版。 */
+    /** Place a block underfoot and climb straight up (Pillar). The vertical version of {@link #BRIDGE}. */
     PILLAR(MovementType.ASCEND),
     SWIM(MovementType.SWIM),
     SWIM_UP(MovementType.SWIM),
     SWIM_DOWN(MovementType.SWIM),
     SWIM_DESCEND(MovementType.SWIM),
-    /** 水中を進みながら1マス浮上する。{@link #SWIM_UP}の斜め版で、これが無いと浮上がL字になる。 */
+    /** Rise one block while moving through water. The diagonal version of {@link #SWIM_UP}; without it, surfacing becomes L-shaped. */
     SWIM_ASCEND(MovementType.SWIM),
-    /** 岸からボートを出して乗り、水面へ漕ぎ出す。{@code BOAT_LAUNCH_TICKS}を払うのはここだけ。 */
+    /** Launch a boat from the shore, board it, and row out onto the water. Only this pays {@code BOAT_LAUNCH_TICKS}. */
     BOAT_ENTER(MovementType.BOAT),
-    /** 水面をボートで進む。 */
+    /** Travel across the water surface by boat. */
     BOAT_PADDLE(MovementType.BOAT),
     CLIMB(MovementType.CLIMB),
     CLIMB_UP(MovementType.CLIMB),
     CLIMB_DOWN(MovementType.CLIMB),
     ASCEND(MovementType.ASCEND),
     DESCEND(MovementType.DESCEND),
-    /** 斜め1マスで1段登る（近距離レパートリー拡充）。カーディナル2手の分解を1手に短縮する。 */
+    /** Climb one step with one diagonal block (expanding the short-range repertoire). Shortens a two-move cardinal decomposition to one move. */
     DIAGONAL_ASCEND(MovementType.ASCEND),
-    /** 斜め1マスで1段降りる。{@link #DIAGONAL_ASCEND}と同じ狙い。 */
+    /** Descend one step with one diagonal block. Same aim as {@link #DIAGONAL_ASCEND}. */
     DIAGONAL_DESCEND(MovementType.DESCEND),
     FALL(MovementType.DESCEND),
     FALL_TO_WATER(MovementType.SWIM),
-    /** 安全高さを超える落下。着地時に体力が減る。 */
+    /** A fall beyond the safe height. Health drops on landing. */
     FALL_DAMAGE(MovementType.FALL_DAMAGE),
-    /** 安全高さを超える落下を、着地寸前の水バケツ設置で無傷にする。 */
+    /** A fall beyond the safe height, made harmless by placing a water bucket just before landing. */
     FALL_MLG(MovementType.FALL_MLG),
     JUMP(MovementType.JUMP);
 
@@ -56,26 +56,26 @@ enum MoveKind {
         return movementType;
     }
 
-    /** この移動で身体が通過する（＝掘削が必要になりうる）セル。両端の座標から復元する。 */
+    /** Cells the body passes through in this move (= that may need digging). Reconstructed from the two endpoints. */
     List<BlockPos> bodyCells(int fromX, int fromY, int fromZ, int x, int y, int z) {
         return switch (this) {
-            // 一段降りる移動は、降りる手前の2マスと降りた先の1マスを通過する
+            // A one-step descent passes through the two cells before dropping and the one cell after
             case DESCEND, SWIM_DESCEND, DIAGONAL_DESCEND ->
                     List.of(new BlockPos(x, y + 1, z), new BlockPos(x, y + 2, z), new BlockPos(x, y, z));
-            // ジャンプ中は踏み切り地点の頭上1マスも通る
+            // While jumping, it also passes through the cell above the takeoff point
             case ASCEND, DIAGONAL_ASCEND -> List.of(new BlockPos(x, y, z), new BlockPos(x, y + 1, z),
                     new BlockPos(fromX, fromY + 2, fromZ));
-            // 落下は着地点から踏み切り地点の頭上までの縦一列を通り抜ける
+            // A fall passes through the vertical column from the landing point up to above the takeoff point
             case FALL, FALL_TO_WATER, FALL_DAMAGE, FALL_MLG -> column(x, y, fromY + 1, z);
-            // 跳び越える隙間も身体が通る。ここが塞がれたら経路は成立しない
+            // The body also passes through the gap being jumped. If it's blocked, the path doesn't hold
             case JUMP -> jumpCells(fromX, fromZ, x, y, z);
             default -> List.of(new BlockPos(x, y, z), new BlockPos(x, y + 1, z));
         };
     }
 
     /**
-     * 踏み切り地点の次のマスから着地点までの、身体2セル分。跳躍はカーディナル方向限定なので
-     * dx・dzのどちらかは必ず0で、歩数は水平距離の和で求まる。
+     * Two body cells each, from the cell after the takeoff point to the landing point. Jumps are cardinal-only, so
+     * one of dx/dz is always 0, and the step count is the sum of the horizontal distances.
      */
     private static List<BlockPos> jumpCells(int fromX, int fromZ, int x, int y, int z) {
         int stepX = Integer.signum(x - fromX);
@@ -98,8 +98,8 @@ enum MoveKind {
     }
 
     /**
-     * 移動のためにブロックを置く座標。それ以外の移動では{@code null}。
-     * Bridgeは進行先の床、Pillarは踏み台にする元の足元で、どちらも到着地点の1つ下になる。
+     * Position where a block is placed for this move. {@code null} for other moves.
+     * For Bridge it's the floor ahead, for Pillar the original footing used as a step; both are one below the arrival point.
      */
     BlockPos placedBlockPos(int x, int y, int z) {
         return this == BRIDGE || this == PILLAR ? new BlockPos(x, y - 1, z) : null;

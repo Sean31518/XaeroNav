@@ -3,29 +3,29 @@ package net.prason.xaeronav.pathfinding.navgraph;
 import java.util.Arrays;
 
 /**
- * 距離を一定幅のバケットに切った優先度付きキュー（Dial法）。バケットの中は積んだ逆順に出す。
+ * A priority queue that cuts distances into fixed-width buckets (Dial's algorithm). Within a bucket, items come out in reverse push order.
  *
- * <p>幅を辺の値段の最小値以下にすれば、あるバケットから緩和した先は必ず後ろのバケットへ積まれるので、
- * バケットを前から空にしていくだけでDijkstraの確定順になる。二分ヒープより1回の出し入れが軽い。
+ * <p>If the width is at most the minimum edge price, relaxing from a bucket always pushes into a later bucket, so
+ * just emptying buckets from the front gives Dijkstra's settle order. Each push/pop is lighter than with a binary heap.
  */
 final class BucketQueue {
 
-    /** バケットごとの先頭の要素。空なら-1。 */
+    /** First element of each bucket. -1 if empty. */
     private int[] head = new int[0];
     private int[] value = new int[1 << 12];
     private int[] next = new int[1 << 12];
-    /** 一度でも使った枠の数。 */
+    /** Number of slots ever used. */
     private int size;
     /**
-     * 出し終えた枠をつないだ先頭。空なら-1。窓の逆Dijkstraは積む回数がノードの1.0〜1.5倍あるが、同時に積まれているのは
-     * その一部なので、出した枠を使い回せば配列は小さくて済む。
+     * Head of the chain of slots already popped. -1 if empty. The window's reverse Dijkstra pushes 1.0-1.5x as many times as there are nodes, but only
+     * part of them are queued at once, so reusing popped slots keeps the arrays small.
      */
     private int free = -1;
-    /** {@link #head}のうち使っている範囲。 */
+    /** Range of {@link #head} in use. */
     private int buckets;
 
     /**
-     * @param items 同時に積まれている数の見込み。足りなければ1.25倍ずつ伸ばす
+     * @param items expected number queued at once. Grows by 1.25x when insufficient
      */
     void clear(int bucketCount, int items) {
         if (value.length < items) {
@@ -64,7 +64,7 @@ final class BucketQueue {
         head[bucket] = entry;
     }
 
-    /** @return バケットが空なら-1 */
+    /** @return -1 if the bucket is empty */
     int pop(int bucket) {
         int entry = head[bucket];
         if (entry < 0) {
@@ -76,7 +76,7 @@ final class BucketQueue {
         return value[entry];
     }
 
-    /** @return {@code from}以降で最初の空でないバケット。無ければ-1 */
+    /** @return the first non-empty bucket at or after {@code from}, or -1 if none */
     int nextNonEmpty(int from) {
         for (int b = from; b < buckets; b++) {
             if (head[b] >= 0) {

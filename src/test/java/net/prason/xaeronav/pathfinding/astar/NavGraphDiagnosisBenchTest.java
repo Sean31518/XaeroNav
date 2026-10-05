@@ -20,13 +20,13 @@ import net.prason.xaeronav.pathfinding.world.StanceFinder;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
-/** 航法グラフのガイドの値を、最適経路の上で完璧な値・閉包で作った窓のガイドと並べる診断。 */
+/** Diagnostic that lines up the nav graph guide's values along the optimal path with the perfect values and with a window guide built from the closure. */
 @Tag("bench")
 class NavGraphDiagnosisBenchTest {
 
     private static final int WINDOW = 160;
 
-    /** 歩き通しの区間ごとに、閉包の窓と航法グラフのガイドを同じ点で引き比べる。 */
+    /** For each leg of the walk-through, compares the closure window and the nav graph guide at the same points. */
     @Test
     void compareLegByLeg() throws IOException {
         FakeCells cells = TerrainFixture.load("/overworld_wide.txt.gz", bounds -> FakeCells.empty(bounds)
@@ -71,12 +71,12 @@ class NavGraphDiagnosisBenchTest {
                             }
                             if (gap > worst) {
                                 worst = gap;
-                                worstAt = String.format(Locale.ROOT, "%d,%d,%d 閉包%.0f 航法%.0f", x, y, z, a, b);
+                                worstAt = String.format(Locale.ROOT, "%d,%d,%d closure %.0f nav %.0f", x, y, z, a, b);
                             }
                         }
                     }
                 }
-                System.out.printf(Locale.ROOT, "区間%d 位置%s 5%%超の食い違い%d/%d 最大%.2f(%s) 再構築%d%n", leg[0]++,
+                System.out.printf(Locale.ROOT, "leg %d pos %s mismatches over 5%% %d/%d max %.2f(%s) rebuilds %d%n", leg[0]++,
                         player.toShortString(), worse, sampled, worst, worstAt, refreshed.sectionsBuilt());
                 cached[0] = field;
                 last[0] = player;
@@ -85,7 +85,7 @@ class NavGraphDiagnosisBenchTest {
         };
         ProgressiveWalk.Trace trace = ProgressiveWalk.trace(cells, start, goal, WINDOW, ProgressiveWalk.Mode.EXTEND,
                 ProgressiveWalk.Aim.GOAL, guide, 1.0);
-        System.out.printf(Locale.ROOT, "歩き通し %.3f倍 %s%n",
+        System.out.printf(Locale.ROOT, "walk-through %.3fx %s%n",
                 ProgressiveWalk.cost(trace.steps()) / ProgressiveWalk.fullVisibilityBest(cells, start, goal),
                 trace.stopped());
     }
@@ -120,13 +120,13 @@ class NavGraphDiagnosisBenchTest {
         full.build(cells, fullKeys, 0, fullKeys.length, everything, () -> false);
         WindowField fullField = full.field(start.getX(), start.getZ(), WINDOW, far, () -> false);
 
-        System.out.printf(Locale.ROOT, "%s→%s 最適%.0f 閉包窓の辺? 航法グラフ辺%d(全視界で組むと%d)%n",
+        System.out.printf(Locale.ROOT, "%s→%s optimal %.0f closure window edges? nav graph edges %d (%d when built with full view)%n",
                 start.toShortString(), goal.toShortString(),
                 optimal.steps().stream().mapToDouble(PathStep::cost).sum(), field.edges(), fullField.edges());
         List<PathStep> steps = optimal.steps();
         for (int i = 0; i < steps.size(); i += Math.max(1, steps.size() / 40)) {
             BlockPos p = steps.get(i).pos();
-            System.out.printf(Locale.ROOT, "  #%d %s 完璧%.0f 閉包の窓%.0f 航法グラフ%.0f 全視界で組んだ航法グラフ%.0f 層1%.0f 窓の中%b%n",
+            System.out.printf(Locale.ROOT, "  #%d %s perfect %.0f closure window %.0f nav graph %.0f nav graph built with full view %.0f layer 1 %.0f in window %b%n",
                     i, p.toShortString(), ClosureGraph.exact(closure, perfect, p.getX(), p.getY(), p.getZ()),
                     closureWindow.estimate(p.getX(), p.getY(), p.getZ()), field.estimate(p.getX(), p.getY(), p.getZ()),
                     fullField.estimate(p.getX(), p.getY(), p.getZ()), layer1.estimate(p.getX(), p.getY(), p.getZ()),

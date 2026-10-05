@@ -1,6 +1,6 @@
 package net.prason.xaeronav.platform.forge;
 
-// 1.21.6以降（Forge 56以降）はForgeMod・ForgeClientSetupが受け持つ
+// From 1.21.6 (Forge 56) on, ForgeMod and ForgeClientSetup handle this
 //? if forge && <1.21.6 {
 /*//? if >=1.20.6 {
 import net.minecraft.resources.ResourceLocation;
@@ -44,11 +44,11 @@ import net.prason.xaeronav.config.XaeroNavConfig;
 @Mod(XaeroNav.MOD_ID)
 public final class ForgeEntry {
 
-    // 設定画面の登録はFMLClientSetupEvent内で行うので、そこまでコンテキストを持ち越す
+    // The config screen is registered inside FMLClientSetupEvent, so keep the context until then
     private static FMLJavaModLoadingContext context;
 
-    // コンストラクタへのコンテキスト注入はForge 47.x以降。1.20.1用のjarは1.20.0（Forge 46）でも動かすので、
-    // 1.21未満は引数なしで自分から取る（get()はForge 47で削除予定の印が付くが、46にはこれしかない）
+    // Injecting the context into the constructor needs Forge 47.x or later. The 1.20.1 jar also runs on 1.20.0 (Forge 46),
+    // so below 1.21 we fetch it ourselves without arguments (get() is marked for removal in Forge 47, but 46 has nothing else)
     @SuppressWarnings("removal")
     //? if >=1.21 {
     public ForgeEntry(FMLJavaModLoadingContext context) {
@@ -82,12 +82,12 @@ public final class ForgeEntry {
         }
     }
 
-    // クライアント専用クラス（Minecraft/RenderLevelStageEvent等）への参照はFMLClientSetupEvent内に
-    // 閉じ込める。dist=CLIENTでガードすることで、専用サーバー上でもこのクラス自体がロードされない
-    // （NeoForgeEntryと同じ構造。Forgeの@Modにはdist引数が無いのでここでガードする）。
-    // bus=MODは明示が要る——NeoForgeと違いForgeの@EventBusSubscriberは既定がFORGE busで、
-    // 省略するとFMLClientSetupEvent/RegisterKeyMappingsEvent/AddGuiOverlayLayersEvent
-    // （すべてmod event busでしか発火しない）が一切呼ばれない
+    // Keep references to client-only classes (Minecraft, RenderLevelStageEvent, etc.) inside FMLClientSetupEvent.
+    // Guarding with dist=CLIENT means this class is not even loaded on a dedicated server
+    // (same structure as NeoForgeEntry; Forge's @Mod has no dist argument, so we guard here).
+    // bus=MOD must be explicit: unlike NeoForge, Forge's @EventBusSubscriber defaults to the FORGE bus, and
+    // if omitted FMLClientSetupEvent/RegisterKeyMappingsEvent/AddGuiOverlayLayersEvent
+    // (all of which fire only on the mod event bus) are never called
     @Mod.EventBusSubscriber(modid = XaeroNav.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
     public static final class ClientSetup {
 
@@ -97,18 +97,18 @@ public final class ForgeEntry {
             XaeroNavClient.reloadBlockLists();
             MinecraftForge.EVENT_BUS.register(new ForgeEvents());
 
-            // Modsの一覧からもキーバインド（XaeroNavKeys.OPEN_CONFIG_SCREEN）と同じ画面を開けるようにする
+            // Let the Mods list open the same screen as the key binding (XaeroNavKeys.OPEN_CONFIG_SCREEN)
             //? if >=1.21 {
             context.registerExtensionPoint(ConfigScreenHandler.ConfigScreenFactory.class,
                     () -> new ConfigScreenHandler.ConfigScreenFactory(
                             parent -> new XaeroNavConfigScreen(parent)));
             //?} else if >=1.19 {
-            /^// Forge 48（1.20.2）のConfigScreenFactoryには(Screen)だけを取るコンストラクタが無い
+            /^// Forge 48 (1.20.2)'s ConfigScreenFactory has no constructor taking only (Screen)
             ModLoadingContext.get().registerExtensionPoint(ConfigScreenHandler.ConfigScreenFactory.class,
                     () -> new ConfigScreenHandler.ConfigScreenFactory(
                             (minecraft, parent) -> new XaeroNavConfigScreen(parent)));
             ^///?} else if >=1.17 {
-            /^// Forge 40（1.18.2）にはRegisterKeyMappingsEventもConfigScreenHandlerも無い
+            /^// Forge 40 (1.18.2) has neither RegisterKeyMappingsEvent nor ConfigScreenHandler
             XaeroNavKeys.register(ClientRegistry::registerKeyBinding);
             ModLoadingContext.get().registerExtensionPoint(ConfigGuiHandler.ConfigGuiFactory.class,
                     () -> new ConfigGuiHandler.ConfigGuiFactory(
@@ -127,11 +127,12 @@ public final class ForgeEntry {
         }
         //?}
 
-        // ForgeにはNeoForgeのRenderGuiEvent.Postが無い。HUD描画をオーバーレイとして登録する形で
-        // 差し込む（ForgeとNeoForge/Fabricの構造差はここだけ）。登録イベント自体が1.20.6以降と1.20.4以前で
-        // 別クラス（AddGuiOverlayLayersEvent / RegisterGuiOverlaysEvent）かつシグネチャも違う。
-        // 1.20.6はForge 50.2.1でAddGuiOverlayLayersEventが入るまでHUDを差し込むイベントが無い。
-        // 1.18.2以前にはオーバーレイの登録イベントが無く、ForgeEventsがRenderGameOverlayEventで描く
+        // Forge has no NeoForge-style RenderGuiEvent.Post. We hook in HUD rendering by registering it
+        // as an overlay (this is the only structural difference between Forge and NeoForge/Fabric). The registration
+        // event itself is a different class on 1.20.6+ vs 1.20.4 and earlier (AddGuiOverlayLayersEvent /
+        // RegisterGuiOverlaysEvent), with different signatures too.
+        // 1.20.6 has no event to hook the HUD until AddGuiOverlayLayersEvent arrived in Forge 50.2.1.
+        // 1.18.2 and earlier have no overlay registration event, so ForgeEvents draws via RenderGameOverlayEvent
         //? if >=1.19 {
         @SubscribeEvent
         //? if >=1.20.6 {
@@ -140,7 +141,7 @@ public final class ForgeEntry {
                     //? if >=1.21 {
                     ResourceLocation.fromNamespaceAndPath(XaeroNav.MOD_ID, "hud"),
                     //?} else {
-                    /^// ForgeはResourceLocationのコンストラクタを削除予定にしている
+                    /^// Forge has marked the ResourceLocation constructor for removal
                     ResourceLocation.tryBuild(XaeroNav.MOD_ID, "hud"),
                     ^///?}
                     (graphics, partialTick) -> XaeroNavClient.HUD.render(graphics));

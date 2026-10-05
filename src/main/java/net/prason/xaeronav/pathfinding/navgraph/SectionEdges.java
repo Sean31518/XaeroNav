@@ -13,37 +13,37 @@ import net.prason.xaeronav.pathfinding.astar.SectionMoves;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 1セクションから出る辺。出発点（ノード）はセクション内の位置のビットで持ち、番号は位置の昇順。
- * 辺は{@link MoveTable}の番号だけを持つ。
+ * Edges leaving one section. Origins (nodes) are held as bits of their position within the section, numbered in
+ * ascending position order. Edges hold only {@link MoveTable} indices.
  *
- * <p>ノードの辺の並び（移動の番号の列）はセクションの中で同じものが多い（実測: 異なる並びはノードの6〜30%）ので、
- * 異なる並びだけを覚え、ノードは並びの番号を持つ。同じ出発点・行き先の辺は種類違いで何本も生成されるので、
- * いちばん安いものだけ残す。
+ * <p>A node's edge sequence (its list of move indices) is often identical to others within a section (measured: distinct sequences are 6-30% of nodes),
+ * so only distinct sequences are stored and each node holds a sequence index. Edges with the same origin and destination are generated many times
+ * by different move kinds, so only the cheapest is kept.
  *
- * <p>ガイドは行き先から逆にたどるので入る辺も要る。入る辺の約9割は同じセクションの中で閉じ、それはこのセクションの辺だけで
- * 決まるので、組むときに一度だけ作って覚える（ガイドのたびに組むと、ガイドの組み立て用の配列でいちばん大きくなる）。
- * セクションをまたぐ入る辺はガイドのたびに組む。
+ * <p>The guide traces backward from the destination, so incoming edges are needed too. About 90% of incoming edges are closed within the same
+ * section and are determined by this section's edges alone, so they're built once and stored at build time (building them per guide makes them
+ * the largest of the guide-construction arrays). Incoming edges that cross sections are built per guide.
  */
 final class SectionEdges {
 
-    /** セクション内の位置 {@code lx | lz << 4 | ly << 8} のビット（4096）を収める語数。 */
+    /** Number of words holding the bits (4096) of in-section positions {@code lx | lz << 4 | ly << 8}. */
     private static final int WORDS = SectionMoves.SIZE * SectionMoves.SIZE * SectionMoves.SIZE / 64;
 
     static final SectionEdges EMPTY = new SectionEdges(new long[WORDS], new char[0], new int[1], new char[0], 0,
             new char[0], new int[1], new char[0], 0);
 
     private final long[] nodeBits;
-    /** 語ごとの、それより前の語にあるノードの数。 */
+    /** Per word, the number of nodes in the words before it. */
     private final char[] rank;
-    /** ノード{@code i}の辺の並びの番号。 */
+    /** Sequence index of node {@code i}'s edges. */
     private final char[] pattern;
-    /** 並び{@code p}は {@code move[patternStart[p]..patternStart[p+1])}。 */
+    /** Sequence {@code p} is {@code move[patternStart[p]..patternStart[p+1])}. */
     private final int[] patternStart;
     final char[] move;
     final int nodes;
-    /** 並びを共有する前の辺の数。 */
+    /** Number of edges before sequences are shared. */
     private final int edges;
-    /** セクションの中から入る辺。持ち方は出る辺と同じ。 */
+    /** Edges coming in from inside the section. Stored the same way as outgoing edges. */
     private final char[] inPattern;
     private final int[] inPatternStart;
     final char[] inMove;
@@ -73,7 +73,7 @@ final class SectionEdges {
         return edges;
     }
 
-    /** ノード{@code node}の辺は {@code move[first(node)..end(node))}。 */
+    /** Node {@code node}'s edges are {@code move[first(node)..end(node))}. */
     int first(int node) {
         return patternStart[pattern[node]];
     }
@@ -82,12 +82,12 @@ final class SectionEdges {
         return patternStart[pattern[node] + 1];
     }
 
-    /** 並びを共有する前の、セクションの中から入る辺の数。 */
+    /** Number of edges coming in from inside the section, before sequences are shared. */
     int inSize() {
         return inEdges;
     }
 
-    /** ノード{@code node}へセクションの中から入る辺は {@code inMove[inFirst(node)..inEnd(node))}。 */
+    /** Edges coming into node {@code node} from inside the section are {@code inMove[inFirst(node)..inEnd(node))}. */
     int inFirst(int node) {
         return inPatternStart[inPattern[node]];
     }
@@ -101,14 +101,14 @@ final class SectionEdges {
                 | Math.floorMod(y, SectionMoves.SIZE) << 8;
     }
 
-    /** セクション内の位置のノード番号。ノードでなければ-1。 */
+    /** Node index of an in-section position. -1 if it isn't a node. */
     int nodeOf(int local) {
         long word = nodeBits[local >> 6];
         long bit = 1L << local;
         return (word & bit) == 0 ? -1 : rank[local >> 6] + Long.bitCount(word & (bit - 1));
     }
 
-    /** ノードの位置を番号順に{@code positions}へ書く。 */
+    /** Writes node positions to {@code positions} in index order. */
     void positions(int[] positions, int offset) {
         int id = offset;
         for (int w = 0; w < WORDS; w++) {
@@ -120,13 +120,13 @@ final class SectionEdges {
         }
     }
 
-    /** 覚えている配列のおおよそのバイト数。 */
+    /** Approximate byte size of the stored arrays. */
     long bytes() {
         return 8L * WORDS + 2L * WORDS + 2L * pattern.length + 4L * patternStart.length + 2L * move.length
                 + 2L * inPattern.length + 4L * inPatternStart.length + 2L * inMove.length + 64;
     }
 
-    /** @return 打ち切られたら{@code null} */
+    /** @return {@code null} if cut off */
     static @Nullable SectionEdges build(CellSource cells, SectionShell shell, MoveTable moves, int sectionX,
                                         int sectionY, int sectionZ, int goalX, int goalZ, BooleanSupplier cancelled) {
         Scratch w = SCRATCH.get();
@@ -141,7 +141,7 @@ final class SectionEdges {
                     int ddz = BlockPos.getZ(toPos) - fz;
                     if (ddx < Byte.MIN_VALUE || ddx > Byte.MAX_VALUE || ddz < Byte.MIN_VALUE || ddz > Byte.MAX_VALUE
                             || ddy < Short.MIN_VALUE || ddy > Short.MAX_VALUE) {
-                        throw new IllegalStateException("移動が長すぎて辺に収まらない: " + BlockPos.of(fromPos)
+                        throw new IllegalStateException("move too long to fit in an edge: " + BlockPos.of(fromPos)
                                 + " → " + BlockPos.of(toPos));
                     }
                     w.add(local(fx, fy, fz), MoveTable.offsetKey(ddx, ddy, ddz), edgeCost);
@@ -153,7 +153,7 @@ final class SectionEdges {
         if (raw == 0) {
             return EMPTY;
         }
-        // 出発点（4096通り）で数え上げて並べる。辺は1セクションで数万本あり、ハッシュ表に積むより速い
+        // Count and lay out by origin (4096 possibilities). There are tens of thousands of edges per section, faster than piling them into a hash table
         int[] count = w.count;
         Arrays.fill(count, 0);
         for (int i = 0; i < raw; i++) {
@@ -172,7 +172,7 @@ final class SectionEdges {
             offset[at] = w.offset[i];
             cost[at] = w.cost[i];
         }
-        // 出発点の中を相対座標の昇順（符号なし）に並べ、同じ行き先はいちばん安いものだけ残す。出発点あたりの辺は数十本なので挿入ソートでよい
+        // Sort within each origin by relative coordinate ascending (unsigned), keeping only the cheapest for the same destination. Tens of edges per origin, so insertion sort is fine
         long[] nodeBits = new long[WORDS];
         int nodeCount = 0;
         int n = 0;
@@ -210,7 +210,7 @@ final class SectionEdges {
             groupEnd[l] = n;
         }
 
-        // 移動の種類はセクションあたり数百なので、表へは種類ごとに1回だけ問い合わせる
+        // There are hundreds of move kinds per section, so query the table only once per kind
         Long2IntOpenHashMap distinct = w.distinct;
         distinct.clear();
         int[] edgeDistinct = w.edgeDistinct(n);
@@ -227,7 +227,7 @@ final class SectionEdges {
         char[] ids = new char[kinds];
         moves.intern(w.kindOffset, w.kindCost, kinds, ids);
 
-        // 並びを番号順に積み、同じ並びは先に積んだものを指す
+        // Stack sequences in index order; an identical sequence points to the one stacked first
         char[] all = w.all(n);
         for (int i = 0; i < n; i++) {
             all[i] = ids[edgeDistinct[i]];
@@ -245,8 +245,8 @@ final class SectionEdges {
         int[] sharedStart = Arrays.copyOf(patternStart, patterns + 1);
         char[] sharedMove = Arrays.copyOf(all, patternStart[patterns]);
 
-        // セクションの中で閉じる辺を行き先ごとに並べる。出発点の昇順に積むと、行き先の中では相対座標の降順になる
-        // （両端ともセクション内なら、位置の差が相対座標そのもの）ので、同じ移動の組はいつも同じ並びになる
+        // Lay out edges closed within the section by destination. Stacking in ascending origin order gives descending relative coordinates within a destination
+        // (when both ends are in the section, the position difference is the relative coordinate itself), so the same set of moves always yields the same sequence
         int[] inCount = count;
         Arrays.fill(inCount, 0);
         int previous = 0;
@@ -293,7 +293,7 @@ final class SectionEdges {
                 Arrays.copyOf(patternStart, inPatterns + 1), Arrays.copyOf(inAll, patternStart[inPatterns]), inside);
     }
 
-    /** 位置{@code from}から相対座標{@code offsetKey}へ動いた先が同じセクションのノードなら、その位置。でなければ-1。 */
+    /** If moving from position {@code from} by relative coordinate {@code offsetKey} lands on a node in the same section, that position. Otherwise -1. */
     private static int insideTarget(long[] nodeBits, int from, int offsetKey) {
         int x = (from & 15) + (byte) (offsetKey >> 24);
         int z = (from >> 4 & 15) + (byte) (offsetKey >> 16);
@@ -306,14 +306,14 @@ final class SectionEdges {
     }
 
     /**
-     * ノード{@code k}の並び {@code all[nodeEnd[k-1]..nodeEnd[k])}（{@code k=0}は0から）のうち同じものを共有する。
-     * {@code pattern}へ並びの番号を書き、異なる並びは{@code all}の前へ詰めて{@code patternStart}に区切りを書く。
+     * Shares identical sequences among node {@code k}'s sequence {@code all[nodeEnd[k-1]..nodeEnd[k])} ({@code k=0} starts at 0).
+     * Writes sequence indices to {@code pattern}, packs distinct sequences to the front of {@code all}, and writes boundaries to {@code patternStart}.
      *
-     * @return 異なる並びの数
+     * @return the number of distinct sequences
      */
     private static int share(char[] all, int[] nodeEnd, int nodeCount, char[] pattern, int[] patternStart,
                              int[] table) {
-        // 表は半分以上空くように取る。セクションごとに埋め直すので、ノードが少ないセクションで表全体を埋めない
+        // Size the table so it stays more than half empty. It's refilled per section, so sections with few nodes don't fill the whole table
         int mask = (Integer.highestOneBit(nodeCount) << 2) - 1;
         Arrays.fill(table, 0, mask + 1, -1);
         int patterns = 0;
@@ -335,7 +335,7 @@ final class SectionEdges {
                 }
             }
             if (found < 0) {
-                // 積んだ並びは all の前へ詰め直す。詰め先は読み終えた位置より前なので、まだ読んでいない並びは壊さない
+                // Repack stacked sequences to the front of all. The destination is before the position already read, so sequences not yet read aren't corrupted
                 System.arraycopy(all, from, all, stored, to - from);
                 patternStart[patterns] = stored;
                 stored += to - from;
@@ -349,10 +349,10 @@ final class SectionEdges {
         return patterns;
     }
 
-    /** セクション内の位置の数。 */
+    /** Number of positions within a section. */
     private static final int LOCALS = SectionMoves.SIZE * SectionMoves.SIZE * SectionMoves.SIZE;
 
-    /** セクションを組むたびに作り直すと、辺の数ぶんのごみになる。組み終えたセクションはこれを参照しない。 */
+    /** Rebuilding this per section would produce garbage proportional to the edge count. Finished sections don't reference it. */
     private static final ThreadLocal<Scratch> SCRATCH = ThreadLocal.withInitial(Scratch::new);
 
     private static final class Scratch {

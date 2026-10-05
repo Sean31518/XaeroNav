@@ -8,9 +8,9 @@ import org.junit.jupiter.api.Test;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 
 /**
- * {@link Heuristic}の軸別下限値が式どおりに積算されているかの検証。
- * A*はヒューリスティックが実コストの下限（admissible）であることに最適性を依存しているので、
- * ここが実コストを上回る方向へ壊れると、経路が最適から静かにずれても誰も気付けない。
+ * Verifies that {@link Heuristic}'s per-axis lower bounds accumulate according to the formula.
+ * A* relies on the heuristic being a lower bound on actual cost (admissible) for optimality, so if this
+ * breaks toward exceeding actual cost, nobody notices paths quietly drifting from optimal.
  */
 class HeuristicTest {
 
@@ -30,7 +30,7 @@ class HeuristicTest {
 
     @Test
     void pureDiagonalMovementUsesOctileDistance() {
-        // dx == dz のときは斜め移動だけで踏破できるので、n歩ぶんのDIAGONALに一致するはず
+        // When dx == dz it can be covered by diagonal moves alone, so it should equal n steps of DIAGONAL
         assertEquals(4 * DIAGONAL, Heuristic.estimate(0, 64, 0, 4, 64, 4), 1e-9);
     }
 
@@ -51,81 +51,81 @@ class HeuristicTest {
     }
 
     /**
-     * 水平移動を伴わない純粋な昇りは、高さを1段稼ぐ全ての移動のうち最安のもので見積もる。
+     * A pure climb with no horizontal movement is estimated by the cheapest of all moves that gain one level of height.
      *
-     * <p>陸の{@code Ascend}は水平1歩を伴うが、その1歩は折り返せば戻せるので正味の水平変位0でも
-     * 使える。それでも最安は{@code SwimUp}——陸の上下には
-     * {@link ActionCosts#STEP_TRANSITION_TICKS}が乗るのに対し、泳ぎの上昇はジャンプではないので
-     * 乗らない。
+     * <p>A land {@code Ascend} involves one horizontal step, but that step can be undone by turning back, so it
+     * can be used even with zero net horizontal displacement. Even so the cheapest is {@code SwimUp}: land
+     * ascents and descents carry {@link ActionCosts#STEP_TRANSITION_TICKS}, while swimming up isn't a jump and
+     * doesn't.
      */
     @Test
     void pureVerticalAscendUsesTheCheapestMoveThatGainsHeight() {
         double cheapest = Math.min(ActionCosts.ASCEND_ONE_BLOCK, ActionCosts.SWIM_UP_ONE_BLOCK);
         assertEquals(ActionCosts.SWIM_UP_ONE_BLOCK, cheapest, 1e-9,
-                "陸のAscendの方が安いなら、この見積もりの根拠が変わっている");
+                "if land Ascend is cheaper, the basis of this estimate has changed");
         assertEquals(5 * cheapest, Heuristic.estimate(0, 64, 0, 0, 69, 0), 1e-9);
     }
 
     /**
-     * 純粋な昇りの下限が、それを実現する手段のどれよりも高くなってはいけない——admissibilityの核心。
-     * 梯子・遊泳・Pillarだけでなく<b>折り返し階段</b>（{@code Ascend}の往復）も手段に含める。
+     * The lower bound for a pure climb must never exceed any means of achieving it: the core of admissibility.
+     * Not only ladders, swimming and Pillar but also <b>switchback stairs</b> (back-and-forth {@code Ascend}) count as means.
      */
     @Test
     void pureVerticalAscendNeverExceedsAnyRealMoveThatAchievesIt() {
         double estimate = Heuristic.estimate(0, 64, 0, 0, 65, 0);
         assertTrue(estimate <= ActionCosts.ASCEND_ONE_BLOCK + 1e-9,
-                "折り返し階段（Ascendの往復）より高く見積もってはいけない");
+                "must not estimate higher than switchback stairs (back-and-forth Ascend)");
         assertTrue(estimate <= ActionCosts.LADDER_UP_ONE_BLOCK + 1e-9);
         assertTrue(estimate <= ActionCosts.SWIM_UP_ONE_BLOCK + 1e-9,
-                "SwimUpより高く見積もってはいけない");
+                "must not estimate higher than SwimUp");
         assertTrue(estimate <= ActionCosts.ASCEND_ONE_BLOCK + ActionCosts.PLACE_BLOCK_OVERHEAD_TICKS + 1e-9,
-                "Pillar（Ascend相当+設置オーバーヘッド）より高く見積もってはいけない");
+                "must not estimate higher than Pillar (Ascend equivalent + placement overhead)");
     }
 
     /**
-     * 折り返し階段。水平変位1・高さ3は{@code Ascend}3手（うち1手は水平を戻す）で登れるので、
-     * 見積もりが3手ぶんを超えてはいけない。梯子を下限に置いていた頃はここが 21.65 &gt; 13.90 で
-     * 非許容だった。
+     * Switchback stairs. Horizontal displacement 1, height 3 can be climbed with 3 {@code Ascend} moves (one of
+     * which undoes the horizontal), so the estimate must not exceed 3 moves. Back when ladders were used as the
+     * lower bound, this was 21.65 &gt; 13.90 and inadmissible.
      */
     @Test
     void switchbackStaircaseIsNotOverEstimated() {
         double threeAscends = 3 * ActionCosts.ASCEND_ONE_BLOCK;
         assertTrue(Heuristic.estimate(0, 64, 0, 1, 67, 0) <= threeAscends + 1e-9,
-                "折り返し階段の実コストを上回ってはいけない");
+                "must not exceed the actual cost of switchback stairs");
     }
 
     /**
-     * 締めた下降の下限が、実際に生成されうる下降移動のどれよりも高くなってはいけない。
-     * ネザー・落下ダメージ許容offなら落ちられるのは安全高さ(3マス)までなので、下限は
-     * {@code fallCost(3)/3}。これは1マス落下(9.321)・梯子(6.667)・遊泳(9.091)のどれも下回る。
+     * The tightened descent lower bound must never exceed any descent move that can actually be generated.
+     * In the Nether with fall damage tolerance off, you can only fall up to the safe height (3 blocks), so the
+     * lower bound is {@code fallCost(3)/3}. This is below a 1-block fall (9.321), ladders (6.667) and swimming (9.091).
      *
-     * <p>比べる相手が{@code DESCEND_ONE_BLOCK}ではなく{@code fallCost(1)}なのは、ここが
-     * <b>水平変位0</b>の見積もりだから。{@code Descend}は隣のマスへ降りる移動なので真下には使えず、
-     * 真下へ1マス降りる手は落下・梯子・潜降しかない。
+     * <p>It's compared against {@code fallCost(1)} rather than {@code DESCEND_ONE_BLOCK} because this is an
+     * estimate with <b>zero horizontal displacement</b>. {@code Descend} moves down to the neighbouring block, so
+     * it can't be used straight down; the only ways one block straight down are falling, ladders and diving.
      */
     @Test
     void aTightenedDescentBoundStaysUnderEveryRealDescent() {
         double tightened = ActionCosts.fallCost(ActionCosts.SAFE_FALL_BLOCKS) / ActionCosts.SAFE_FALL_BLOCKS;
         double estimate = Heuristic.estimate(0, 64, 0, 0, 63, 0, tightened);
 
-        assertTrue(estimate <= ActionCosts.fallCost(1) + 1e-9, "1マス落下より高く見積もってはいけない");
-        assertTrue(estimate <= ActionCosts.LADDER_DOWN_ONE_BLOCK + 1e-9, "梯子より高く見積もってはいけない");
-        assertTrue(estimate <= ActionCosts.SWIM_DOWN_ONE_BLOCK + 1e-9, "遊泳より高く見積もってはいけない");
+        assertTrue(estimate <= ActionCosts.fallCost(1) + 1e-9, "must not estimate higher than a 1-block fall");
+        assertTrue(estimate <= ActionCosts.LADDER_DOWN_ONE_BLOCK + 1e-9, "must not estimate higher than a ladder");
+        assertTrue(estimate <= ActionCosts.SWIM_DOWN_ONE_BLOCK + 1e-9, "must not estimate higher than swimming");
         for (int drop = 2; drop <= ActionCosts.SAFE_FALL_BLOCKS; drop++) {
             assertTrue(Heuristic.estimate(0, 64, 0, 0, 64 - drop, 0, tightened)
                             <= ActionCosts.fallCost(drop) + 1e-9,
-                    drop + "マス落下より高く見積もってはいけない");
+                    drop + "-block fall: must not estimate higher than that");
         }
     }
 
-    /** 締めた下限は、緩い既定より実際に大きいこと（効いていることの確認）。 */
+    /** The tightened lower bound is actually larger than the loose default (confirming it has effect). */
     @Test
     void theTightenedBoundIsActuallyTighter() {
         double tightened = ActionCosts.fallCost(ActionCosts.SAFE_FALL_BLOCKS) / ActionCosts.SAFE_FALL_BLOCKS;
 
         assertTrue(Heuristic.estimate(0, 74, 0, 0, 64, 0, tightened)
                         > 10 * Heuristic.estimate(0, 74, 0, 0, 64, 0),
-                "締めた下限が既定より10倍以上大きくなっているはず");
+                "the tightened lower bound should be at least 10x the default");
     }
 
     @Test
@@ -135,8 +135,8 @@ class HeuristicTest {
     }
 
     /**
-     * 斜めのショートカット分（{@code DIAGONAL_SAVING}）が効きすぎて、水平のヒューリスティックが
-     * 実際のoctile距離の最小コスト（カーディナルのみで進んだ場合の下限）を下回ってはいけない。
+     * The diagonal shortcut ({@code DIAGONAL_SAVING}) must not take so much effect that the horizontal heuristic
+     * drops below the minimum cost of the actual octile distance (the lower bound when moving only cardinally).
      */
     @Test
     void horizontalEstimateNeverExceedsWalkingEachAxisSeparately() {
@@ -144,32 +144,32 @@ class HeuristicTest {
             for (int dz = 0; dz <= 20; dz += 3) {
                 double estimate = Heuristic.estimate(0, 64, 0, dx, 64, dz);
                 assertTrue(estimate <= STRAIGHT * (dx + dz) + 1e-9,
-                        "dx=" + dx + " dz=" + dz + "でカーディナル移動の合計コストを上回ってはいけない");
+                        "dx=" + dx + " dz=" + dz + ": must not exceed the total cost of cardinal moves");
             }
         }
     }
 
     /**
-     * 水平1マス＋上昇1マスを1手でこなす{@code Ascend}の実コストは{@code ASCEND_ONE_BLOCK}
-     * （水平移動時間と跳躍時間の大きい方）なので、ヒューリスティックはそれを上回ってはいけない。
-     * 現行の実装は水平成分と垂直成分を独立に加算しているため、この検証は現状では失敗する
-     * （回帰テスト。Heuristicを軸別の相乗り計算に直すことで通す）。
+     * The actual cost of {@code Ascend}, doing one block horizontal + one block up in a single move, is
+     * {@code ASCEND_ONE_BLOCK} (the larger of horizontal travel time and jump time), so the heuristic must not
+     * exceed it. The current implementation adds the horizontal and vertical components independently, so this
+     * check currently fails (regression test; passes once Heuristic is fixed to a per-axis piggyback calculation).
      */
     @Test
     void cardinalAscendEstimateDoesNotExceedItsRealCost() {
         double estimate = Heuristic.estimate(0, 64, 0, 1, 65, 0);
         assertTrue(estimate <= ActionCosts.ASCEND_ONE_BLOCK + 1e-9,
-                "1手のAscendの実コストを上回ってはいけない: estimate=" + estimate);
+                "must not exceed the actual cost of a single Ascend: estimate=" + estimate);
     }
 
     /**
-     * 斜め1マスで1段登る{@code DiagonalAscend}についても同様。カーディナル分を独立加算する
-     * 現行実装ではさらに大きく過大評価になる。
+     * Likewise for {@code DiagonalAscend}, climbing one level over one diagonal block. The current implementation,
+     * adding the cardinal part independently, overestimates even more.
      */
     @Test
     void diagonalAscendEstimateDoesNotExceedItsRealCost() {
         double estimate = Heuristic.estimate(0, 64, 0, 1, 65, 1);
         assertTrue(estimate <= ActionCosts.DIAGONAL_ASCEND_ONE_BLOCK + 1e-9,
-                "1手のDiagonalAscendの実コストを上回ってはいけない: estimate=" + estimate);
+                "must not exceed the actual cost of a single DiagonalAscend: estimate=" + estimate);
     }
 }

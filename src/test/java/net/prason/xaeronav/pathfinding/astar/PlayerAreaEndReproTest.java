@@ -12,45 +12,45 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * <b>ユーザーが「エンドの島渡りだけできない」と報告した地点そのもの</b>を保存データから取り込んで、
- * 実機と同じ探索を回す（{@code run/saves/test/DIM1/region/r.1.2.mca}、x700-1000 z1050-1350）。
+ * Loads <b>the exact spot where the user reported "only island-hopping in the End fails"</b> from save data and
+ * runs the same search as in-game ({@code run/saves/test/DIM1/region/r.1.2.mca}, x700-1000 z1050-1350).
  *
- * <p><b>症状</b>: 長距離ルートは出ている（実機ログ「奈落・溶岩混じりを避ける道が見つからないため…」）
- * のに、層3の経路が<b>1〜4ステップ・橋0本</b>しか出ず「終端に到着」を0.05秒ごとに繰り返していた。
+ * <p><b>Symptom</b>: the long-range route was found (in-game log "No path avoiding void/lava found, so ...")
+ * but the layer 3 path came out as only <b>1-4 steps with 0 bridges</b>, repeating "arrived at end" every 0.05 seconds.
  *
- * <p><b>原因</b>: プレイヤーは24339列の巨大な島の突端におり、最寄りの他の島は
- * 北東99・東130ブロック。<b>島の上ではヒューリスティックがほぼ一定になる</b>——どこにいても
- * ゴールは奈落の向こうで、残りの見積もりは「縁までの距離＋橋の値段」だから差が付きにくい。
- * 重み1.5の探索はそこで幅優先に近くなり、橋に手を伸ばす前に島を舐め尽くして予算が尽きる。
- * 橋1マスは徒歩10マス相当なので、100マスの奈落に届くには徒歩1000マス分の陸地を先に展開し終える
- * 必要がある。
+ * <p><b>Cause</b>: the player was at the tip of a huge 24339-column island, and the nearest other islands were
+ * 99 blocks northeast and 130 east. <b>On the island the heuristic is nearly constant</b>: wherever you are,
+ * the goal is across the void and the remaining estimate is "distance to the edge + bridge price", so it barely varies.
+ * A weight-1.5 search turns almost breadth-first there and exhausts the budget scouring the island before reaching for a bridge.
+ * One bridge block costs as much as 10 blocks of walking, so reaching a 100-block void requires first expanding
+ * 1000 blocks' worth of land.
  *
- * <p><b>測定</b>（北東99ブロックの島 839,57,1081 へ、予算60万ノード）:
+ * <p><b>Measurements</b> (to the island 99 blocks northeast at 839,57,1081, budget 600k nodes):
  *
  * <pre>
- * 重み1.5 ガイドあり → 未到達      重み2.5 ガイドあり → 到達（19.8万）
- * 重み2.0 ガイドあり → 未到達      重み3.0 ガイドあり → 到達（10.7万）
- * 重み1.5〜3.0 ガイド<b>なし</b> → すべて未到達
+ * weight 1.5 with guide -> not reached    weight 2.5 with guide -> reached (198k)
+ * weight 2.0 with guide -> not reached    weight 3.0 with guide -> reached (107k)
+ * weight 1.5-3.0 <b>without</b> guide -> none reached
  * </pre>
  *
- * <p><b>cost-to-goガイドが無いとどの重みでも解けない。</b>島の縁へ導いているのはガイドの方で、
- * 重みはそれを信じる度合いを上げているだけ。直したのは
- * {@code PathfindingExecutor#retryGreedier}（予算を焼き切って届かなければ重みを上げて再挑戦）。
+ * <p><b>Without the cost-to-go guide no weight solves it.</b> The guide is what leads to the island's edge;
+ * the weight only raises how much it is trusted. The fix was
+ * {@code PathfindingExecutor#retryGreedier} (when the budget burns out without reaching, retry with a higher weight).
  *
- * <p>ここが落ちたら症状が再発している。
+ * <p>If this fails, the symptom has come back.
  */
 @Tag("slow")
 class PlayerAreaEndReproTest {
 
-    /** 実機ログの現在地。24339列の島（x700-877 z1118-1350）の北の突端。 */
+    /** The current position from the in-game log. The northern tip of the 24339-column island (x700-877 z1118-1350). */
     private static final BlockPos PLAYER = new BlockPos(769, 51, 1151);
 
-    /** 実機の深い探索（{@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}＝通常の6倍）。 */
+    /** The in-game deep search ({@code PathfindingState#DEEP_SEARCH_BUDGET_FACTOR} = 6x regular). */
     private static final SearchLimits DEEP = new SearchLimits(600_000, 15_000, 1.5);
 
     private static FakeCells terrain() throws IOException {
-        // 実機の設定（run/config/xaeronav-client.toml）に合わせる。
-        // プレイヤーはクリエイティブなので置ける・持ち物の予算は無制限
+        // Matches the in-game config (run/config/xaeronav-client.toml).
+        // The player is in creative, so placing is allowed and the inventory budget is unlimited
         return TerrainFixture.load("/end_player_area.txt.gz", bounds -> FakeCells.empty(bounds)
                 .canPlaceBlocks(true)
                 .maxBridgeRunBlocks(96)
@@ -62,11 +62,11 @@ class PlayerAreaEndReproTest {
 
     private static String describe(PathResult r) {
         long bridges = r.steps().stream().filter(PathStep::bridging).count();
-        return String.format("%s steps=%d 橋=%d 節点=%d",
-                r.complete() ? "到達" : r.termination(), r.steps().size(), bridges, r.expandedNodes());
+        return String.format("%s steps=%d bridges=%d nodes=%d",
+                r.complete() ? "reached" : r.termination(), r.steps().size(), bridges, r.expandedNodes());
     }
 
-    /** ユーザーが報告した島。ここへの経路は下の3本すべてが対象にする。 */
+    /** The island the user reported. All three tests below target the path to it. */
     private static final BlockPos NEAREST_ISLAND = new BlockPos(839, 0, 1081);
 
     private static BlockPos onGround(FakeCells terrain, BlockPos p) {
@@ -74,34 +74,34 @@ class PlayerAreaEndReproTest {
     }
 
     /**
-     * 近隣の島へ、実機の深い探索と同じ条件で渡れること。
+     * Crossing to nearby islands under the same conditions as the in-game deep search.
      *
-     * <p>{@link #NEAREST_ISLAND}はここに含めない——下の絞った予算のテストが<b>より厳しい予算で
-     * 同じ探索</b>を回すので、こちらに置くと同じ経路を2回払うだけになる。
+     * <p>{@link #NEAREST_ISLAND} isn't included here: the reduced-budget test below runs <b>the same search
+     * with a tighter budget</b>, so including it here would just pay for the same path twice.
      */
     @Test
     void crossesToTheNeighbouringIslands() throws Exception {
         FakeCells terrain = terrain();
-        System.out.printf("%n=== 島渡り（始点=%s・実機の深い探索と同条件）===%n", PLAYER);
-        // 東130 / 北東163ブロック。どちらも橋の上限96より長い奈落を挟む
+        System.out.printf("%n=== island-hopping (start=%s, same conditions as in-game deep search) ===%n", PLAYER);
+        // 130 east / 163 northeast. Both have a void longer than the bridge cap of 96 in between
         for (int[] t : new int[][] {{899, 1151}, {912, 1072}}) {
             BlockPos goal = onGround(terrain, new BlockPos(t[0], 0, t[1]));
             double dist = Math.hypot(goal.getX() - PLAYER.getX(), goal.getZ() - PLAYER.getZ());
             PathResult r = new PathfindingExecutor().submit(terrain(), PLAYER, goal, DEEP, true, 0).get();
-            System.out.printf("  %-12s 距離%-5.0f %s%n", goal.getX() + "," + goal.getZ(), dist, describe(r));
-            assertTrue(r.complete(), goal + " へ届かない: " + describe(r));
+            System.out.printf("  %-12s dist %-5.0f %s%n", goal.getX() + "," + goal.getZ(), dist, describe(r));
+            assertTrue(r.complete(), "can't reach " + goal + ": " + describe(r));
             assertTrue(r.steps().stream().anyMatch(PathStep::bridging),
-                    goal + " へ橋を架けずに渡っている＝地形が対照になっていない");
+                    goal + " crossed without bridging, so the terrain isn't a valid control");
         }
     }
 
     /**
-     * <b>深い探索より絞った予算でも届くこと。</b>{@link #DEEP}の3分の2のノード予算で
-     * {@link #NEAREST_ISLAND}へ橋を架けて渡れる——余裕を持って解けているかを見る番人。
-     * ここが落ちるなら、実機で予算や時間が削られたときに真っ先に詰む。
+     * <b>Reachable even with a tighter budget than the deep search.</b> With two thirds of {@link #DEEP}'s node budget
+     * it can bridge across to {@link #NEAREST_ISLAND}: a guard that checks it's solved with margin.
+     * If this fails, it's the first thing to get stuck in-game when budget or time gets cut.
      *
-     * <p>絞るのは<b>ノード数</b>で、壁時計ではない。{@code retryGreedier}の各再挑戦は残り時間で
-     * 区切られるので、時間で絞るとCIの実行機の速さで結果が変わる（実際にそれでCIが落ちていた）。
+     * <p>What's reduced is the <b>node count</b>, not wall-clock time. Each {@code retryGreedier} retry is bounded by
+     * the remaining time, so reducing by time makes the result depend on the CI runner's speed (CI actually failed because of that).
      */
     @Test
     void crossesUnderABudgetTighterThanTheDeepSearch() throws Exception {
@@ -111,16 +111,16 @@ class PlayerAreaEndReproTest {
 
         long began = System.currentTimeMillis();
         PathResult r = new PathfindingExecutor().submit(terrain, PLAYER, goal, tight, true, 0).get();
-        System.out.printf("%n=== 絞った予算(40万ノード) ===%n  %s (%dms)%n",
+        System.out.printf("%n=== reduced budget (400k nodes) ===%n  %s (%dms)%n",
                 describe(r), System.currentTimeMillis() - began);
-        assertTrue(r.complete(), "絞った予算では届かない: " + describe(r));
+        assertTrue(r.complete(), "can't reach with the reduced budget: " + describe(r));
         assertTrue(r.steps().stream().anyMatch(PathStep::bridging),
-                "橋を架けずに渡っている＝地形が対照になっていない: " + describe(r));
+                "crossed without bridging, so the terrain isn't a valid control: " + describe(r));
     }
 
     /**
-     * <b>対照。</b>重みを上げなければ同じ予算で届かない——これが崩れると、
-     * {@code retryGreedier}が無くても解ける地形を検証していることになり、テストが空振りする。
+     * <b>Control.</b> Without raising the weight, the same budget doesn't reach. If this breaks,
+     * we'd be verifying terrain solvable even without {@code retryGreedier}, and the test would be a no-op.
      */
     @Test
     void theSameSearchFailsWithoutRaisingTheWeight() throws Exception {
@@ -129,9 +129,9 @@ class PlayerAreaEndReproTest {
 
         PathResult bare = new PathfindingExecutor().submitRaw(terrain, PLAYER, goal, DEEP).get();
 
-        System.out.printf("%n=== 対照（重み1.5のまま・再挑戦なし）===%n  %s%n", describe(bare));
+        System.out.printf("%n=== control (weight stays 1.5, no retry) ===%n  %s%n", describe(bare));
         assertTrue(!bare.complete(),
-                "重み1.5のままでも届いてしまう＝この地形では retryGreedier の効果を確かめられない: "
+                "reaches even at weight 1.5, so the effect of retryGreedier can't be checked on this terrain: "
                         + describe(bare));
     }
 }

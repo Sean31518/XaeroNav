@@ -21,43 +21,45 @@ import net.prason.xaeronav.util.MathSupport;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
- * Xaero非依存のワールド内描画。
- * Xaero連携（世界地図・ミニマップアダプタ）が崩れてもこれだけは生き残る構成にする。
+ * Xaero-independent in-world rendering.
+ * Structured so that this part survives even if the Xaero integration (world map and minimap adapters) breaks.
  *
- * <p>経路は平坦な1px線ではなく、進行方向に直交する正方形断面を押し出した「筒」として描画する
- * （どの角度から見ても太さのある立体として視認できるようにするため）。
+ * <p>The path is drawn not as a flat 1px line but as a "tube" extruded from a square cross-section
+ * perpendicular to the direction of travel (so it reads as a solid with thickness from any angle).
  *
- * <p>描画位置・色・ハイライト対象は{@link PathGeometry}が経路ごとに1度だけ計算する。ここでの
- * 毎フレームの仕事は、カメラから遠い区間を落として頂点を積むことだけに限る。頂点計算も
- * {@link Vec3}を作らずスカラー演算で行う（区間ごとに十数個のベクトルを作ると、
- * 長い経路では毎フレーム数万オブジェクトになる）。
+ * <p>Draw positions, colors, and highlight targets are computed once per path by {@link PathGeometry}. The
+ * per-frame work here is limited to dropping segments far from the camera and emitting vertices. Vertex
+ * math is also done with scalars rather than {@link Vec3} (creating a dozen or so vectors per segment
+ * would mean tens of thousands of objects per frame on long paths).
  */
 public final class PathRenderer {
 
-    /** 筒の断面半幅（ブロック）。以前の1px線より少し太い程度に留める。 */
+    /** Half-width of the tube cross-section (blocks). Kept only slightly thicker than the old 1px line. */
     private static final double TUBE_RADIUS = 0.03;
 
     /**
-     * 泳ぐ区間の線を、カメラの周りこの半径だけ描かない（ブロック）。
+     * Radius around the camera within which swim segments are not drawn (blocks).
      *
-     * <p>水面を泳いでいる間、線は{@code PathGeometry#SWIM_LINE_DEPTH}ぶん下にあって視界を
-     * 塞がないが、<b>その深さまで潜れば線は再び目の高さに来る</b>。泳ぎは息継ぎのたびに上下
-     * するので、これは例外ではなく常態。手前の1〜2マスに案内としての中身は無い（外洋の線は
-     * ただの直線）ので、自分の周りだけ抜く。
+     * <p>While swimming on the surface, the line sits {@code PathGeometry#SWIM_LINE_DEPTH} below and
+     * doesn't block the view, but <b>dive to that depth and the line is at eye level again</b>. Swimming
+     * bobs up and down with every breath, so this is the norm, not the exception. The nearest 1-2 blocks
+     * carry no guidance content (an open-ocean line is just a straight line), so only the area around you
+     * is cut out.
      *
-     * <p>抜くのは沈めて描いた区間だけ。陸の線は足元に載っていることそのものが情報で、
-     * 抜くと「どのブロックの上を歩くのか」が消える。
+     * <p>Only segments drawn sunk are cut. For land lines, sitting at your feet is the information itself;
+     * cutting them would lose "which blocks you walk on".
      */
     private static final double SWIM_NEAR_CLIP_BLOCKS = 2.5;
 
     /**
-     * 空中経路の筒の太さ。歩行の経路とは間合いが2桁違う——足元の線は数ブロック先だが、
-     * 空中経路は50〜200ブロック先まで伸びるので、{@link #TUBE_RADIUS}のままでは画面上で
-     * サブピクセルになって消える。
+     * Tube thickness for the flight route. The working distance differs from the walking path by two orders
+     * of magnitude: the line at your feet is a few blocks ahead, but the flight route extends 50-200 blocks,
+     * so at {@link #TUBE_RADIUS} it becomes sub-pixel on screen and disappears.
      *
-     * <p>そこで<b>カメラからの距離に比例させて</b>、画面上の太さが間合いによらずおおよそ一定に
-     * なるようにする。近くでは{@link #FLIGHT_TUBE_MIN_RADIUS}で頭打ちにして、目の前で異様に
-     * 細くならないようにする（歩行の線より明らかに太い、というユーザーの要求はここで満たす）。
+     * <p>So it is <b>made proportional to the distance from the camera</b>, keeping the on-screen thickness
+     * roughly constant regardless of distance. Up close it is floored at {@link #FLIGHT_TUBE_MIN_RADIUS} so
+     * it doesn't get oddly thin right in front of you (this is where the user request "clearly thicker than
+     * the walking line" is met).
      */
     private static final double FLIGHT_TUBE_RADIUS_PER_BLOCK = 0.0075;
     private static final double FLIGHT_TUBE_MIN_RADIUS = 0.12;
@@ -65,54 +67,56 @@ public final class PathRenderer {
     private static final float TUBE_ALPHA = 0.9f;
 
     /**
-     * 柱の太さ（カメラからの距離あたり）。ウェイポイントの点がいくつ重なっていても形で見分けが付くよう、
-     * 空中経路の筒より太くする。
+     * Pillar thickness (per block of distance from the camera). Thicker than the flight route tube so it can
+     * be told apart by shape no matter how many waypoint dots overlap.
      */
     private static final double PILLAR_RADIUS_PER_BLOCK = 0.006;
     private static final double PILLAR_MIN_RADIUS = 0.35;
-    /** 柱の高さ（ブロック）。根元が地平線の下に隠れていても、上の方が空に見えている長さにする。 */
+    /** Pillar height (blocks). Long enough that the upper part is visible in the sky even if the base is below the horizon. */
     private static final double PILLAR_HEIGHT_BLOCKS = 320.0;
     private static final float PILLAR_ALPHA = 0.55f;
     private static final float PILLAR_OCCLUDED_ALPHA = 0.3f;
 
     private static final float HIGHLIGHT_FILL_ALPHA = 0.35f;
-    /** ハイライトの箱をブロック表面よりわずかに外側に出し、地形自体のZファイティングで隠れないようにする。 */
+    /** Push the highlight box slightly outside the block surface so it isn't hidden by Z-fighting with the terrain itself. */
     private static final double HIGHLIGHT_EXPAND = 0.006;
 
-    /** 空中経路の、地形に隠れている側の濃さ。手前の地形と同じ濃さで描くと壁を無視した絵になるので、薄く重ねる。 */
+    /** Opacity of the flight route where hidden by terrain. Drawing it as strong as in front would ignore walls, so it is overlaid faintly. */
     private static final float OCCLUDED_TUBE_ALPHA = 0.3f;
 
     /**
-     * 水の外から見た、水の中の区間の濃さ。水は深度を書くので、水の中の線は通常の描画では水面に
-     * 隠れて遮蔽側の描画しか残らない。ところがその遮蔽物は壁ではなく半透明の水で、線は実際に
-     * 見えているはずの位置にある。壁越しと同じ薄さ（{@link #OCCLUDED_TUBE_ALPHA}）では、泳ぎの濃い青が
-     * 水の青に埋もれて、水柱に入って上へ登る線が読めない。
+     * Opacity of underwater segments seen from outside the water. Water writes depth, so in normal rendering
+     * an underwater line is hidden by the water surface and only the occluded pass remains. But that occluder
+     * is translucent water, not a wall, and the line is where it should actually be visible. At the same
+     * faintness as through walls ({@link #OCCLUDED_TUBE_ALPHA}), the dark blue of swimming drowns in the
+     * water's blue, and a line going into a water column and climbing up can't be read.
      */
     private static final float THROUGH_WATER_ALPHA = 0.85f;
     /**
-     * 水越しの線を白へ寄せる割合。濃い青のままでは濃さを上げても水の青と見分けが付かない。
-     * 直接見える側（水中にいるとき）は元の色のまま描くので、凡例の色は変わらない。
+     * How much to shift the through-water line toward white. Kept dark blue, it can't be told from the water's
+     * blue no matter how opaque. The directly visible side (when underwater) keeps its original color, so the
+     * legend colors don't change.
      */
     private static final float THROUGH_WATER_WHITEN = 0.5f;
     /**
-     * 地上経路の水の中の区間を水越しに描く範囲（ブロックの2乗）。範囲を切らないと、長い経路が地形越しに全部透けて視界を埋める。
+     * Range (squared blocks) within which underwater segments of the ground path are drawn through water. Without a limit, a long path shows through the terrain in full and fills the view.
      *
-     * <p>掘る・置く枠は地形越しに描かない。掘る・置くブロックが並ぶ所では、透けた枠が重なって視界を塞ぐ。
+     * <p>Dig/place boxes are not drawn through terrain. Where dig/place blocks line up, the see-through boxes overlap and block the view.
      */
     private static final double OCCLUDED_NEAR_RADIUS_SQ = 12.0 * 12.0;
-    /** 次に掘る1区間ぶんだけは、ほかの枠より濃くして見分けられるようにする。 */
+    /** Only the next dig segment is drawn more opaque than other boxes so it can be told apart. */
     private static final float NEXT_DIG_FILL_ALPHA = 0.5f;
 
-    /** 打ち切られた経路の末端の、いちばん先での濃さの割合。0にすると切れ目が見えなくなる。 */
+    /** Opacity ratio at the very end of a truncated path's tail. At 0 the break would become invisible. */
     private static final float FADE_TAIL_MIN_RATIO = 0.15f;
 
-    /** 概算の直線（点線）の1本の長さと間隔（ブロック）。 */
+    /** Length and gap of each dash of the approximate straight (dotted) line (blocks). */
     private static final double DASH_LENGTH = 1.0;
     private static final double DASH_GAP = 1.0;
 
     /**
-     * 概算の直線を出し始める距離（ブロック）。経路の末端が目的地に着いている場合に、
-     * 同じ場所へ向かう点線を重ねて描かないための下限。
+     * Distance (blocks) at which the approximate straight line starts being drawn. A lower bound so that
+     * when the end of the path reaches the destination, no dotted line to the same spot is drawn on top.
      */
     private static final double STRAIGHT_MIN_DISTANCE = 3.0;
 
@@ -121,31 +125,31 @@ public final class PathRenderer {
 
     private final PathCache<PathGeometry> geometryCache = new PathCache<>();
 
-    // 筒の断面4頂点。区間ごとに作り直さず使い回す（描画スレッド専用）。
+    // The four vertices of the tube cross-section. Reused rather than rebuilt per segment (render thread only).
     private final double[] ringX = new double[4];
     private final double[] ringY = new double[4];
     private final double[] ringZ = new double[4];
 
-    // 通り過ぎた区間を切り詰めた描き始めの点（描画スレッド専用）。区間ごとに配列を作らない
+    // Start point of a segment trimmed where it has been passed (render thread only). Avoids allocating an array per segment
     private final double[] segmentCut = new double[3];
 
-    // 経路がまだ無いときに点線を引き始めるプレイヤーの足元（描画スレッド専用）。
+    // Player's feet, where the dotted line starts when there is no path yet (render thread only).
     private double playerX;
     private double playerY;
     private double playerZ;
-    // 地上経路の区間切り詰めに使う、オフセット無しのプレイヤー足元Y（描画スレッド専用）。
-    // playerYは点線の起点用に2ブロック下げてあり、それをそのまま切り詰めに使うと区間の低い側が
-    // ずれる。
+    // Player's feet Y without offset, used to trim ground path segments (render thread only).
+    // playerY is lowered by 2 blocks for the dotted line's origin; using it as-is for trimming shifts the
+    // lower side of segments.
     private double groundPlayerY;
 
-    // 点線の経由点を x,y,z の3つ組で並べたもの。遮蔽側と通常側で同じ列を2度なぞるので、
-    // 毎フレーム組み直さずに使い回す（描画スレッド専用）。
+    // Dotted line waypoints laid out as x,y,z triples. The occluded and normal passes trace the same list
+    // twice, so it is reused rather than rebuilt every frame (render thread only).
     private double[] straightPoints = new double[12];
 
     /**
-     * 半透明ブロックを描いた後に呼ぶ。ローダーごとのイベント（NeoForgeは
-     * {@code RenderLevelStageEvent.AFTER_TRANSLUCENT_BLOCKS}、Fabricは
-     * {@code WorldRenderEvents.AFTER_TRANSLUCENT}）から、カメラと行列だけを受け取る。
+     * Called after translucent blocks are drawn. Receives only the camera and matrix from the per-loader event
+     * (NeoForge: {@code RenderLevelStageEvent.AFTER_TRANSLUCENT_BLOCKS}, Fabric:
+     * {@code WorldRenderEvents.AFTER_TRANSLUCENT}).
      */
     public void render(PoseStack poseStack, Camera camera) {
         Minecraft mc = Minecraft.getInstance();
@@ -153,9 +157,9 @@ public final class PathRenderer {
             return;
         }
 
-        // 1度だけ取得し、以降はこのsnapshotだけを読む。個々のgetterを描画中に何度も呼ぶと、
-        // その間にワーカーcallbackが割り込んで「どの瞬間にも存在しなかった組み合わせ」
-        // （例: 新しいgoalと古いcurrentResult）を1フレームだけ描きうる
+        // Fetch once and read only this snapshot afterwards. Calling individual getters repeatedly while
+        // drawing lets a worker callback interleave and draw, for one frame, "a combination that never existed
+        // at any instant" (e.g. a new goal with the old currentResult)
         PathfindingState.NavigationView view = PathfindingState.INSTANCE.navigationView();
         PathResult groundResult = view.currentResult();
         FlightRoute flight = view.flightRoute();
@@ -163,10 +167,11 @@ public final class PathRenderer {
         boolean hasGround = groundResult != null && !groundResult.steps().isEmpty();
         boolean hasFlight = !flight.isEmpty();
         boolean arrived = view.arrived();
-        // 到着表示の間は方角を示す点線を出さない。到着の判定半径(3)と点線を出し始める距離(3)は
-        // 同じなので、目的地が足元より下にあると、着いた瞬間から真下へ向かう点線が残ってしまう
+        // Don't show the direction dotted line while the arrival display is up. The arrival radius (3) and
+        // the distance at which the dotted line starts (3) are the same, so if the destination is below your
+        // feet, a dotted line pointing straight down would remain from the moment you arrive
         BlockPos pillar = view.skyPillar();
-        // 柱を出している間は点線を引かない。降りる地点は柱が示し、点線は地平線の手前で途切れるだけになる
+        // No dotted line while the pillar is shown. The pillar marks where to land; the dotted line would just stop short of the horizon
         boolean hasStraight = pillar == null && goal != null && !arrived
                 && XaeroNavConfig.INSTANCE.straightLineEnabled();
         if (!hasGround && !hasFlight && !hasStraight && pillar == null) {
@@ -179,19 +184,19 @@ public final class PathRenderer {
 
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
         PoseStack.Pose pose = poseStack.last();
-        // 描画距離の外は地形自体が描かれないので、そこまで伸びた経路を積む意味がない
+        // Beyond render distance the terrain itself isn't drawn, so there's no point emitting the path out there
         double cullRadius = ClientCompat.renderDistance(mc.options) * 16.0;
         double cullRadiusSq = cullRadius * cullRadius;
 
         BlockPos playerPos = mc.player.blockPosition();
         boolean playerInWater = mc.level.getFluidState(playerPos).is(FluidTags.WATER);
-        // 目線が水中なら水の面は間に挟まらないので、水越しの描き分けは要らない
+        // If the eyes are underwater, no water surface sits in between, so the through-water treatment isn't needed
         boolean cameraInWater = mc.level.getFluidState(GameCompat.containing(cameraPos)).is(FluidTags.WATER);
         double playerFeetY = playerPos.getY() + 0.55;
         playerX = mc.player.getX();
         groundPlayerY = playerInWater ? playerFeetY : mc.player.getY() + 0.55;
-        // 点線（ゴールへの直線）の起点だけ2マス下げる。目線の高さから引くと、飛行中など
-        // 見下ろす形になる場面で自分の体に埋もれて見えにくいため
+        // Lower only the origin of the dotted line (straight line to the goal) by 2 blocks. Drawn from eye
+        // height, it gets buried in your own body when looking down, e.g. while flying
         playerY = groundPlayerY - 2.0;
         playerZ = mc.player.getZ();
 
@@ -217,12 +222,13 @@ public final class PathRenderer {
     }
 
     /**
-     * 経路が分からない区間を、目的地までの点線の直線で示す。未読み込みチャンクの先や、
-     * 目的地のYが立てない高さの場合、実際に辿れる経路はそこで終わる。そのまま線を切ると
-     * 「どちらへ向かえばいいのか」まで消えてしまうので、残りは直線で繋ぐ。
+     * Shows the stretch where the path is unknown as a dotted straight line to the destination. Beyond
+     * unloaded chunks, or when the destination's Y is not standable, the actually traversable path ends there.
+     * Cutting the line there would also lose "which way to go", so the rest is joined with a straight line.
      *
-     * <p>始点は経路の末端（無ければプレイヤー自身）。壁越しにも薄く出す — この線は地形を
-     * 辿るものではなく方角と距離を示すものなので、遮蔽で消えると意味がなくなる。
+     * <p>It starts at the end of the path (or at the player if there is none). It is also drawn faintly through
+     * walls: this line shows direction and distance rather than following the terrain, so hiding it behind
+     * occluders would defeat its purpose.
      */
     private void renderStraightLine(MultiBufferSource.BufferSource bufferSource, PoseStack.Pose pose,
                                      PathGeometry geometry, Vec3 flightTail, BlockPos goal, double cullRadius) {
@@ -230,8 +236,8 @@ public final class PathRenderer {
         double fromY = playerY;
         double fromZ = playerZ;
         if (flightTail != null) {
-            // 空中経路が引けている区間の先だけを点線で繋ぐ。末端が目的地に届いていれば
-            // 長さが最小距離を下回り、drawStraightDashes側で自然に何も描かれなくなる
+            // Only connect the part beyond where the flight route reaches with a dotted line. If the end
+            // reaches the destination, the length falls below the minimum and drawStraightDashes naturally draws nothing
             fromX = flightTail.x;
             fromY = flightTail.y;
             fromZ = flightTail.z;
@@ -242,7 +248,7 @@ public final class PathRenderer {
             fromZ = geometry.pointZ[last];
         }
 
-        // 滑空中は点線が長距離ルートの中間目標を辿る（無ければ曲がり点線）
+        // While gliding, the dotted line follows the long-range route's intermediate targets (otherwise a curved dotted line)
         List<Vec3> dash = PathfindingState.INSTANCE.flightDashWaypoints();
         int points = 0;
         points = pushStraightPoint(points, fromX, fromY, fromZ);
@@ -251,9 +257,9 @@ public final class PathRenderer {
         }
         points = pushStraightPoint(points, goal.getX() + 0.5, goal.getY() + 0.55, goal.getZ() + 0.5);
 
-        // 遮蔽側を最後まで積んでからバッファを閉じ、それから通常側へ移る。BufferSourceは
-        // 一度に1つのRenderTypeしかビルドできず、次のgetBufferを呼んだ時点で前のバッファは
-        // 閉じられる——2つを持って交互に書くと閉じた側への書き込みで落ちる
+        // Emit the occluded pass completely and close the buffer before moving on to the normal pass.
+        // BufferSource can only build one RenderType at a time, and the previous buffer is closed as soon as
+        // the next getBuffer is called; holding two and writing alternately crashes on writes to the closed one
         VertexConsumer occludedQuads = bufferSource.getBuffer(NavRenderTypes.OCCLUDED_QUADS);
         drawStraightDashes(occludedQuads, pose, points, cullRadius, STRAIGHT_OCCLUDED_ALPHA);
         NavRenderTypes.endOccludedBatch(bufferSource, NavRenderTypes.OCCLUDED_QUADS);
@@ -264,21 +270,22 @@ public final class PathRenderer {
     }
 
     /**
-     * 空中経路を筒で描く。歩行の経路と違ってステップごとの色分け（危険・掘削・移動の種類）が無く、
-     * あるのは折れ線だけなので{@link PathGeometry}は通さない。
+     * Draws the flight route as a tube. Unlike the walking path there is no per-step coloring (danger, digging,
+     * move type), only a polyline, so it doesn't go through {@link PathGeometry}.
      *
-     * <p>先頭の点は計算した時点のプレイヤー位置で、届く頃には最大で再計算間隔ぶん古い。今の位置から
-     * 引き直さないと、線が自分の少し後ろから生えているように見える。
+     * <p>The first point is the player position at computation time, up to one recompute interval old by the
+     * time it arrives. Without redrawing from the current position, the line appears to sprout from slightly
+     * behind you.
      */
     private void renderFlightRoute(MultiBufferSource.BufferSource bufferSource, PoseStack.Pose pose,
                                     FlightRoute route, double cullRadius, Vec3 camera) {
         List<Vec3> points = route.points();
-        // 通り過ぎた区間は描かない。空中経路は引き直しの合間に数十ブロック進むので、
-        // これが無いと線が自分の後ろへ伸びたままになる（歩行のrenderGroundPathと同じ理由）
+        // Don't draw segments already passed. The flight route advances tens of blocks between redraws, so
+        // without this the line keeps extending behind you (same reason as the walking renderGroundPath)
         int first = PathfindingState.INSTANCE.flightRouteFrom();
         int count = 0;
-        // 線は経路の上の自分に最も近い点から描く。自分の位置から描くと線の手前が体に付いて動き、
-        // 経路が引き直されていないのに描き変わっているように見える
+        // Draw the line from the point on the route closest to you. Drawing from your own position makes the
+        // near end stick to your body and move, so it looks redrawn even though the route wasn't recomputed
         Vec3 anchor = PathfindingState.INSTANCE.flightRouteAnchor(Minecraft.getInstance().player.position());
         if (anchor != null) {
             count = pushStraightPoint(count, anchor.x, anchor.y, anchor.z);
@@ -290,7 +297,7 @@ public final class PathRenderer {
             count = pushStraightPoint(count, point.x, point.y, point.z);
         }
 
-        // 遮蔽側を積み切ってからバッファを閉じ、それから通常側へ移る（renderStraightLineと同じ理由）
+        // Emit the occluded pass fully, close the buffer, then move to the normal pass (same reason as renderStraightLine)
         VertexConsumer occluded = bufferSource.getBuffer(NavRenderTypes.OCCLUDED_QUADS);
         drawTubeSegments(occluded, pose, count, cullRadius, OCCLUDED_TUBE_ALPHA, camera, PathColors.FLIGHT);
         NavRenderTypes.endOccludedBatch(bufferSource, NavRenderTypes.OCCLUDED_QUADS);
@@ -301,10 +308,11 @@ public final class PathRenderer {
     }
 
     /**
-     * 降りる地点に立てる光の柱。<b>描画距離の外でも本当の位置に立てる</b>——投影の奥行きの上限は
-     * 描画距離の4倍（{@code GameRenderer#getDepthFar}／26.xは{@code Camera#depthFar}）で、地形が無くても
-     * 柱は描ける。手前へ寄せて描くと、飛ぶにつれて柱が地面の上を滑り、違う場所を指して見える。
-     * それでも越える場合だけ、同じ方角の3倍の距離へ寄せる。
+     * Light pillar placed at the landing spot. <b>It stands at the true position even beyond render
+     * distance</b>: the projection's far depth limit is 4x render distance ({@code GameRenderer#getDepthFar} /
+     * {@code Camera#depthFar} on 26.x), and the pillar can be drawn even without terrain. Pulling it closer
+     * would make it slide over the ground as you fly and appear to point somewhere else.
+     * Only if it exceeds even that is it pulled in to 3x the distance in the same direction.
      */
     private void renderSkyPillar(MultiBufferSource.BufferSource bufferSource, PoseStack.Pose pose, BlockPos pillar,
                                   double cullRadius, Vec3 camera) {
@@ -332,7 +340,7 @@ public final class PathRenderer {
         bufferSource.endBatch(NavRenderTypes.DEBUG_QUADS);
     }
 
-    /** 画面上の太さを間合いによらず一定に保つための、この区間での筒の半幅。 */
+    /** Half-width of the tube on this segment, keeping on-screen thickness constant regardless of distance. */
     private static double flightTubeRadius(Vec3 camera, double fromX, double fromY, double fromZ,
                                             double toX, double toY, double toZ) {
         double distance = Math.sqrt(distanceSqToSegment(camera, fromX, fromY, fromZ, toX, toY, toZ));
@@ -356,7 +364,7 @@ public final class PathRenderer {
             if (length < 1.0e-4) {
                 continue;
             }
-            // 描画距離の外は地形ごと描かれないので、そこまで積んでも見えない
+            // Beyond render distance the terrain isn't drawn at all, so emitting out there wouldn't be visible
             double drawn = Math.min(length, cullRadius);
             drawTube(buffer, pose, flightTubeRadius(camera, fromX, fromY, fromZ, toX, toY, toZ),
                     fromX, fromY, fromZ,
@@ -391,7 +399,7 @@ public final class PathRenderer {
             dx /= length;
             dy /= length;
             dz /= length;
-            // 描画距離の外は地形ごと描かれないので、そこまで点を積んでも見えない
+            // Beyond render distance the terrain isn't drawn at all, so emitting dots out there wouldn't be visible
             double drawn = Math.min(length, cullRadius);
             drawDashes(buffer, pose, fromX, fromY, fromZ, dx, dy, dz, drawn, alpha);
         }
@@ -410,21 +418,21 @@ public final class PathRenderer {
     }
 
     /**
-     * 地形に隠れている側を先に描き、その上から通常の深度テスト付きで描く。隠れている側を描くのは
-     * 近くの水の中の区間だけ（{@link #OCCLUDED_NEAR_RADIUS_SQ}）。
+     * Draws the side hidden by terrain first, then draws on top with normal depth testing. The hidden side is
+     * drawn only for nearby underwater segments ({@link #OCCLUDED_NEAR_RADIUS_SQ}).
      */
     private void renderGroundPath(MultiBufferSource.BufferSource bufferSource, PoseStack.Pose pose,
                                    PathGeometry geometry, PathResult result, Vec3 camera, double cullRadiusSq,
                                    boolean cameraInWater) {
         int segments = geometry.segmentCount();
         int highlights = geometry.highlightCount();
-        // 通り過ぎた区間は描かない。経路は歩いても引き直さないので、これが無いと自分の後ろへ
-        // 延々と線が伸びたままになる。線はあくまで経路の上に載せ、プレイヤーへ引き寄せない
-        // （横にずれているときに自分から線が生えるように見えてしまう）
+        // Don't draw segments already passed. The path isn't recomputed as you walk, so without this the line
+        // keeps extending endlessly behind you. The line stays on the path and is not pulled toward the player
+        // (when you're off to the side, it would look like the line sprouts from you)
         int matched = PathProgress.INSTANCE.indexFor(result);
         int first = geometry.firstSegmentFrom(matched);
-        // 掘る・置く枠も線と同じ進捗で切る。同じmatchedを使うのが要点で、別々に求めると
-        // 線と枠がずれる（掘る枠だけ背後に残る、など）
+        // Trim the dig/place boxes by the same progress as the line. Using the same matched is the point;
+        // computing them separately makes the line and boxes drift apart (e.g. only the dig boxes stay behind)
         PathGeometry.Range nextDig = geometry.nextDig(matched);
 
         VertexConsumer occludedQuads = bufferSource.getBuffer(NavRenderTypes.OCCLUDED_QUADS);
@@ -469,9 +477,9 @@ public final class PathRenderer {
     }
 
     /**
-     * {@code cutAtPlayer}なら、区間をプレイヤーの現在地で切って先だけを描く。まとめられた
-     * 長い直線区間は端点までしか点を持たないので、これが無いと区間ごと消えるか丸ごと残るかの
-     * 二択になり、線の始まりが数十ブロック先へ飛ぶ。
+     * If {@code cutAtPlayer}, the segment is cut at the player's current position and only the part ahead is
+     * drawn. Merged long straight segments only have points at their ends, so without this it's all or
+     * nothing per segment, and the start of the line jumps tens of blocks ahead.
      */
     private void drawSegment(VertexConsumer buffer, PoseStack.Pose pose, PathGeometry geometry, int index,
                              float alpha, boolean throughWater, boolean cutAtPlayer, Vec3 camera) {
@@ -496,8 +504,8 @@ public final class PathRenderer {
         double toX = geometry.pointX[index + 1];
         double toY = geometry.pointY[index + 1];
         double toZ = geometry.pointZ[index + 1];
-        // 危険区間は色だけに頼らない識別として破線にする（A11Y-01）。カメラ近傍を避ける
-        // sunk処理より視認性を優先する——危険は目立たせる方が正しい
+        // Dangerous segments are dashed so they're identifiable without relying on color alone (A11Y-01).
+        // Visibility takes priority over the sunk handling that avoids the camera; danger should stand out
         if (geometry.segmentDashed[index] && XaeroNavConfig.INSTANCE.dangerDashedEnabled()) {
             drawDashedTube(buffer, pose, fromX, fromY, fromZ, toX, toY, toZ, red, green, blue, segmentAlpha);
             return;
@@ -512,9 +520,9 @@ public final class PathRenderer {
     }
 
     /**
-     * 区間を{@link #DASH_LENGTH}/{@link #DASH_GAP}の破線として描く。短い区間（1手ぶんの長さ程度）
-     * では最初のダッシュだけで全長を覆うので、見た目は実線のままになる——長い区間だけがはっきり
-     * 破線として見える。
+     * Draws the segment as a dashed line of {@link #DASH_LENGTH}/{@link #DASH_GAP}. Short segments (about one
+     * move long) are covered entirely by the first dash, so they still look solid; only long segments
+     * clearly appear dashed.
      */
     private void drawDashedTube(VertexConsumer buffer, PoseStack.Pose pose,
                                 double fromX, double fromY, double fromZ,
@@ -540,9 +548,9 @@ public final class PathRenderer {
     }
 
     /**
-     * カメラを中心とする{@link #SWIM_NEAR_CLIP_BLOCKS}の球を避けて筒を描く。球に入る区間は
-     * 手前側と奥側の2本に割れる（線の途中を泳いでいる間はこちらが常態で、手前を切るだけでは
-     * 自分の真横を通る部分が残る）。
+     * Draws the tube avoiding a sphere of {@link #SWIM_NEAR_CLIP_BLOCKS} around the camera. A segment entering
+     * the sphere is split into near and far pieces (while swimming along the middle of the line this is the
+     * norm, and cutting only the near side would leave the part running right beside you).
      */
     private void drawTubeOutsideCamera(VertexConsumer buffer, PoseStack.Pose pose,
                                        double fromX, double fromY, double fromZ,
@@ -560,7 +568,7 @@ public final class PathRenderer {
                 - SWIM_NEAR_CLIP_BLOCKS * SWIM_NEAR_CLIP_BLOCKS;
         double discriminant = half * half - lengthSq * offset;
         if (discriminant <= 0.0) {
-            // 球に掛からない。ここが大多数（遠い区間はすべてこちら）
+            // Doesn't touch the sphere. This is the vast majority (all distant segments end up here)
             drawTube(buffer, pose, TUBE_RADIUS, fromX, fromY, fromZ, toX, toY, toZ, red, green, blue, alpha);
             return;
         }
@@ -580,8 +588,8 @@ public final class PathRenderer {
     }
 
     /**
-     * 打ち切られた経路の末端を先へ行くほど薄くする割合。線が唐突に途切れると、そこが行き止まりなのか
-     * 探索が届かなかっただけなのかが見た目で区別できない。
+     * Ratio by which a truncated path's tail fades out toward its end. If the line ends abruptly, you can't
+     * tell visually whether it's a dead end or the search just didn't reach further.
      */
     private static float fadeRatio(PathGeometry geometry, int index) {
         int segments = geometry.segmentCount();
@@ -612,11 +620,11 @@ public final class PathRenderer {
     }
 
     /**
-     * @param matched いま居るステップ。これより手前のハイライトは描かない——線と同じ切り詰めで、
-     *                <b>これが無いと通り過ぎた枠が経路の引き直しまで残る</b>。作業予定地の枠は
-     *                {@link #placementPending}・{@link #digPending}が「もう済んでいる」と見たときにしか
-     *                消えないので、手を付けずに脇を通り過ぎるとセルが元のまま残り続ける
-     *                （ユーザー報告「通り過ぎた後でも青い枠が残る」の正体）
+     * @param matched the step you're currently on. Highlights before it are not drawn, the same trimming as
+     *                the line; <b>without this, passed boxes remain until the path is recomputed</b>. Boxes
+     *                for planned work only disappear when {@link #placementPending}/{@link #digPending} see
+     *                them as "already done", so walking past without touching them leaves the cells unchanged
+     *                and the boxes stay (the cause of the user report "blue boxes remain after passing by")
      */
     private boolean highlightVisible(PathGeometry geometry, int index, int matched, Vec3 camera,
                                      double cullRadiusSq) {
@@ -635,13 +643,15 @@ public final class PathRenderer {
     }
 
     /**
-     * 設置予定地がまだ置ける状態か。置いた瞬間に枠を消すためのもので、経路の引き直しを待たない
-     * （経路は数十tickに一度しか作り直されないので、置いた足場に枠が残り続けて見える）。
+     * Whether the planned placement spot can still be placed in. This is for removing the box the moment
+     * something is placed, without waiting for the path to be recomputed (the path is only rebuilt every few
+     * tens of ticks, so the box would appear to linger on the placed footing).
      *
-     * <p>判定は{@link CellData#replaceable}——探索側（{@code AStarPathfinder#addBridge}）が
-     * 置ける場所を決めているのと同じ規則にする。空気かどうかで見ていた頃は、
-     * <b>溶岩・草・雪の層に置く足場の枠が一度も描かれなかった</b>（どれも空気ではないが置ける）。
-     * 溶岩に架ける橋はまさにこの形なので、案内はあるのに置く場所が分からない状態になっていた。
+     * <p>The check is {@link CellData#replaceable}, the same rule the search side
+     * ({@code AStarPathfinder#addBridge}) uses to decide where placement is possible. Back when it checked for
+     * air, <b>boxes for footing placed into lava, grass, or snow layers were never drawn</b> (none are air,
+     * but all can be placed into). A bridge over lava is exactly this case, so there was guidance but no way
+     * to tell where to place.
      */
     private boolean placementPending(PathGeometry geometry, int index) {
         Level level = Minecraft.getInstance().level;
@@ -654,17 +664,17 @@ public final class PathRenderer {
     }
 
     /**
-     * 掘る予定のセルがまだ塞がっているか。{@link #placementPending}の掘削版で、狙いも同じ
-     * ——<b>壊した瞬間に枠を消すためのもので、経路の引き直しを待たない</b>。引き直しは
-     * 数十tickに一度なうえ、壊したこと自体が引き直しの引き金なので、待つと壊し終えた場所に
-     * オレンジの枠が数秒残って見える。
+     * Whether a cell planned for digging is still blocked. The dig version of {@link #placementPending},
+     * with the same aim: <b>it removes the box the moment the block breaks, without waiting for the path to
+     * be recomputed</b>. Recomputes happen only every few tens of ticks, and breaking itself triggers a
+     * recompute, so waiting would leave an orange box visible for a few seconds where you finished digging.
      *
-     * <p>判定は{@link CellData#occupiableWithoutDigging}——探索側
-     * （{@code AStarPathfinder#occupyCost}）が「掘らないと通れない」を決めているのと同じ規則にする。
-     * 空気かどうかで見ると、水・ツタのように<b>掘らずに体を置けるセル</b>に枠が残る。
+     * <p>The check is {@link CellData#occupiableWithoutDigging}, the same rule the search side
+     * ({@code AStarPathfinder#occupyCost}) uses to decide "can't pass without digging".
+     * Checking for air would leave boxes on <b>cells the body can occupy without digging</b>, like water or vines.
      *
-     * <p>砂・砂利の柱を掘るときは、1つ壊すと上が落ちてきて同じ枠が下の段へ移って見える。
-     * これは実際に掘る手が増えているので正しい。
+     * <p>When digging a column of sand or gravel, breaking one makes the one above fall, and the same box
+     * appears to move down a level. This is correct, since the number of dig moves really did increase.
      */
     private boolean digPending(PathGeometry geometry, int index) {
         Level level = Minecraft.getInstance().level;
@@ -677,8 +687,8 @@ public final class PathRenderer {
     }
 
     /**
-     * カメラと区間の最短距離の2乗。一直線に続く区間はまとめられていて長くなりうるので、
-     * 端点だけを見て判定すると、カメラの真横を通り抜ける長い区間を消してしまう。
+     * Squared shortest distance between the camera and the segment. Straight runs are merged and can get long,
+     * so judging by endpoints alone would drop a long segment that passes right beside the camera.
      */
     private static double distanceSqToSegment(Vec3 camera, double ax, double ay, double az,
                                                double bx, double by, double bz) {
@@ -698,8 +708,8 @@ public final class PathRenderer {
     }
 
     /**
-     * 区間を「筒」として描画する。フラットな線だと真横から見た時に見づらいため、
-     * 進行方向に直交する正方形断面を押し出して立体的な形状にする。
+     * Draws the segment as a "tube". A flat line is hard to see edge-on, so a square cross-section
+     * perpendicular to the direction of travel is extruded into a 3D shape.
      */
     private void drawTube(VertexConsumer buffer, PoseStack.Pose pose, double radius,
                           double fromX, double fromY, double fromZ, double toX, double toY, double toZ,
@@ -715,8 +725,8 @@ public final class PathRenderer {
         dirY /= length;
         dirZ /= length;
 
-        // 進行方向と平行にならない参照ベクトルを選ぶ（外積が潰れるのを避ける）。
-        // Z成分は常に0なので、以下の外積ではその項を畳んである。
+        // Pick a reference vector that isn't parallel to the direction of travel (to avoid a degenerate cross product).
+        // Its Z component is always 0, so that term is folded out of the cross products below.
         boolean steep = Math.abs(dirY) > 0.99;
         double refX = steep ? 1.0 : 0.0;
         double refY = steep ? 0.0 : 1.0;
@@ -809,10 +819,10 @@ public final class PathRenderer {
         vertex(buffer, pose, x3, y3, z3, red, green, blue, alpha);
     }
 
-    // 1.20.1はVertexConsumerが旧世代のAPI（vertex(double,double,double)を起点にcolor/normalを
-    // チェーンし、最後にendVertex()で確定する形）で、1.21.1のaddVertex系（Pose引数を直接取り、
-    // endVertex不要）とは形そのものが違う。座標・色・法線の値そのものは同じなので、
-    // vertex/lineの2箇所だけをゲートすれば足りる
+    // On 1.20.1, VertexConsumer is the older-generation API (chain color/normal starting from
+    // vertex(double,double,double) and finalize with endVertex()), a different shape from 1.21.1's addVertex
+    // family (takes the Pose argument directly, no endVertex). The coordinate, color, and normal values are
+    // the same, so gating just the two places vertex/line is enough
     private void vertex(VertexConsumer buffer, PoseStack.Pose pose, double x, double y, double z,
                         float red, float green, float blue, float alpha) {
         //? if >=1.21 {
@@ -828,7 +838,7 @@ public final class PathRenderer {
                       float x0, float y0, float z0, float x1, float y1, float z1,
                       float red, float green, float blue) {
         //? if >=1.21.11 {
-        /*// 線幅は頂点ごとに持つ。バニラのブロックの枠と同じ幅にする
+        /*// Line width is per vertex. Match the width of vanilla's block outline
         float width = Minecraft.getInstance().getWindow().getAppropriateLineWidth();
         buffer.addVertex(pose, x0, y0, z0).setColor(red, green, blue, 1.0f).setNormal(pose, 0f, 1f, 0f).setLineWidth(width);
         buffer.addVertex(pose, x1, y1, z1).setColor(red, green, blue, 1.0f).setNormal(pose, 0f, 1f, 0f).setLineWidth(width);
@@ -836,7 +846,7 @@ public final class PathRenderer {
         buffer.addVertex(pose, x0, y0, z0).setColor(red, green, blue, 1.0f).setNormal(pose, 0f, 1f, 0f);
         buffer.addVertex(pose, x1, y1, z1).setColor(red, green, blue, 1.0f).setNormal(pose, 0f, 1f, 0f);
         //?} else if >=1.20.5 {
-        /*// 1.20.5〜1.20.6は旧世代のチェーンのままだが、normalがMatrix3fではなくPoseを取る
+        /*// 1.20.5-1.20.6 still use the older-generation chain, but normal takes a Pose instead of a Matrix3f
         buffer.vertex(pose.pose(), x0, y0, z0)
                 .color(red, green, blue, 1.0f)
                 .normal(pose, 0f, 1f, 0f)

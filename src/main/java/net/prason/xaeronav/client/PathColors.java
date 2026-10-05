@@ -5,43 +5,43 @@ import net.prason.xaeronav.pathfinding.astar.PathRisk;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
- * ワールド内描画・Xaeroマップ描画の両方で使う経路の色分けルール。
+ * Route color rules used by both in-world rendering and Xaero map rendering.
  *
- * <p>色は共有の定数配列として返す。ワールド内描画・世界地図・ミニマップの3経路がそれぞれ
- * 毎フレーム全ステップぶん{@link #forStep}を呼ぶため、ここで配列を作ると1フレームあたり
- * 数千個のゴミになる。返された配列は書き換えないこと。
+ * <p>Colors are returned as shared constant arrays. In-world rendering, the world map, and the minimap each call
+ * {@link #forStep} for every step every frame, so creating arrays here would produce thousands of pieces of
+ * garbage per frame. Do not modify the returned arrays.
  */
 final class PathColors {
 
-    /** 経路が分からない区間を繋ぐ直線。実際に辿れる経路と取り違えないよう、彩度を落とした色にする。 */
+    /** Straight line bridging a stretch whose route is unknown. Desaturated so it is not mistaken for a walkable route. */
     static final float[] STRAIGHT = {0.85f, 0.85f, 0.9f};
-    /** 滑空中の空中経路。地上の経路（緑）とも点線（灰白）とも取り違えないよう、空を思わせる色にする。 */
+    /** Air route while gliding. A sky-like color so it is not mistaken for a ground route (green) or the dotted line (grayish white). */
     static final float[] FLIGHT = {0.35f, 0.85f, 1.0f};
-    /** 長距離ルートの粗い中間目標列。目的地までの直線（{@link #STRAIGHT}）と見分けが付くよう別の色調にする。 */
+    /** The coarse intermediate targets of a long-distance route. A different hue to tell it apart from the straight line to the goal ({@link #STRAIGHT}). */
     static final float[] COARSE_ROUTE = {0.95f, 0.75f, 0.2f};
-    /** 空の下を滑空している間に降りる地点を示す光の柱。Xaeroのウェイポイントの色と重なりにくい白寄りにする。 */
+    /** Pillar of light marking the landing point while gliding under open sky. Near white so it rarely clashes with Xaero waypoint colors. */
     static final float[] SKY_PILLAR = {1.0f, 0.95f, 0.7f};
     static final float[] BRIDGE = {0.4f, 0.9f, 0.9f};
     static final float[] LAVA_ADJACENT = {1.0f, 0.1f, 0.1f};
     static final float[] VOID_BELOW = {0.8f, 0.1f, 0.8f};
     static final float[] WATER_INFLOW = {0.1f, 0.7f, 1.0f};
     /**
-     * 息継ぎできない潜水区間。<b>暖色にするのが要点</b>——この線が見えるのは水の中からで、
-     * 背景も霧も青い。以前は{@link #SWIM}と区別するために暗い青にしていたが、
-     * それは水中でいちばん埋もれる色だった（遮蔽側の描画は不透明度0.3まで落ちるので尚更）。
-     * 溶岩の赤（{@link #LAVA_ADJACENT}）とも落下（{@link #FALL_DAMAGE}）の橙とも取り違えないよう、
-     * 赤寄りでも青を残した色にしてある。
+     * An underwater stretch with no chance to breathe. <b>Making it a warm color is the point</b>: this line is seen
+     * from under water, where the background and fog are blue. It used to be dark blue to distinguish it from
+     * {@link #SWIM}, but that is the color that gets lost most under water (all the more since occluded drawing drops
+     * to 0.3 opacity). It keeps some blue while leaning red, so it is not mistaken for the red of lava
+     * ({@link #LAVA_ADJACENT}) or the orange of falls ({@link #FALL_DAMAGE}).
      */
     static final float[] DROWNING = {1.0f, 0.35f, 0.55f};
-    /** 体力が減る降下。危険色の中では警告寄り（{@link #LAVA_ADJACENT}の赤ほど強くない）。 */
+    /** A descent that costs health. On the warning side among danger colors (not as strong as the red of {@link #LAVA_ADJACENT}). */
     static final float[] FALL_DAMAGE = {1.0f, 0.35f, 0.0f};
-    /** 着地寸前の水バケツが要る降下。{@link #FALL_DAMAGE}と同系だが、水を使うことが分かる色にする。 */
+    /** A descent that needs a water bucket just before landing. Same family as {@link #FALL_DAMAGE}, but a color that hints at using water. */
     static final float[] MLG_REQUIRED = {0.0f, 0.85f, 0.8f};
-    /** スニークで渡るマグマブロック。溶岩そのもの（{@link #LAVA_ADJACENT}）ほど強くない警告色。 */
+    /** Magma blocks crossed by sneaking. A warning color weaker than lava itself ({@link #LAVA_ADJACENT}). */
     static final float[] SNEAK_OVER_MAGMA = {1.0f, 0.5f, 0.25f};
     static final float[] DIGGING = {1.0f, 0.55f, 0.1f};
     static final float[] SWIM = {0.1f, 0.4f, 1.0f};
-    /** ボートで渡る区間。泳ぎ（{@link #SWIM}）と同じ水面上の移動なので近い色調にしつつ、緑を足して分ける。 */
+    /** A stretch crossed by boat. Movement on the water surface like swimming ({@link #SWIM}), so a similar hue, with green added to tell them apart. */
     static final float[] BOAT = {0.2f, 0.8f, 0.85f};
     static final float[] JUMP = {0.95f, 0.6f, 0.9f};
     static final float[] CLIMB = {0.7f, 0.5f, 1.0f};
@@ -49,10 +49,10 @@ final class PathColors {
     static final float[] DESCEND = {0.3f, 0.6f, 1.0f};
     static final float[] WALK = {0.2f, 0.9f, 0.5f};
     /**
-     * 地図に置く目的地のピン。本体の赤・穴の白・縁取りの暗色を重ねる。
+     * Destination pin placed on the map. Layers a red body, a white hole, and a dark outline.
      *
-     * <p>1色では必ずどこかの地形に沈む——白は雪原と砂漠で、暗色はネザーと深海で、赤は溶岩とキノコ島で
-     * 見えなくなる。3色を重ねておけば、どの地形でもどれかの組み合わせが必ず立つ。
+     * <p>Any single color is bound to vanish on some terrain: white on snowfields and deserts, dark in the Nether and
+     * the deep ocean, red on lava and mushroom islands. With three layered colors, some combination always stands out.
      */
     static final float[] GOAL_MARKER = {0.95f, 0.15f, 0.15f};
     static final float[] GOAL_MARKER_HOLE = {1.0f, 1.0f, 1.0f};
@@ -61,10 +61,10 @@ final class PathColors {
     private PathColors() {
     }
 
-    /** 色だけに頼らない識別（A11Y-01）。線種・記号を選ぶ側が色を逆引きせずに済む。 */
+    /** Identification that does not rely on color alone (A11Y-01). Lets code choosing line styles and symbols avoid reverse-mapping colors. */
     enum Kind { DANGER, WORK, MOVEMENT }
 
-    /** {@link #forStep}と同じ優先順位（危険→作業→移動）で分類する。 */
+    /** Classifies with the same priority as {@link #forStep} (danger → work → movement). */
     static Kind kindFor(PathStep step) {
         if (step.risk() != PathRisk.NONE) {
             return Kind.DANGER;
@@ -76,9 +76,9 @@ final class PathColors {
     }
 
     /**
-     * 危険 → 作業（設置・掘削）→ 移動の種類、の順に見る。網羅switchにしてあるので、
-     * {@link PathRisk}や{@link MovementType}に値が増えたときはここがコンパイルエラーになる
-     * （if連鎖だった頃は、追加した種類が黙って{@link #WALK}色として描かれていた）。
+     * Checks danger → work (placing, digging) → movement type, in that order. The switches are exhaustive, so adding
+     * a value to {@link PathRisk} or {@link MovementType} causes a compile error here
+     * (back when it was an if-chain, newly added types were silently drawn in the {@link #WALK} color).
      */
     static float[] forStep(PathStep step) {
         float[] risk = switch (step.risk()) {
@@ -107,7 +107,7 @@ final class PathColors {
             case CLIMB -> CLIMB;
             case ASCEND -> ASCEND;
             case DESCEND -> DESCEND;
-            // riskのswitchで必ず先に拾われるので、ここへは落ちてこない
+            // Always caught earlier by the switch on risk, so execution never falls through to here
             case FALL_DAMAGE -> FALL_DAMAGE;
             case FALL_MLG -> MLG_REQUIRED;
             case TRAVERSE -> WALK;

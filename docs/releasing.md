@@ -1,30 +1,30 @@
-# リリース手順
+# Release process
 
-## 初回設定
+## First-time setup
 
-Modrinth と CurseForge に XaeroNav のプロジェクトを作成する。GitHub リポジトリの
-**Settings → Secrets and variables → Actions** に以下を登録する。
+Create the XaeroNav projects on Modrinth and CurseForge. In the GitHub repository, register the following under
+**Settings → Secrets and variables → Actions**.
 
-| 種別 | 名前 | 値 |
+| Type | Name | Value |
 | --- | --- | --- |
-| Variable | `MODRINTH_PROJECT_ID` | Modrinth のプロジェクト ID |
-| Variable | `CURSEFORGE_PROJECT_ID` | CurseForge の数値プロジェクト ID |
-| Secret | `MODRINTH_TOKEN` | Modrinth の Personal Access Token（Create versions、Read versions、Write versions） |
-| Secret | `CURSEFORGE_TOKEN` | CurseForge の API トークン |
+| Variable | `MODRINTH_PROJECT_ID` | Modrinth project ID |
+| Variable | `CURSEFORGE_PROJECT_ID` | CurseForge numeric project ID |
+| Secret | `MODRINTH_TOKEN` | Modrinth Personal Access Token (Create versions, Read versions, Write versions) |
+| Secret | `CURSEFORGE_TOKEN` | CurseForge API token |
 
-GitHub Release には Actions の組み込み `GITHUB_TOKEN` を使うため、追加の GitHub トークンは不要。
-トークンや ID をリポジトリ内のファイルへ書かないこと。
+The GitHub Release uses Actions' built-in `GITHUB_TOKEN`, so no additional GitHub token is needed.
+Never write tokens or IDs into files in the repository.
 
-## 毎回のリリース
+## Every release
 
-1. `changelogs/<X.Y.Z>.md` に公開する変更点を書く。これは Modrinth、CurseForge、GitHub Release の共通本文になる。ファイルが無いか空なら処理は開始しない。リポジトリ直下の `CHANGELOG.md` はこのディレクトリへの案内だけなので、リリースごとの更新は要らない。
-2. 変更点を含むコミットを `main` へ反映する。
-3. GitHub Actions の **Release → Run workflow** で `X.Y.Z` を入力する。またはそのコミットへ `vX.Y.Z` タグを push する。
-4. ビルドと配布 JAR の検査後、各ローダー・Minecraft 版を Modrinth と CurseForge に個別投稿する。全10件が成功すると、GitHub Release を下書きなしで公開する。
+1. Write the public changes in `changelogs/<X.Y.Z>.md`. This becomes the shared body for Modrinth, CurseForge and the GitHub Release. If the file is missing or empty, the process doesn't start. `CHANGELOG.md` at the repository root only points to this directory, so it doesn't need updating per release.
+2. Get the commit containing the changes onto `main`.
+3. In GitHub Actions, run **Release → Run workflow** and enter `X.Y.Z`. Alternatively, push a `vX.Y.Z` tag to that commit.
+4. After the build and the distribution JAR checks, each loader / Minecraft version is uploaded separately to Modrinth and CurseForge. Once all 10 succeed, the GitHub Release is published directly, without a draft.
 
-公開 JAR 名は `xaeronav-X.Y.Z-<loader>-<minecraft>.jar`。通常の開発ビルドと違い、コミットハッシュは付かない。
-Modrinth と CurseForge 上のバージョン番号は `X.Y.Z-<loader>-<minecraft>` とし、5件が同じプロジェクト内で重複しないようにする。
+Published JAR names are `xaeronav-X.Y.Z-<loader>-<minecraft>.jar`. Unlike regular development builds, they carry no commit hash.
+Version numbers on Modrinth and CurseForge are `X.Y.Z-<loader>-<minecraft>`, so the 5 don't collide within the same project.
 
-公開中に一部のジョブが失敗したら、Actions の同じ実行から **Re-run failed jobs** を使う。成功した投稿を含めて新しい実行を開始すると、同じバージョンを重複投稿する可能性がある。通信エラーの直後は、対象サイトに投稿が作成されたか確認してから再実行する。
+If some jobs fail during publishing, use **Re-run failed jobs** from the same Actions run. Starting a new run that includes the successful uploads may upload the same version twice. Right after a network error, check whether the upload was created on the target site before re-running.
 
-ローカルでの設定確認には、公開済みの対象 JAR を `build/libs` に用意し、仮の ID とトークンを設定して `-Ppublish_dry_run=true` を付ける。dry run は実際のアップロードを行わない。
+To check the configuration locally, put the already-published target JARs in `build/libs`, set placeholder IDs and tokens, and pass `-Ppublish_dry_run=true`. A dry run doesn't perform the actual upload.

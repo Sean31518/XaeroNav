@@ -45,7 +45,7 @@ import net.prason.xaeronav.client.XaeroNavClient;
 import net.prason.xaeronav.client.XaeroNavCommands;
 import net.prason.xaeronav.client.XaeroNavKeys;
 
-/^* Fabricのイベントを、ローダー非依存の処理へ繋ぐだけの層。 ^/
+/^* A thin layer that just wires Fabric events to the loader-independent code. ^/
 public final class FabricEntry implements ClientModInitializer {
 
     @Override
@@ -67,8 +67,8 @@ public final class FabricEntry implements ClientModInitializer {
                 (handler, client) -> XaeroNavClient.TICK_HANDLER.onLoggingOut());
 
         //? if >=1.21.9 {
-        /^// 半透明の地形まで描き終えた後。以前のAFTER_TRANSLUCENTに当たる。1.21.10のjarは1.21.9でも使うが、1.21.9のFabric APIには
-        // WorldRenderEventsが無いので、1.21.10ではFabricLevelRendererMixinが同じ位置で描く
+        /^// After translucent terrain has been drawn; equivalent to the old AFTER_TRANSLUCENT. The 1.21.10 jar is also used on 1.21.9, but
+        // 1.21.9's Fabric API has no WorldRenderEvents, so on 1.21.10 FabricLevelRendererMixin draws at the same point
         //? if >=26.1 {
         /^¹LevelRenderEvents.END_MAIN.register(context -> XaeroNavClient.PATH_RENDERER.render(
                 context.poseStack(), ClientCompat.mainCamera(Minecraft.getInstance())));
@@ -89,22 +89,22 @@ public final class FabricEntry implements ClientModInitializer {
                 dispatcher.register(XaeroNavCommands.<FabricClientCommandSource>tree(
                         ctx -> sink(ctx.getSource()), FabricEntry::blockPos)));
         //?} else if >=1.17 {
-        /^// client command API v2は1.19から。それより前はv1の静的なdispatcherへ登録する
+        /^// client command API v2 starts at 1.19. Before that, register on v1's static dispatcher
         ClientCommandManager.DISPATCHER.register(XaeroNavCommands.<FabricClientCommandSource>tree(
                 ctx -> sink(ctx.getSource()), FabricEntry::blockPos));
         ^///?}
     }
 
     /^*
-     * `~`相対座標の解決には{@code CommandSourceStack}が要るが、Fabricのクライアントコマンドの
-     * sourceはそれではない。プレイヤーから作った{@code CommandSourceStack}で代用する
-     * ——{@code WorldCoordinates}が見るのは位置と向きだけで、ワールドやサーバーには触らない。
+     * Resolving `~` relative coordinates needs a {@code CommandSourceStack}, but a Fabric client command's
+     * source isn't one. Substitute a {@code CommandSourceStack} built from the player: {@code WorldCoordinates}
+     * only looks at position and rotation and never touches the world or server.
      ^/
     //? if >=1.17 {
     private static BlockPos blockPos(CommandContext<FabricClientCommandSource> ctx, String name) {
         //? if >=1.21.2 {
-        /^// プレイヤーからCommandSourceStackを作る口がサーバー側（ServerLevelを要る）にしか無くなった。
-        // 座標の解決が読むのは位置・向き・エンティティだけなので、それだけを持たせて組み立てる
+        /^// The only way left to build a CommandSourceStack from a player is server-side (needs a ServerLevel).
+        // Coordinate resolution only reads position, rotation and entity, so build one holding just those
         FabricClientCommandSource source = ctx.getSource();
         try {
             java.lang.reflect.Constructor<?> constructor = CommandSourceStack.class.getConstructors()[0];

@@ -14,11 +14,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link DiagnosticJobRunner}——単一worker・世代によるキャンセル・完了時のメインスレッド戻し。
+ * {@link DiagnosticJobRunner}: single worker, generation-based cancellation, handing back to the main thread on completion.
  *
- * <p>{@code onMainThread}はテストでは{@code Runnable::run}（呼び出し元のバックグラウンドスレッドで
- * 即実行）を渡す。実際の呼び出し側は{@code Minecraft.getInstance()::execute}を渡す想定だが、
- * ここで検証したいのは世代照合そのものなので、メインスレッドへの実際のスレッド切り替えは検証対象外。
+ * <p>Tests pass {@code Runnable::run} as {@code onMainThread} (runs immediately on the calling background
+ * thread). Real callers are expected to pass {@code Minecraft.getInstance()::execute}, but
+ * what we want to verify here is the generation check itself, so the actual switch to the main thread is out of scope.
  */
 class DiagnosticJobRunnerTest {
 
@@ -38,12 +38,12 @@ class DiagnosticJobRunnerTest {
         runner.submit(firstGeneration, cancelled -> {
             firstStarted.countDown();
             awaitOrFail(releaseFirst);
-            // 解放された時点でもう次の世代が始まっているはず——協調cancelの合図が届いていることを見る
+            // By the time it's released, the next generation should already have started; check that the cooperative cancel signal arrived
             firstSawCancelled.set(cancelled.getAsBoolean());
             return "first";
         }, (result, error) -> firstOnCompleteCalled.set(true));
 
-        assertTrue(firstStarted.await(AWAIT_SECONDS, TimeUnit.SECONDS), "1本目が開始しない");
+        assertTrue(firstStarted.await(AWAIT_SECONDS, TimeUnit.SECONDS), "The first job doesn't start");
 
         long secondGeneration = runner.begin();
         runner.submit(secondGeneration, cancelled -> "second",
@@ -53,8 +53,8 @@ class DiagnosticJobRunnerTest {
 
         awaitCondition(() -> secondResult.get() != null);
 
-        assertTrue(firstSawCancelled.get(), "世代を追い越されたのに協調cancelの合図が届いていない");
-        assertFalse(firstOnCompleteCalled.get(), "追い越された1本目の結果が呼び出し側へ届いてしまっている");
+        assertTrue(firstSawCancelled.get(), "Overtaken by a newer generation, but the cooperative cancel signal didn't arrive");
+        assertFalse(firstOnCompleteCalled.get(), "The overtaken first job's result reached the caller");
         assertEquals("second", secondResult.get());
     }
 
@@ -75,8 +75,8 @@ class DiagnosticJobRunnerTest {
             done.countDown();
         });
 
-        assertTrue(awaitOrFail(done), "完了が呼ばれない");
-        assertNull(result.get(), "例外時はresultがnullで渡るべき");
+        assertTrue(awaitOrFail(done), "Completion isn't called");
+        assertNull(result.get(), "On exception, result should be passed as null");
         assertNotNull(error.get());
         assertEquals(thrown, error.get());
     }
@@ -94,7 +94,7 @@ class DiagnosticJobRunnerTest {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(AWAIT_SECONDS);
         while (!condition.getAsBoolean()) {
             if (System.nanoTime() > deadline) {
-                throw new AssertionError("条件が時間内に満たされなかった");
+                throw new AssertionError("Condition not met in time");
             }
             Thread.onSpinWait();
         }

@@ -60,10 +60,10 @@ class RouteReviewTest {
         FakeCells cells = flat();
         BlockPos start = new BlockPos(8, FLOOR_Y + 1, 8);
         BlockPos goal = new BlockPos(56, FLOOR_Y + 1, 56);
-        // 斜めに行けばよいところを、先に東へ端まで行ってから北へ上がる
+        // Where going diagonally would do, it first goes all the way east and then up north
         List<PathStep> detour = path(cells, start, new BlockPos(56, FLOOR_Y + 1, 8), goal);
         RouteReview.Detour review = RouteReview.detour(field(cells, goal), start, detour, 0);
-        assertTrue(review.worthReplanning(MIN_EXTRA_TICKS), "遠回りを見逃した: " + review);
+        assertTrue(review.worthReplanning(MIN_EXTRA_TICKS), "Missed the detour: " + review);
     }
 
     @Test
@@ -73,6 +73,6 @@ class RouteReviewTest {
         BlockPos goal = new BlockPos(56, FLOOR_Y + 1, 56);
         List<PathStep> optimal = path(cells, start, goal);
         RouteReview.Detour review = RouteReview.detour(field(cells, goal), start, optimal, 0);
-        assertFalse(review.worthReplanning(MIN_EXTRA_TICKS), "最短の経路を遠回りとした: " + review);
+        assertFalse(review.worthReplanning(MIN_EXTRA_TICKS), "Treated the shortest path as a detour: " + review);
     }
 }

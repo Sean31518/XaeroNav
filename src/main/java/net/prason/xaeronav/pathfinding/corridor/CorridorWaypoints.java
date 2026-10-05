@@ -6,9 +6,9 @@ import java.util.List;
 import net.minecraft.core.BlockPos;
 
 /**
- * 区間ごとに層2で解決した点列を、精緻なwaypoint列へ組み立てる。Minecraft/Xaeroのどちらにも
- * 依存しない純粋なロジック（{@link CorridorLegSolver}がXaero地図の読み取りを担い、こちらは
- * その結果を後処理するだけ）。
+ * Assembles the per-leg point lists solved by layer 2 into a detailed waypoint list. Pure logic with no
+ * dependency on Minecraft or Xaero ({@link CorridorLegSolver} reads the Xaero map; this class only
+ * post-processes its results).
  */
 public final class CorridorWaypoints {
 
@@ -16,9 +16,9 @@ public final class CorridorWaypoints {
     }
 
     /**
-     * 各区間の点列を順に連結する。区間ごとの点列は、層2A*が解けた区間なら
-     * {@code PathResult.steps()}の位置（未到達でも辿り着けた分をそのまま使う——既存の
-     * 「暫定経路」と同じ思想）、地表データが無い区間なら生のwaypoint1点だけ、を呼び出し側が渡す。
+     * Concatenates each leg's point list in order. For each leg the caller passes either the positions of
+     * {@code PathResult.steps()} if layer-2 A* solved it (even if unreached, the part that was reached is used as-is,
+     * the same idea as the existing "provisional route"), or just the raw single waypoint if there is no surface data.
      */
     public static List<BlockPos> stitch(List<List<BlockPos>> legPoints) {
         List<BlockPos> waypoints = new ArrayList<>();
@@ -29,12 +29,12 @@ public final class CorridorWaypoints {
     }
 
     /**
-     * 直前に採用した点からユークリッド距離で{@code minSpacingBlocks}未満の点を間引く。層2は
-     * ブロック単位の細かい点列を返すため、間引かないとHUDの「長距離ルート N/M」やwaypoint数が
-     * 層1の頃と比べて桁違いに増え、案内として読みにくくなる。
+     * Thins out points closer than {@code minSpacingBlocks} (Euclidean) to the last kept point. Layer 2
+     * returns a fine per-block point list, so without thinning the HUD's "long-distance route N/M" and the waypoint
+     * count grow by orders of magnitude compared to layer 1, making the guidance hard to read.
      *
-     * <p>最後の点（区間の終点＝次のwaypointへの到着点）は間引かれても必ず残す——waypointの
-     * 到着位置がずれると、それに続く区間の始点との対応が崩れる。
+     * <p>The last point (the end of the leg = arrival point for the next waypoint) is always kept even if it would be
+     * thinned: if a waypoint's arrival position shifts, it no longer lines up with the start of the following leg.
      */
     public static List<BlockPos> downsample(List<BlockPos> points, int minSpacingBlocks) {
         if (points.isEmpty()) {

@@ -18,37 +18,37 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * 測定用プローブ（アサート無し）。<b>goto 直後、Xaero の地図がストリーミングで届く間に
- * 長距離ルート（層1）が何度引き直され、そのたびに線がどれだけ振れるか</b>を print する。
+ * Measurement probe (no asserts). Prints <b>how many times the long-distance route (layer 1) is redrawn right after goto,
+ * while Xaero's map streams in, and how far the line swings each time</b>.
  *
- * <p>ユーザー報告「ルート選定の最初の方が安定しない」の裏取り。仕組みは
- * [[xaeronav-status]] の「goto 直後の経路ちらつき」——未読み込みのセルは
- * {@link CoarseRouter} でほぼ最安なので、まだ見えていない溶岩の海を突っ切る大局が引かれ、
- * リージョンが埋まるにつれて避ける側へスナップする。{@code PathfindingState} の
- * {@code redrawCoarseRouteForLoadedMap} が 3 秒ごと・最大 10 回これを引き直す。
+ * <p>Backs up the user report "route selection is unstable at first". The mechanism is
+ * "path flicker right after goto" in [[xaeronav-status]]: unloaded cells are nearly the cheapest in
+ * {@link CoarseRouter}, so a big-picture route cutting straight through a not-yet-visible lava sea gets drawn,
+ * then snaps to the avoiding side as regions fill in. {@code PathfindingState}'s
+ * {@code redrawCoarseRouteForLoadedMap} redraws it every 3 seconds, up to 10 times.
  *
- * <p><b>再現の仕方:</b> 保存地形を、始点にいちばん近いチャンクから順に「まだ届いていない」ものを
- * {@link CellData#ABSENT} で隠し、段階的に開けていく。各段階で {@code computeCoarseRoute} と同じ
- * AVOID→ALLOW→BRIDGE の梯子を回して中間目標列を得る。実機の Xaero は 512 ブロックのリージョン
- * 単位で届くが、ここではフロンティアの広がりをチャンク解像度でモデル化している
- * （届く順序＝始点からの距離順は実機と同じ）。
+ * <p><b>How it's reproduced:</b> the saved terrain hides the chunks that "haven't arrived yet", starting from the one nearest the start,
+ * with {@link CellData#ABSENT}, and opens them up step by step. At each step it runs the same
+ * AVOID->ALLOW->BRIDGE ladder as {@code computeCoarseRoute} to get the intermediate-goal sequence. In the real game Xaero delivers
+ * data in 512-block regions, but here the frontier's growth is modeled at chunk resolution
+ * (the arrival order, i.e. by distance from the start, is the same as in the real game).
  *
- * <p><b>読み取る値:</b>
+ * <p><b>Values to read:</b>
  * <ul>
- *   <li>各段階の中間目標列と、前段階からの「振れ幅」（新しい折れ線の各点から旧折れ線への最短距離の最大）</li>
- *   <li>「これから避けることになる溶岩チャンク」を今の大局が何個通っているか
- *       （＝ユーザーに見えている「間違ったルート」の大きさ）</li>
- *   <li>公開を「既知セル率 T 以上まで待つ」に変えたとき、引き直し回数と溶岩ルートの段階が
- *       どれだけ減るか（＝待たせる代償と釣り合うか）</li>
+ *   <li>Each step's intermediate-goal sequence and its "swing" from the previous step (the max over the new polyline's points of the shortest distance to the old polyline)</li>
+ *   <li>How many "lava chunks that will end up being avoided" the current big-picture route passes through
+ *       (= the size of the "wrong route" the user sees)</li>
+ *   <li>If publishing were changed to "wait until the known-cell ratio reaches T", how much the redraw count and lava-route steps
+ *       would drop (= whether that's worth the cost of waiting)</li>
  * </ul>
  */
 @Tag("slow")
 class CoarseRouteChurnProbeTest {
 
-    /** {@code CoarseMapWindow#PADDING_CHUNKS}。 */
+    /** {@code CoarseMapWindow#PADDING_CHUNKS}. */
     private static final int PADDING_CHUNKS = 32;
 
-    /** フロンティアを何段階で広げるか。実機の 3 秒ごとの引き直しより細かく刻んで曲線を見る。 */
+    /** How many steps to grow the frontier in. Finer than the real game's 3-second redraws, to see the curve. */
     private static final int STAGES = 20;
 
     private record Scenario(String name, String resource, BlockPos start, BlockPos goal) {
@@ -57,11 +57,11 @@ class CoarseRouteChurnProbeTest {
     @Test
     void printsHowMuchTheCoarseRouteChurnsWhileTheMapStreamsIn() throws IOException {
         List<Scenario> scenarios = List.of(
-                // 実機 run#2（2026-09-09）の停止調査と同じ長距離ネザールート
-                new Scenario("run#2 長距離", "/nether_wide.txt.gz",
+                // Same long-distance Nether route as the stall investigation of real-game run#2 (2026-09-09)
+                new Scenario("run#2 long distance", "/nether_wide.txt.gz",
                         new BlockPos(-328, 64, 696), new BlockPos(-259, 64, 379)),
-                // 溶岩の大洋を横切る。未知セル＝最安が効くなら、ここで straight-through が出るはず
-                new Scenario("溶岩の大洋 横断", "/nether_lava_sea.txt.gz",
+                // Crosses a lava ocean. If unknown cells = cheapest takes effect, a straight-through should show up here
+                new Scenario("lava ocean crossing", "/nether_lava_sea.txt.gz",
                         new BlockPos(-405, 34, 440), new BlockPos(-200, 34, 640)));
         for (Scenario s : scenarios) {
             System.out.println("=== " + s.name() + " (" + s.resource() + ") ===");
@@ -94,9 +94,9 @@ class CoarseRouteChurnProbeTest {
                 win, referenceY, () -> false);
         List<BlockPos> fullRoute = route(fullMap, s.start(), s.goal()).waypoints();
 
-        System.out.printf(Locale.ROOT, "窓=%dx%dチャンク データ持ち=%d 参照Y=%d 最終形の中間目標=%d%n",
+        System.out.printf(Locale.ROOT, "window=%dx%d chunks withData=%d refY=%d finalIntermediateGoals=%d%n",
                 chunksX, chunksZ, dataChunks, referenceY, fullRoute.size());
-        System.out.println("段階 既知% 中間目標 到達 変化@ 振れ(blk) 溶岩ch");
+        System.out.println("step known% goals reached changed@ swing(blk) lavaCh");
 
         Arrays.fill(revealed, false);
         List<List<BlockPos>> perStage = new ArrayList<>();
@@ -151,12 +151,12 @@ class CoarseRouteChurnProbeTest {
             }
         }
         System.out.printf(Locale.ROOT,
-                "引き直し=%d回 安定するのは既知%.0f%%（段階%d） 最終形と一致=%s%n",
+                "redraws=%d stableAtKnown=%.0f%% (step %d) matchesFinal=%s%n",
                 redraws, lastChange < 0 ? 0 : known.get(lastChange), lastChange,
                 perStage.get(perStage.size() - 1).equals(fullRoute));
         System.out.printf(Locale.ROOT,
-                "「これから避ける溶岩」を余分に通る大局が出た段階=%d/%d%n", lavaStages, perStage.size());
-        System.out.println("公開を「既知%以上まで待つ」に変えたとき: 残り引き直し / 残り溶岩段階 / 待たせる段階:");
+                "steps whose big-picture route passes extra \"lava to be avoided\"=%d/%d%n", lavaStages, perStage.size());
+        System.out.println("If publishing waited until \"known% >= T\": remaining redraws / remaining lava steps / steps waited:");
         for (double threshold : new double[] {0, 25, 50, 75, 90}) {
             int gate = 0;
             while (gate < known.size() && known.get(gate) < threshold) {
@@ -172,7 +172,7 @@ class CoarseRouteChurnProbeTest {
                     remLava++;
                 }
             }
-            System.out.printf(Locale.ROOT, "  既知%3.0f%%: %d / %d / %d%n",
+            System.out.printf(Locale.ROOT, "  known%3.0f%%: %d / %d / %d%n",
                     threshold, remRedraws, remLava, gate);
         }
     }
@@ -185,7 +185,7 @@ class CoarseRouteChurnProbeTest {
                 .minDescentTicksPerBlock(ActionCosts.descentBoundForMaxDrop(3)));
     }
 
-    /** {@code CoarseMapWindow#read} と同じ窓（始点・終点の外接矩形＋パディング）。 */
+    /** Same window as {@code CoarseMapWindow#read} (bounding box of start and goal + padding). */
     private static SearchBounds window(SearchBounds world, BlockPos start, BlockPos goal) {
         int minChunkX = (Math.min(start.getX(), goal.getX()) >> 4) - PADDING_CHUNKS;
         int maxChunkX = (Math.max(start.getX(), goal.getX()) >> 4) + PADDING_CHUNKS;
@@ -210,7 +210,7 @@ class CoarseRouteChurnProbeTest {
         return chunks;
     }
 
-    /** {@code PathfindingState#computeCoarseRoute} の梯子。届いた最初のポリシーの結果を採る。 */
+    /** The ladder from {@code PathfindingState#computeCoarseRoute}. Takes the result of the first policy that reaches the goal. */
     private static CoarseRouter.Route route(CoarseMap map, BlockPos start, BlockPos goal) {
         for (CoarseRouter.BridgePolicy policy : CoarseRouter.BridgePolicy.values()) {
             CoarseRouter.Route r = CoarseRouter.findRoute(map, start, goal, true, policy);
@@ -221,7 +221,7 @@ class CoarseRouteChurnProbeTest {
         return CoarseRouter.findRoute(map, start, goal, true, CoarseRouter.BridgePolicy.BRIDGE);
     }
 
-    /** 新しい折れ線の各点から旧折れ線への最短距離の最大（片方向ハウスドルフ、ブロック）。 */
+    /** Max over the new polyline's points of the shortest distance to the old polyline (one-sided Hausdorff, in blocks). */
     private static double swing(List<BlockPos> before, List<BlockPos> after) {
         if (before.isEmpty() || after.isEmpty()) {
             return Double.NaN;
@@ -249,7 +249,7 @@ class CoarseRouteChurnProbeTest {
         return Math.sqrt(dx * dx + dz * dz);
     }
 
-    /** この大局が「完全に見えた地図なら溶岩」のチャンクを何個通っているか。 */
+    /** How many chunks this big-picture route passes through that are lava on the fully visible map. */
     private static int lavaChunksOnRoute(List<BlockPos> waypoints, CoarseMap full, BlockPos start) {
         if (waypoints.isEmpty()) {
             return 0;
@@ -334,7 +334,7 @@ class CoarseRouteChurnProbeTest {
         return false;
     }
 
-    /** 窓の外接矩形のうち、開けたチャンク以外を {@link CellData#ABSENT} で隠す。 */
+    /** Hides every chunk in the window's bounding box except the opened ones with {@link CellData#ABSENT}. */
     private record RevealedCells(CellSource all, boolean[] revealed, int minChunkX, int minChunkZ,
                                  int chunksX, int chunksZ) implements CellSource {
 

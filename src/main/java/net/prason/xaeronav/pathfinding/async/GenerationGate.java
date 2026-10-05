@@ -6,15 +6,15 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
- * 「世代を追い越されていたら結果を静かに捨てる」を1箇所にまとめたもの。ライブナビ
- * （{@code PathfindingState}）の5箇所の非同期完了処理が同じ形の世代チェックを個別に書いていたので
- * 共通化する（TEST-01）。{@link DiagnosticJobRunner}と考え方は同じだが、あちらは独自の
- * executor・世代カウンタを持つのに対し、こちらは呼び出し側が既に持つ{@link AtomicLong}と
- * executorへ相乗りする形。
+ * Puts "silently discard the result if the generation has been overtaken" in one place. The five async
+ * completion handlers of live navigation ({@code PathfindingState}) each wrote the same generation check
+ * by hand, so this unifies them (TEST-01). Same idea as {@link DiagnosticJobRunner}, but that one has its
+ * own executor and generation counter, while this one piggybacks on the {@link AtomicLong} and executor
+ * the caller already has.
  *
- * <p>メインスレッドへの結果の戻し方は構築時に{@code onMainThread}として受け取る
- * （呼び出し側は{@code Minecraft.getInstance()::execute}を渡す想定）。このクラス自体は
- * Minecraft非依存に保ってあるので、世代管理・キャンセル伝播の単体テストに実際のクライアントを要らない。
+ * <p>How results get back to the main thread is taken at construction as {@code onMainThread} (callers
+ * are expected to pass {@code Minecraft.getInstance()::execute}). The class itself stays independent of
+ * Minecraft, so unit tests of generation handling and cancellation propagation need no real client.
  */
 public final class GenerationGate {
 
@@ -27,9 +27,9 @@ public final class GenerationGate {
     }
 
     /**
-     * {@code future}が完了した時点でまだ{@code myGeneration}が最新世代なら、{@code onMainThread}
-     * 経由で{@code action}を呼ぶ。世代を追い越されていれば{@code action}は一切呼ばれない
-     * （結果を静かに捨てる）。
+     * If {@code myGeneration} is still the latest generation when {@code future} completes, calls
+     * {@code action} via {@code onMainThread}. If the generation has been overtaken, {@code action} is
+     * never called (the result is silently discarded).
      */
     public <T> void whenStillCurrent(CompletableFuture<T> future, long myGeneration,
                                       BiConsumer<T, Throwable> action) {

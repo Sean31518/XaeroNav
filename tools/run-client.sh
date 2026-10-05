@@ -2,9 +2,9 @@
 set -euo pipefail
 
 node="${1:-}"
-# ノードの一覧はsettings.gradle.ktsにしかない。名前の形だけ見て、無いノードはGradleに断らせる
+# The list of nodes lives only in settings.gradle.kts. Only check the name's shape and let Gradle reject nodes that don't exist
 if [[ ! "$node" =~ ^[0-9]+(\.[0-9]+)+-(fabric|forge|neoforge)$ ]]; then
-    echo "Usage: $0 <MCバージョン>-<fabric|forge|neoforge> [gradle args...]  (例: 1.21.1-neoforge)" >&2
+    echo "Usage: $0 <MC version>-<fabric|forge|neoforge> [gradle args...]  (e.g. 1.21.1-neoforge)" >&2
     exit 2
 fi
 shift
@@ -12,9 +12,9 @@ shift
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$project_dir"
 
-# 同じGradle invocationへ2タスクを渡すと、Gradle 9がstonecutterMergeによる
-# src/の更新をcompileJavaの暗黙依存として拒否する。プロセスを分ければ、2回目の
-# configurationは切り替え後のソースを通常の入力として扱える。
+# Passing both tasks to the same Gradle invocation makes Gradle 9 reject stonecutterMerge's
+# update of src/ as an implicit dependency of compileJava. With separate processes, the second
+# configuration treats the switched sources as normal inputs.
 ./gradlew ":stonecutterSwitchTo$node"
-# macOS標準のbash 3.2はset -u下で空の"$@"を未定義扱いにするので${@+"$@"}で展開する
+# macOS's stock bash 3.2 treats an empty "$@" as unset under set -u, so expand it with ${@+"$@"}
 exec ./gradlew ":$node:runClient" ${@+"$@"}

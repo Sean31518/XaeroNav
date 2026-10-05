@@ -18,49 +18,49 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * 遠回りが<b>経路のどこに溜まっているか</b>を測り、繋ぎ目の直し方3通りを並べる。
+ * Measures <b>where along the route</b> the detours accumulate, and compares three ways of fixing seams.
  *
- * <p>経路全体の倍率（{@code ProgressiveDiscoveryTest}）では「繋ぎ目だけが悪い」のか
- * 「どこも同じくらい悪い」のかが分からない。ここは窓（{@link #WINDOW_BLOCKS}ブロックぶんの区間）を
- * ずらしながら、その区間だけを全視界で解き直して比べ、<b>繋ぎ目を含む窓とそうでない窓に分けて</b>出す。
- * 継ぎ足したままの経路では、繋ぎ目を含む窓だけが平均1.02〜1.21倍・最悪1.795倍で、含まない窓
- * （1.00〜1.05倍）とはっきり分かれる。
+ * <p>The ratio for the whole route ({@code ProgressiveDiscoveryTest}) cannot tell whether "only the seams are bad" or
+ * "everything is equally bad". This slides a window (a stretch of {@link #WINDOW_BLOCKS} blocks), re-solves just that
+ * stretch with full visibility, compares, and reports <b>windows containing a seam separately from those that do
+ * not</b>. On a route left extended as-is, only the windows containing a seam average 1.02 to 1.21 times (worst
+ * 1.795), clearly separated from the windows without one (1.00 to 1.05 times).
  *
- * <p>並べる3通りは{@link ProgressiveWalk.Mode}。<b>この番人が守っているのは
- * 「繋ぎ目だけ直す」を選んだ判断そのもの</b>——全部引き直す方が安くなったら、
- * {@code PathfindingState#repairSeam}ごと考え直す価値が出たということ。
- * 質だけでなく<b>線の描き変わり</b>も見る。「歩いているだけで案内が変わる」は一度直した症状で、
- * 質のためにそこへ戻ってはいけない。
+ * <p>The three compared are {@link ProgressiveWalk.Mode}. <b>What this guard protects is the decision itself to
+ * "fix only the seams"</b>: if re-planning everything becomes cheaper, it is worth rethinking
+ * {@code PathfindingState#repairSeam} altogether.
+ * It checks not only quality but also <b>line redraws</b>. "The guidance changes just from walking" is a symptom
+ * that was fixed once, and we must not go back to it for the sake of quality.
  */
 @Tag("slow")
 class SeamDetourTest {
 
-    /** 局所の遠回りを測る窓の長さ（経路に沿った距離・ブロック）。 */
+    /** Length of the window for measuring local detours (distance along the route, blocks). */
     private static final double WINDOW_BLOCKS = 64.0;
 
-    /** 窓をずらす間隔（ブロック）。 */
+    /** Interval for sliding the window (blocks). */
     private static final double STRIDE_BLOCKS = 16.0;
 
     private static final int RADIUS = 96;
 
     /**
-     * 繋ぎ目を直した経路が、直さない経路よりこの割合を超えて高くなったら落とす。
-     * 実測は0.88〜1.00倍（5地形すべてで安くなる）。
+     * Fail if the route with repaired seams becomes more expensive than the unrepaired route by more than this ratio.
+     * Measured at 0.88 to 1.00 times (cheaper on all 5 terrains).
      */
     private static final double REPAIR_VERSUS_EXTEND_LIMIT = 1.02;
 
     /**
-     * <b>全部引き直す方がはっきり安くなったら落とす。</b>ユーザー要望の「引き直すときは全部
-     * 引き直す」を採らずに繋ぎ目だけ直すと決めた根拠がこれ——実測では引き直しても繋ぎ目の
-     * 遠回りは半分しか消えず（引き直した先にも繋ぎ目ができる）、足元の線が4〜12回描き変わった。
-     * 実測は0.94〜1.00倍。
+     * <b>Fail if re-planning everything becomes clearly cheaper.</b> This is the basis for fixing only the seams
+     * instead of adopting the user's request to "re-plan everything when re-planning": measurements showed that
+     * re-planning only removes half of the seam detours (the re-planned part gets seams too), and the line underfoot
+     * was redrawn 4 to 12 times. Measured at 0.94 to 1.00 times.
      */
     private static final double REPAIR_VERSUS_REPLAN_LIMIT = 1.05;
 
-    /** 繋ぎ目を直した経路に残ってよい局所の遠回り。実測は最悪1.093倍。 */
+    /** Local detour allowed to remain on the route with repaired seams. Measured worst is 1.093 times. */
     private static final double REPAIRED_SEAM_WORST_LIMIT = 1.20;
 
-    /** 足元（32ブロック以内）で線が描き変わってよい回数。実測は0〜1回、全部引き直しは4〜12回。 */
+    /** Number of times the line underfoot (within 32 blocks) may be redrawn. Measured 0 to 1; full re-planning is 4 to 12. */
     private static final int REPAIRED_NEAR_REDRAW_LIMIT = 2;
 
     private record Route(String name, String resource, BlockPos start, BlockPos goal) {
@@ -68,15 +68,15 @@ class SeamDetourTest {
 
     private static List<Route> routes() {
         return List.of(
-                new Route("地上", "/overworld_terrain_columns.txt.gz",
+                new Route("surface", "/overworld_terrain_columns.txt.gz",
                         new BlockPos(30, 0, 30), new BlockPos(230, 0, 220)),
-                new Route("地上2", "/overworld_terrain_columns.txt.gz",
+                new Route("surface2", "/overworld_terrain_columns.txt.gz",
                         new BlockPos(230, 0, 30), new BlockPos(40, 0, 210)),
-                new Route("ネザー", "/nether_terrain_columns.txt.gz",
+                new Route("nether", "/nether_terrain_columns.txt.gz",
                         new BlockPos(-180, 0, -180), new BlockPos(-20, 0, -20)),
-                new Route("ネザー2", "/nether_terrain_columns.txt.gz",
+                new Route("nether2", "/nether_terrain_columns.txt.gz",
                         new BlockPos(-20, 0, -180), new BlockPos(-180, 0, -30)),
-                new Route("エンド", "/end_terrain_columns.txt.gz",
+                new Route("end", "/end_terrain_columns.txt.gz",
                         new BlockPos(1160, 0, 1240), new BlockPos(1260, 0, 1160)));
     }
 
@@ -138,20 +138,20 @@ class SeamDetourTest {
 
     private static String summarize(String label, List<Window> windows, List<PathStep> steps) {
         if (windows.isEmpty()) {
-            return label + " 窓なし";
+            return label + " no windows";
         }
         StringBuilder out = new StringBuilder();
-        out.append(String.format(Locale.ROOT, "%s 窓%d本", label, windows.size()));
+        out.append(String.format(Locale.ROOT, "%s windows%d", label, windows.size()));
         for (boolean seam : new boolean[] {true, false}) {
             List<Window> subset = windows.stream().filter(w -> w.seam() == seam).toList();
-            String kind = seam ? "繋ぎ目あり" : "繋ぎ目なし";
+            String kind = seam ? "with seam" : "without seam";
             if (subset.isEmpty()) {
-                out.append(String.format(Locale.ROOT, " | %s 0本", kind));
+                out.append(String.format(Locale.ROOT, " | %s 0", kind));
                 continue;
             }
             double mean = subset.stream().mapToDouble(Window::ratio).average().orElse(0);
             Window worst = subset.stream().max((a, b) -> Double.compare(a.ratio(), b.ratio())).orElseThrow();
-            out.append(String.format(Locale.ROOT, " | %s %d本 平均%.3f 最悪%.3f@%s",
+            out.append(String.format(Locale.ROOT, " | %s %d avg%.3f worst%.3f@%s",
                     kind, subset.size(), mean, worst.ratio(),
                     steps.get(worst.from()).pos().toShortString()));
         }
@@ -160,9 +160,9 @@ class SeamDetourTest {
 
     private static String label(ProgressiveWalk.Mode mode) {
         return switch (mode) {
-            case EXTEND -> "継ぎ足し";
-            case REPLAN -> "全部引き直し";
-            case REPAIR -> "繋ぎ目だけ直す";
+            case EXTEND -> "extend";
+            case REPLAN -> "replan all";
+            case REPAIR -> "repair seams only";
         };
     }
 
@@ -179,13 +179,13 @@ class SeamDetourTest {
             for (ProgressiveWalk.Mode mode : ProgressiveWalk.Mode.values()) {
                 ProgressiveWalk.Trace trace = ProgressiveWalk.trace(all, start, goal, RADIUS, mode);
                 if (trace.steps().isEmpty()) {
-                    failures.add(route.name() + " " + label(mode) + " が目的地まで届かなかった");
+                    failures.add(route.name() + " " + label(mode) + " did not reach the destination");
                     continue;
                 }
                 traces.put(mode, trace);
                 report.add(summarize(String.format(Locale.ROOT,
-                                "%s %s 全体%.0f 繋ぎ目%d箇所 描き変わり%d回(近く%d回, 計%.0fブロック)"
-                                        + " 修復%d/%d回 展開%dノード",
+                                "%s %s total%.0f seams%d redraws%d(near%d, total %.0f blocks)"
+                                        + " repairs%d/%d expanded%d nodes",
                                 route.name(), label(mode), ProgressiveWalk.cost(trace.steps()),
                                 trace.joints().size(), trace.redraws(), trace.nearRedraws(),
                                 trace.redrawnBlocks(), trace.repairsTaken(), trace.repairAttempts(),
@@ -202,18 +202,18 @@ class SeamDetourTest {
                 double limit = other == ProgressiveWalk.Mode.EXTEND
                         ? REPAIR_VERSUS_EXTEND_LIMIT : REPAIR_VERSUS_REPLAN_LIMIT;
                 if (trace != null && cost > ProgressiveWalk.cost(trace.steps()) * limit) {
-                    failures.add(String.format(Locale.ROOT, "%s: 繋ぎ目だけ直すと %.0f で、%sの %.0f より高い",
+                    failures.add(String.format(Locale.ROOT, "%s: repairing only seams gives %.0f, more than %s's %.0f",
                             route.name(), cost, label(other), ProgressiveWalk.cost(trace.steps())));
                 }
             }
             double worst = windows(all, repaired).stream().filter(Window::seam)
                     .mapToDouble(Window::ratio).max().orElse(1.0);
             if (worst > REPAIRED_SEAM_WORST_LIMIT) {
-                failures.add(String.format(Locale.ROOT, "%s: 直したあとも繋ぎ目に %.3f倍が残っている",
+                failures.add(String.format(Locale.ROOT, "%s: %.3f times still remains at a seam after repair",
                         route.name(), worst));
             }
             if (repaired.nearRedraws() > REPAIRED_NEAR_REDRAW_LIMIT) {
-                failures.add(String.format(Locale.ROOT, "%s: 足元で線が%d回描き変わっている（上限%d回）",
+                failures.add(String.format(Locale.ROOT, "%s: the line underfoot was redrawn %d times (limit %d)",
                         route.name(), repaired.nearRedraws(), REPAIRED_NEAR_REDRAW_LIMIT));
             }
         }

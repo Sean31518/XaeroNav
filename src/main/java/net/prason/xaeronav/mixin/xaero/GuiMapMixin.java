@@ -27,20 +27,20 @@ import xaero.map.graphics.MapRenderHelper;
 import xaero.map.gui.GuiMap;
 
 /**
- * 世界地図の地形描画の直後に経路を1ブロック四方の色付き矩形の連なりとして描き足す。
- * {@code flooredCameraX}/{@code flooredCameraZ}への引き算だけで地図座標に変換できるのは、
- * 地形描画自体が全く同じ変換を使っているため。
+ * Right after the world map's terrain rendering, draws the route as a chain of 1x1-block colored rectangles.
+ * Converting to map coordinates with just a subtraction from {@code flooredCameraX}/{@code flooredCameraZ} works because
+ * the terrain rendering itself uses exactly the same transform.
  *
- * <p>{@code endBatch()}呼び出しのordinalはバージョンで違う。1.20+は地形描画のflushが1回目
- * （ordinal 0）だが、1.16.5〜1.19.2の{@code GuiMap#render}は最初に前フレームの取り残しをflushする
- * 呼び出しが先頭付近にもう1回あり、地形＋オーバーレイのflushは2回目（ordinal 1）になる
- * （Xaero 1.46.0のバイトコードで、1.18.2・1.19.2・1.20.1を比べて確認）。
+ * <p>The ordinal of the {@code endBatch()} call differs by version. On 1.20+ the terrain flush is the first
+ * (ordinal 0), but 1.16.5-1.19.2's {@code GuiMap#render} has one more call near the start that flushes
+ * leftovers from the previous frame, so the terrain + overlay flush is the second (ordinal 1)
+ * (confirmed by comparing 1.18.2, 1.19.2 and 1.20.1 in Xaero 1.46.0 bytecode).
  *
- * <p>何をどの色で描くかは{@link MapPathOverlay}が決める（ミニマップ側と共有）。ここが持つのは
- * Xaero固有の描画先と座標変換だけに留める。
+ * <p>What to draw in which color is decided by {@link MapPathOverlay} (shared with the minimap side). This class
+ * holds only the Xaero-specific render target and coordinate transform.
  *
- * <p>required=falseの専用mixin configに属する。Xaero's Map未導入・大規模リファクタで対象メソッドの
- * 形が変わった場合はこの1機能だけが無効化され、MOD本体はワールド内描画のみで動作を続ける。
+ * <p>Belongs to a dedicated required=false mixin config. If Xaero's World Map isn't installed or a major refactor changes the
+ * target method's shape, only this one feature is disabled, and the mod itself keeps working with in-world rendering only.
  */
 @Mixin(GuiMap.class)
 public abstract class GuiMapMixin implements XaeroHookMarker {
@@ -48,7 +48,7 @@ public abstract class GuiMapMixin implements XaeroHookMarker {
     private static final float DOT_ALPHA = 0.9f;
 
     @WrapOperation(
-            // 26.1でScreen#renderがextractRenderStateへ改名された
+            // In 26.1, Screen#render was renamed to extractRenderState
             //? if >=26.1 {
             /*method = "extractRenderState",
             *///?} else {

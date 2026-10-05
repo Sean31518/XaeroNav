@@ -6,7 +6,7 @@ import com.terraformersmc.modmenu.api.ModMenuApi;
 
 import net.prason.xaeronav.client.gui.XaeroNavConfigScreen;
 
-/^* Modsの一覧から設定画面を開けるようにするだけの連携。ModMenu未導入なら呼ばれない。 ^/
+/^* Integration that only lets the config screen be opened from the Mods list. Not called without ModMenu. ^/
 public final class XaeroNavModMenu implements ModMenuApi {
 
     @Override

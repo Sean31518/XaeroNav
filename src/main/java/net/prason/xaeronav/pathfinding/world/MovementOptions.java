@@ -1,21 +1,21 @@
 package net.prason.xaeronav.pathfinding.world;
 
 /**
- * 探索に持ち込む「何をしてよいか」の一式。
+ * The set of "what is allowed" brought into a search.
  *
- * <p>設定を読むのは{@link ChunkView#capture}を呼ぶ側の1箇所だけにするためのまとめ。項目を1つ足すたびに
- * 4箇所の呼び出しへ引数を書き足していくと、どこか1つを直し忘れても<b>型が合ってしまう</b>
- * （boolean・intが並ぶので順序違いも通る）。
+ * <p>Bundled so that settings are read in exactly one place, the caller of {@link ChunkView#capture}. Adding each new
+ * item as an argument to four call sites means that if you forget to fix one, <b>the types still match</b>
+ * (with booleans and ints lined up, even the wrong order compiles).
  *
- * @param maxLavaBridgeRunBlocks 溶岩の上に架けてよい橋の長さ。{@code maxBridgeRunBlocks}とは別に持つ。
- *                               空洞に架ける橋は外しても落ちるだけだが、溶岩の上では即死する
- * @param maxVoidBridgeRunBlocks 底の無い空虚の上に架けてよい橋の長さ。溶岩と分けて持つのは、
- *                               ジ・エンドではほぼ全ての橋がこれに当たるため
- * @param avoidRiskyJumps 底の無い空虚の上・外したら死ぬ落差の上での跳躍を避けるか。避ける設定でも、
- *                        経路が一本も引けなかったときだけ緩和の梯子が開ける（{@code strictLimits}なら開けない）
- * @param blockBudgetEnabled 持ち物のブロック数を経路の設置数の上限にするか。offなら数を見ない
- * @param blockBudgetReserve 予算から差し引いて手元に残す枚数。使い切る経路を避けたいときに増やす
- * @param strictLimits 上の上限を、経路が一本も引けないときにも緩めないか
+ * @param maxLavaBridgeRunBlocks length of bridge allowed over lava. Kept separately from {@code maxBridgeRunBlocks}:
+ *                               a missed block over a gap just means a fall, but over lava it's instant death
+ * @param maxVoidBridgeRunBlocks length of bridge allowed over bottomless void. Kept separate from lava because
+ *                               in the End nearly every bridge falls under this
+ * @param avoidRiskyJumps whether to avoid jumps over bottomless void or over fatal drops. Even when avoiding, the relaxation
+ *                        ladder opens them up only when no route at all can be drawn (not with {@code strictLimits})
+ * @param blockBudgetEnabled whether to use the number of blocks in the inventory as the cap on placements along the route. If off, the count is ignored
+ * @param blockBudgetReserve number of blocks subtracted from the budget to keep on hand. Increase it to avoid routes that use them all up
+ * @param strictLimits whether to keep the caps above even when no route at all can be drawn
  */
 public record MovementOptions(boolean diggingEnabled, boolean bridgingEnabled, boolean jumpGapEnabled,
                                boolean lavaBridgingEnabled, int maxBridgeRunBlocks, int maxLavaBridgeRunBlocks,
@@ -24,8 +24,8 @@ public record MovementOptions(boolean diggingEnabled, boolean bridgingEnabled, b
                                boolean blockBudgetEnabled, int blockBudgetReserve, boolean strictLimits) {
 
     /**
-     * 掘る・置く・跳ぶ・危ない落下のどれも許さない。地形を「いま手を加えずに通れるか」だけで
-     * 見たいとき（目的地や中継地点の足場探し）に使う。
+     * Allows none of digging, placing, jumping or dangerous drops. Used when you only want to see whether terrain
+     * "can be passed right now without modifying it" (finding footing for the destination or intermediate waypoints).
      */
     public static final MovementOptions NONE =
             new MovementOptions(false, false, false, false, 0, 0, 0, 0, false, true, false, 0, true);

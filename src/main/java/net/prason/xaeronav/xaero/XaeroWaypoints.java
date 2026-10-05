@@ -10,33 +10,33 @@ import xaero.hud.minimap.waypoint.set.WaypointSet;
 import xaero.hud.minimap.world.MinimapWorld;
 
 /**
- * 目的地をXaeroのミニマップへ<b>一時ウェイポイント</b>として置く。
+ * Places the destination on Xaero's minimap as a <b>temporary waypoint</b>.
  *
- * <p>自前で地図へピンを描くのではなくXaeroのウェイポイントに乗せるのは、この描画がXaeroの内側でしか
- * できないことを含むため——ミニマップの回転を打ち消して常に立った向きで出る、画面の外にある目的地は
- * 縁に寄せて距離を添える、ワールド内にも同じ印が出る。どれも我々がFBOへ描き込む位置（回転が掛かる前）
- * からは実現できない。
+ * <p>We put it on a Xaero waypoint instead of drawing our own pin on the map because this rendering includes
+ * things only possible inside Xaero: it cancels the minimap's rotation so it always stands upright, destinations
+ * off screen are pinned to the edge with the distance, and the same marker also appears in the world. None of this
+ * can be done from the position where we draw into the FBO (before rotation is applied).
  *
- * <p><b>一時</b>ウェイポイントなのが要点。ディスクへ保存されないので、消し忘れても次回の起動には
- * 残らない。それでも{@link #clearDestination()}で明示的に消すのは、セッション中はウェイポイント一覧に
- * 出続けるため。
+ * <p>Being a <b>temporary</b> waypoint is the key point. It is not saved to disk, so even if we forget to remove it,
+ * it does not survive to the next launch. We still remove it explicitly with {@link #clearDestination()} because it
+ * keeps showing in the waypoint list during the session.
  *
- * <p>呼ぶ前に{@link XaeroPresence#minimapPresent()}を確認すること。ミニマップ未導入の環境では
- * このクラスのロード自体が失敗する。
+ * <p>Check {@link XaeroPresence#minimapPresent()} before calling. Without the minimap installed, loading
+ * this class itself fails.
  */
 public final class XaeroWaypoints {
 
-    /** ウェイポイントのアイコンに出る文字。Xaero自身の一時ウェイポイントと同じ。 */
+    /** The text shown on the waypoint icon. The same as Xaero's own temporary waypoints. */
     private static final String SYMBOL = "X";
 
-    /** いま置いてあるウェイポイントと、それが属する集合。消すときに同じ集合を引く必要がある。 */
+    /** The currently placed waypoint and the set it belongs to. Removing it requires looking up the same set. */
     private static Waypoint placed;
     private static WaypointSet placedIn;
 
     private XaeroWaypoints() {
     }
 
-    /** 目的地のウェイポイントを置き直す。置けたなら{@code true}。 */
+    /** Re-places the destination waypoint. {@code true} if it was placed. */
     public static boolean setDestination(BlockPos goal, String name) {
         clearDestination();
         MinimapSession session = BuiltInHudModules.MINIMAP.getCurrentSession();
@@ -60,7 +60,7 @@ public final class XaeroWaypoints {
         return true;
     }
 
-    /** 置いたウェイポイントを消す。置いていなければ何もしない。 */
+    /** Removes the placed waypoint. Does nothing if none was placed. */
     public static void clearDestination() {
         if (placed == null) {
             return;

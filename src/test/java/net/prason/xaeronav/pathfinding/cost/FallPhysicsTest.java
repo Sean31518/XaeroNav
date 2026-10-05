@@ -6,9 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link FallPhysics}が実装しているバニラの落下式（{@code velocity = (velocity - 0.08) * 0.98}）を
- * 正しく積分できているかの検証。ここが狂うと{@link ActionCosts}経由でジャンプ・落下・
- * ヒューリスティックのコストが軒並みずれるので、他のどのクラスよりコストを払う価値がある。
+ * Verifies that the vanilla fall formula ({@code velocity = (velocity - 0.08) * 0.98}) implemented by {@link FallPhysics}
+ * is integrated correctly. If this goes wrong, the jump, fall and heuristic costs all shift via {@link ActionCosts},
+ * so it's worth paying for more than any other class.
  */
 class FallPhysicsTest {
 
@@ -23,14 +23,14 @@ class FallPhysicsTest {
         double previous = 0.0;
         for (double distance = 1.0; distance <= 200.0; distance += 1.0) {
             double ticks = FallPhysics.ticksToFall(distance);
-            assertTrue(ticks > previous, "distance=" + distance + "では前回より短くなってはいけない");
+            assertTrue(ticks > previous, "distance=" + distance + " must not be shorter than the previous one");
             previous = ticks;
         }
     }
 
     /**
-     * 十分長く落ちると、1マスあたりの所要tickは終端速度3.92 blocks/tickの逆数に収束する。
-     * ここが外れると、深い縦穴の落下コストが実際のバニラ挙動より甘く/厳しく見積もられる。
+     * After a long enough fall, the ticks per block converge to the reciprocal of the terminal velocity, 3.92 blocks/tick.
+     * If this is off, fall costs down deep shafts are estimated more leniently/strictly than actual vanilla behavior.
      */
     @Test
     void approachesTerminalVelocityOverLongFalls() {

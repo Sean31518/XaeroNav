@@ -15,19 +15,19 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
 import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 
 /**
- * <b>計測専用。番人ではない</b>（`bench`タスクで明示的に回す。{@link net.prason.xaeronav.pathfinding.astar.SearchProfileTest}と同じ形）。
+ * <b>Measurement only, not a guard</b> (run explicitly with the `bench` task; same shape as {@link net.prason.xaeronav.pathfinding.astar.SearchProfileTest}).
  *
- * <p>{@link CoarseRouter}は未探索セル（{@code NO_DATA}）の倍率を、既知セルの陸:奈落比から
- * 較正する（下限は陸に近い1.6、上限は奈落と同じ≒10）。<b>その較正が実機で何倍あたりに
- * 着地するのかを測るのがここ。</b>実機のジ・エンド地形ダンプ（{@code src/test/resources/end_*.txt.gz}、
- * いずれも実機保存データから書き出したもの）を材料にする——ジ・エンドでは「まだ地図に無い」の
- * 実体がほぼ奈落なので、較正前の固定1.6がどれだけ楽観的だったかも同時に見える。
+ * <p>{@link CoarseRouter} calibrates the multiplier for unexplored cells ({@code NO_DATA}) from the land:void ratio
+ * of known cells (lower bound 1.6, close to land; upper bound ≈10, same as void). <b>This measures where that
+ * calibration lands in practice.</b> It uses real End terrain dumps ({@code src/test/resources/end_*.txt.gz}, all
+ * written out from real save data); in the End, "not on the map yet" is almost always void in reality, so it also
+ * shows how optimistic the fixed 1.6 before calibration was.
  *
- * <p><b>ここでの「陸/奈落」の判定方法。</b>ダンプは実機の固体ブロックの列だけを書き出したもの
- * なので、1チャンク(16×16)の中に{@link CellData#standable}なセルが1つでもあれば陸、
- * 1つも無ければ奈落として数える——{@code XaeroMapReader#markVoidCells}の定義（不透明ブロックを
- * 1つも見なかった列＝奈落）と同じ考え方。水・溶岩はジ・エンドの地形にほぼ出現しないので
- * 区別しない（この簡略化は対象をジ・エンドに絞っているからこそ成り立つ）。
+ * <p><b>How "land/void" is judged here.</b> The dumps contain only the real solid-block columns, so a chunk (16×16)
+ * counts as land if it has even one {@link CellData#standable} cell, and as void if it has none; the same idea as
+ * {@code XaeroMapReader#markVoidCells}'s definition (a column where no opaque block was seen = void). Water and lava
+ * hardly appear in End terrain, so they aren't distinguished (this simplification holds precisely because the
+ * target is narrowed to the End).
  */
 @Tag("bench")
 class EndUnknownVoidRatioBenchTest {
@@ -53,18 +53,18 @@ class EndUnknownVoidRatioBenchTest {
             int[] counts = countLandAndVoidChunks(cells, bounds);
             totalLand += counts[0];
             totalVoid += counts[1];
-            report.add(String.format(Locale.ROOT, "%s: 陸=%d 奈落=%d 奈落比=%.3f",
+            report.add(String.format(Locale.ROOT, "%s: land=%d void=%d voidRatio=%.3f",
                     resource, counts[0], counts[1], voidRatio(counts[0], counts[1])));
         }
         double overallVoidRatio = voidRatio(totalLand, totalVoid);
         double landRatio = 1.0 - overallVoidRatio;
         double calibrated = landRatio * 1.0 + overallVoidRatio * voidBridgeMultiplier();
         report.add("");
-        report.add(String.format(Locale.ROOT, "全体: 陸=%d 奈落=%d 奈落比=%.3f",
+        report.add(String.format(Locale.ROOT, "overall: land=%d void=%d voidRatio=%.3f",
                 totalLand, totalVoid, overallVoidRatio));
         report.add(String.format(Locale.ROOT,
-                "較正の下限=1.600 / 実測の奈落比をそのまま使った倍率=%.3f"
-                        + " (CoarseRouterは更に事前分を混ぜるのでこれより下限寄りに出る,"
+                "calibration lower bound=1.600 / multiplier using the measured void ratio as-is=%.3f"
+                        + " (CoarseRouter also mixes in a prior, so it comes out closer to the lower bound,"
                         + " VOID_BRIDGE_MULTIPLIER=%.3f)",
                 calibrated, voidBridgeMultiplier()));
         String text = String.join("\n", report);
@@ -79,7 +79,7 @@ class EndUnknownVoidRatioBenchTest {
         }
     }
 
-    /** {@code CoarseRouter#VOID_BRIDGE_MULTIPLIER}と同じ式（そちらはprivateなのでここで再計算する）。 */
+    /** Same formula as {@code CoarseRouter#VOID_BRIDGE_MULTIPLIER} (that one is private, so it's recomputed here). */
     private static double voidBridgeMultiplier() {
         return (ActionCosts.SPRINT_ONE_BLOCK + ActionCosts.PLACE_BLOCK_AIM_TICKS
                 + ActionCosts.VOID_BRIDGE_PENALTY_TICKS) / ActionCosts.SPRINT_ONE_BLOCK;
@@ -90,7 +90,7 @@ class EndUnknownVoidRatioBenchTest {
         return total == 0 ? 0.0 : (double) voidCount / total;
     }
 
-    /** @return {index 0: 陸チャンク数, index 1: 奈落チャンク数} */
+    /** @return {index 0: land chunk count, index 1: void chunk count} */
     private static int[] countLandAndVoidChunks(FakeCells cells, SearchBounds bounds) {
         int minChunkX = bounds.minX() >> 4;
         int maxChunkX = bounds.maxX() >> 4;

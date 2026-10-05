@@ -11,8 +11,8 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
 
 /^*
- * Forge 1.16.5はMixinExtrasを同梱せず、jar-in-jarも無いので、配布jarへ移し替えて同梱したMixinExtrasをここで起動する。
- * mixinの@Local・@WrapOperationが解決されるのは起動した後なので、mixin configの読み込み時（onLoad）でなければ間に合わない。
+ * Forge 1.16.5 doesn't bundle MixinExtras and has no jar-in-jar, so the MixinExtras relocated and bundled into the distribution jar is started here.
+ * Mixin's @Local/@WrapOperation are resolved only after it's started, so it has to happen when the mixin config is loaded (onLoad) to be in time.
  ^/
 public final class MixinExtrasBootstrapPlugin implements IMixinConfigPlugin {
 

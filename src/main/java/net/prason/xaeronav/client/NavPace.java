@@ -4,35 +4,35 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 
 /**
- * プレイヤーが実際にどれくらいの速さで動いているかを測る。
+ * Measures how fast the player is actually moving.
  *
- * <p>A*が積み上げるコストは「最短で動いた場合」の見積もりなので、歩いたり寄り道をしたりすれば
- * そのぶん到着時間はずれる。実測の速さで割り直すことで、表示が実際の動き方に追従する
- * （乗り物や氷の道で速い場合も同じように効く）。
+ * <p>The cost A* accumulates is an estimate for "moving as fast as possible", so walking or taking detours shifts
+ * the arrival time accordingly. Re-dividing by the measured speed makes the display follow how the player actually
+ * moves (it works the same way when faster, e.g. on vehicles or ice roads).
  *
- * <p>止まっている間は測り直さない。0で割ることになるうえ、少し立ち止まっただけで到着時間が
- * 無限に膨らむのは案内として役に立たない。止まっている間は直前の速さを保つ。
+ * <p>Nothing is re-measured while stopped. It would divide by zero, and an arrival time that balloons to infinity
+ * after a brief pause is useless as guidance. While stopped, the previous speed is kept.
  */
 final class NavPace {
 
     static final NavPace INSTANCE = new NavPace();
 
     /**
-     * 1tickぶんの寄与の重み。およそ3秒で半分が入れ替わる。プレイヤーの動きは
-     * ジャンプ・立ち止まり・向き直りで細かく途切れるので、短くすると表示が落ち着かない。
+     * Weight of one tick's contribution. About half is replaced in roughly 3 seconds. Player movement is broken
+     * up finely by jumps, pauses, and turning around, so making it shorter makes the display jittery.
      */
     private static final double SMOOTHING = 0.012;
 
-    /** これ未満しか動かなかったtickは「止まっている」とみなして測定に混ぜない（ブロック/tick）。 */
+    /** Ticks that moved less than this are considered "stopped" and not mixed into the measurement (blocks/tick). */
     private static final double MOVING_THRESHOLD = 0.01;
 
     /**
-     * 1tickでこれ以上動いたら移動ではない（テレポート・次元移動・チャンク読み込みでの位置補正）。
-     * エリトラの最高速でも1tick 2ブロック程度。
+     * Moving more than this in one tick isn't movement (teleports, dimension changes, position corrections from chunk loading).
+     * Even at top elytra speed it's about 2 blocks per tick.
      */
     private static final double TELEPORT_THRESHOLD = 8.0;
 
-    /** まだ測れていないときの既定値。スプリント相当。 */
+    /** Default before anything has been measured. Equivalent to sprinting. */
     private static final double DEFAULT_BLOCKS_PER_TICK = 5.612 / 20.0;
 
     private double blocksPerTick = DEFAULT_BLOCKS_PER_TICK;
@@ -75,7 +75,7 @@ final class NavPace {
         blocksPerTick += (moved - blocksPerTick) * SMOOTHING;
     }
 
-    /** 直近の実測速度（ブロック/tick）。 */
+    /** Most recently measured speed (blocks/tick). */
     double blocksPerTick() {
         return blocksPerTick;
     }

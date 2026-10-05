@@ -17,45 +17,45 @@ import net.prason.xaeronav.pathfinding.world.TerrainFixture;
 import net.prason.xaeronav.pathfinding.world.WindowedCells;
 
 /**
- * <b>歩きながらチャンクが読み込まれ、見えた分だけ経路が伸びていく</b>状況で、出来上がる経路が
- * どれだけ遠回りになるかを測る。
+ * Measures how much of a detour the resulting path is in the situation where <b>chunks load while walking and the path grows
+ * only as far as can be seen</b>.
  *
- * <p>{@code PathOptimalityTest}は世界が丸ごと見えている前提で1回の探索を測る。実機はそうでは
- * ない——最初の経路は読み込み済みの窓の中だけで決まり、その末端から継ぎ足していく。<b>手前の
- * 区間は二度と見直されない</b>ので、後から見えた地形からすれば遠回りな道に乗ったまま歩き続けうる。
- * ユーザー報告「先に決まっていたルートと、新しく決まったルートの間が最適じゃない」がこれ。
+ * <p>{@code PathOptimalityTest} measures a single search assuming the whole world is visible. In-game that's not
+ * the case: the first path is decided only within the loaded window, and is extended from its end. <b>Earlier
+ * legs are never revisited</b>, so the player can keep walking along a road that is a detour in light of terrain seen later.
+ * This is the user report "the stretch between the route decided earlier and the newly decided route isn't optimal".
  *
- * <p>再現は{@link WindowedCells}（プレイヤーの周りだけが読み込まれている世界）と
- * {@link ProgressiveWalk}（実機と同じ区間分割・継ぎ足し）。
+ * <p>Reproduced with {@link WindowedCells} (a world where only the area around the player is loaded) and
+ * {@link ProgressiveWalk} (the same leg splitting and extension as in-game).
  *
- * <p><b>継ぎ足しを疑うなら、毎回引き直す版と並べること。</b>{@link #extendingAndReplanningCostTheSame}が
- * それで、実測では<b>経路全体では</b>両者に差が無い（0.99〜1.06倍）。つまり継ぎ足しをやめて
- * 全部引き直しても全体は良くならない。
+ * <p><b>If you suspect extension, compare it with a version that replans every time.</b> {@link #extendingAndReplanningCostTheSame}
+ * does that, and in measurements there's no difference between the two <b>over the whole path</b> (0.99-1.06x). In other words, dropping extension
+ * and replanning everything doesn't improve the whole.
  *
- * <p>ただし<b>局所で見ると繋ぎ目にだけ遠回りが溜まっている</b>（{@code SeamDetourTest}が
- * 64ブロックの窓で測る。繋ぎ目を含む窓は最悪1.795倍）。全体の倍率に埋もれるので、
- * ここの数字だけを見て「繋ぎ目は悪くない」と判断してはいけない。
+ * <p>However, <b>looked at locally, detours accumulate only at seams</b> ({@code SeamDetourTest}
+ * measures with 64-block windows; windows containing a seam reach 1.795x at worst). This gets buried in the overall ratio, so
+ * don't conclude "seams aren't bad" from the numbers here alone.
  *
- * <p>ここは手で選んだ5本を見る。<b>種を固定した乱数で長距離を統計的に測るのは
- * {@code LongRouteOptimalityTest}</b>で、そちらは窓の取り分と層1の取り分を分けて出す。
+ * <p>This looks at 5 hand-picked routes. <b>Statistically measuring long distances with fixed-seed randomness is done by
+ * {@code LongRouteOptimalityTest}</b>, which reports the window's share and layer 1's share separately.
  */
 @Tag("slow")
 class ProgressiveDiscoveryTest {
 
-    /** 読み込み済みの窓の半径（ブロック）。描画距離6チャンクと10チャンク相当。 */
+    /** Radius (blocks) of the loaded window. Equivalent to render distances of 6 and 10 chunks. */
     private static final int[] WINDOW_RADII = {96, 160};
 
     /**
-     * 全視界の最適に対して許す倍率。
+     * Ratio allowed relative to the full-visibility optimum.
      *
-     * <p>実測は地上1.05〜1.11、エンド1.02、ネザーの素直な区間1.00〜1.02、<b>ネザー2が1.29〜1.35</b>。
-     * ネザー2が飛び抜けるのは3D迷路で、窓の外にある通路の有無が大局を決めてしまうため——
-     * 窓の中しか見えない以上ここは原理的に詰まらない。<b>この線は「今より悪くなったら気づく」
-     * ためのもの</b>で、最適の証明ではない。
+     * <p>Measured: Overworld 1.05-1.11, End 1.02, the straightforward Nether stretch 1.00-1.02, <b>Nether 2 at 1.29-1.35</b>.
+     * Nether 2 stands out because it's a 3D maze where whether passages exist outside the window decides the big picture;
+     * as long as only the inside of the window is visible, this can't be tightened in principle. <b>This line is for "noticing if it gets
+     * worse than now"</b>, not a proof of optimality.
      */
     private static final double WORST_LIMIT = 1.40;
 
-    /** 引き直す版がこれ以上安くなったら、継ぎ目を疑う価値がある。実測は0.99〜1.06倍。 */
+    /** If the replanning version gets cheaper than this, the seams are worth suspecting. Measured at 0.99-1.06x. */
     private static final double REPLAN_ADVANTAGE_LIMIT = 1.10;
 
     private record Route(String name, String resource, BlockPos start, BlockPos goal) {
@@ -63,16 +63,16 @@ class ProgressiveDiscoveryTest {
 
     private static List<Route> routes() {
         return List.of(
-                new Route("地上", "/overworld_terrain_columns.txt.gz",
+                new Route("Overworld", "/overworld_terrain_columns.txt.gz",
                         new BlockPos(30, 0, 30), new BlockPos(230, 0, 220)),
-                new Route("地上2", "/overworld_terrain_columns.txt.gz",
+                new Route("Overworld 2", "/overworld_terrain_columns.txt.gz",
                         new BlockPos(230, 0, 30), new BlockPos(40, 0, 210)),
-                new Route("ネザー", "/nether_terrain_columns.txt.gz",
+                new Route("Nether", "/nether_terrain_columns.txt.gz",
                         new BlockPos(-180, 0, -180), new BlockPos(-20, 0, -20)),
-                // 3D迷路で、窓の外の通路の有無が大局を決める——この方式でいちばん苦しい形
-                new Route("ネザー2", "/nether_terrain_columns.txt.gz",
+                // A 3D maze where whether passages exist outside the window decides the big picture; the hardest shape for this approach
+                new Route("Nether 2", "/nether_terrain_columns.txt.gz",
                         new BlockPos(-20, 0, -180), new BlockPos(-180, 0, -30)),
-                new Route("エンド", "/end_terrain_columns.txt.gz",
+                new Route("End", "/end_terrain_columns.txt.gz",
                         new BlockPos(1160, 0, 1240), new BlockPos(1260, 0, 1160)));
     }
 
@@ -95,20 +95,20 @@ class ProgressiveDiscoveryTest {
                 List<PathStep> steps = ProgressiveWalk.walk(all, start, goal, radius, true);
                 double walked = steps.isEmpty() ? Double.POSITIVE_INFINITY : ProgressiveWalk.cost(steps);
                 double ratio = walked / best;
-                // 1回の探索では同じセルを二度閉じないので、重なりがあれば継ぎ目で生まれたもの。
-                // 3D迷路のネザーは経路が自分の近くへ戻ってくるので、ここがいちばん出やすい
+                // A single search never closes the same cell twice, so any overlap was created at a seam.
+                // In the 3D-maze Nether the path comes back near itself, so this is where it shows up most
                 int overlaps = ProgressiveWalk.selfOverlaps(steps);
                 report.add(String.format(Locale.ROOT,
-                        "%s 窓=%d 全視界=%.0f 歩いた経路=%.0f (%.3f倍) 重なり%d",
+                        "%s window=%d full view=%.0f walked path=%.0f (%.3fx) overlaps %d",
                         route.name(), radius, best, walked, ratio, overlaps));
                 if (overlaps > 0) {
                     failures.add(String.format(Locale.ROOT,
-                            "%s 窓=%d が同じ位置を%d回踏み直している（継ぎ目で経路が重なっている）",
+                            "%s window=%d steps on the same position %d times again (the path overlaps at a seam)",
                             route.name(), radius, overlaps));
                 }
                 if (!(ratio <= WORST_LIMIT)) {
                     failures.add(String.format(Locale.ROOT,
-                            "%s 窓=%d が %.3f倍（読み込みながら歩くと遠回りになりすぎている）",
+                            "%s window=%d is %.3fx (walking while loading detours too much)",
                             route.name(), radius, ratio));
                 }
             }
@@ -119,11 +119,11 @@ class ProgressiveDiscoveryTest {
     }
 
     /**
-     * <b>継ぎ足し（手前を見直さない）と、毎回引き直す版のコストが変わらないこと。</b>
+     * <b>Extension (which doesn't revisit earlier parts) costs the same as the version that replans every time.</b>
      *
-     * <p><b>直す先を間違えないための番人。</b>ここが崩れた（引き直す版の方がはっきり安くなった）
-     * ときは、経路全体を引き直す方式に手を入れる価値が出たということ。繋ぎ目そのものの質は
-     * ここでは見えない（{@code SeamDetourTest}が見る）。
+     * <p><b>A guard against fixing the wrong thing.</b> If this breaks (the replanning version becomes clearly cheaper),
+     * it means reworking the approach to replan the whole path has become worthwhile. The quality of the seams themselves
+     * isn't visible here ({@code SeamDetourTest} looks at that).
      */
     @Test
     void extendingAndReplanningCostTheSame() throws IOException {
@@ -137,11 +137,11 @@ class ProgressiveDiscoveryTest {
             int radius = WINDOW_RADII[0];
             double extending = ProgressiveWalk.walkToGoal(all, start, goal, radius, true);
             double replanning = ProgressiveWalk.walkToGoal(all, start, goal, radius, false);
-            report.add(String.format(Locale.ROOT, "%s 継ぎ足し=%.0f 毎回引き直し=%.0f (%.3f倍)",
+            report.add(String.format(Locale.ROOT, "%s extend=%.0f replan every time=%.0f (%.3fx)",
                     route.name(), extending, replanning, extending / replanning));
             if (extending > replanning * REPLAN_ADVANTAGE_LIMIT) {
                 failures.add(String.format(Locale.ROOT,
-                        "%s: 引き直す方が %.0f→%.0f と安い。継ぎ目に手を入れる価値が出ている",
+                        "%s: replanning is cheaper at %.0f→%.0f. Reworking the seams is now worthwhile",
                         route.name(), extending, replanning));
             }
         }

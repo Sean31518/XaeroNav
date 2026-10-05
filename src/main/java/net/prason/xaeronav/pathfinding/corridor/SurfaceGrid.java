@@ -4,12 +4,12 @@ import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.coarse.CoarseMap;
 
 /**
- * 長距離ルート層2（廊下限定のブロック解像度地表グラフ）が使う、1ブロック列(x,z)ごとの地表データ。
+ * Per-block-column (x,z) surface data used by long-range route layer 2 (corridor-only, block-resolution surface graph).
  *
- * <p>{@link CoarseMap}のブロック解像度版。1チャンク=1セルではなく1ブロック=1セルで持つ代わりに、
- * 対象範囲を廊下（層1のwaypoint間の線分±マージン程度）に絞ることで配列サイズを抑える。
+ * <p>The block-resolution version of {@link CoarseMap}. Instead of 1 chunk = 1 cell it holds 1 block = 1 cell, and in
+ * exchange keeps the array size down by narrowing the target area to the corridor (roughly the segments between layer 1's waypoints ± a margin).
  *
- * <p>生成後は不変。{@link SurfaceGridBuilder}が組み立てる。
+ * <p>Immutable after creation. Built by {@link SurfaceGridBuilder}.
  */
 public final class SurfaceGrid {
 
@@ -47,7 +47,7 @@ public final class SurfaceGrid {
         return kind[index(x, z)];
     }
 
-    /** 地表の高さ。水なら水底、陸・溶岩ならその表面。データが無ければ{@link #UNKNOWN_HEIGHT}。 */
+    /** Surface height. The bottom for water, the surface for land and lava. {@link #UNKNOWN_HEIGHT} if there's no data. */
     public short groundHeightAt(int x, int z) {
         if (!containsColumn(x, z)) {
             return UNKNOWN_HEIGHT;
@@ -55,7 +55,7 @@ public final class SurfaceGrid {
         return groundHeight[index(x, z)];
     }
 
-    /** 水面の高さ。水以外は{@link #groundHeightAt}と同じ値。 */
+    /** Water surface height. Same value as {@link #groundHeightAt} for anything but water. */
     public short surfaceHeightAt(int x, int z) {
         if (!containsColumn(x, z)) {
             return UNKNOWN_HEIGHT;
@@ -68,10 +68,10 @@ public final class SurfaceGrid {
     }
 
     /**
-     * この列(x,z)で実際に立てる高さへ解決する。陸は地面の1つ上、水は水面そのもの
-     * （{@code SurfaceCellSource#cell}が水面をWATERセルとして扱うため、+1すると空気に解決されてしまう）。
-     * 溶岩は立てる場所が無いので{@code null}（{@code groundHeightAt}が返すのは溶岩面の高さであって、
-     * その1つ上は溶岩の中か水没した空気でしかない）。データが無ければ同じく{@code null}。
+     * Resolves to the height actually standable in this column (x,z). Land is one above the ground, water is the
+     * surface itself ({@code SurfaceCellSource#cell} treats the surface as a WATER cell, so +1 would resolve to air).
+     * Lava has nowhere to stand, so {@code null} ({@code groundHeightAt} returns the height of the lava surface, and
+     * one above that is either inside lava or submerged air). Also {@code null} if there's no data.
      */
     public BlockPos resolveStandable(int x, int z) {
         byte kind = kindAt(x, z);
@@ -87,16 +87,16 @@ public final class SurfaceGrid {
     }
 
     /**
-     * 要求されたYに近い方の立てる高さへ解決する。水の列だけが{@link #resolveStandable}と違い、
-     * <b>水面と水底の2択</b>になる。
+     * Resolves to the standable height closer to the requested Y. Only water columns differ from {@link #resolveStandable},
+     * as <b>a choice between surface and bottom</b>.
      *
-     * <p>これが要るのは目的地の解決だけ。中間目標は「どちらへ向かうか」を示すものなので水面で
-     * 構わないが、目的地は<b>ユーザーが指した点そのもの</b>で、海底を指したなら海底に着かないと
-     * 到着したことにならない。{@link #resolveStandable}を通すと水面へ丸められ、
-     * 海の上で「到着」になっていた。
+     * <p>Only destination resolution needs this. Intermediate targets indicate "which way to go", so the surface is
+     * fine, but the destination is <b>the very point the user pointed at</b>: if they pointed at the seabed, it isn't
+     * arrival until you reach the seabed. Going through {@link #resolveStandable} rounded it to the surface, and it
+     * "arrived" on top of the sea.
      *
-     * <p>水底側は{@code groundHeight + 1}（水底の1つ上＝足元が砂で体が水）。水面側は水面そのもの
-     * （その1つ上は水の外で立てない）。{@link #resolveStandable}の非対称はこの違いから来ている。
+     * <p>The bottom side is {@code groundHeight + 1} (one above the bottom = feet on sand, body in water). The surface
+     * side is the surface itself (one above is out of the water and not standable). This difference is where the asymmetry of {@link #resolveStandable} comes from.
      */
     public BlockPos resolveStandableNear(int x, int z, int preferredY) {
         if (kindAt(x, z) != CoarseMap.WATER) {
@@ -116,12 +116,12 @@ public final class SurfaceGrid {
     }
 
     /**
-     * {@link #resolveStandable}が{@code null}だった端点を、廊下内の最寄りの立てる列へ寄せて解決する。
-     * ネザーの溶岩の海の縁ではwaypointがそのまま溶岩列に落ちることが珍しくなく、そこで層2の廊下
-     * 精緻化を丸ごと諦めるのは惜しい——数ブロック隣に陸があるだけのことが多い。
+     * Resolves an endpoint for which {@link #resolveStandable} was {@code null} by moving it to the nearest standable
+     * column in the corridor. At the edge of Nether lava seas it's not unusual for a waypoint to land right on a lava
+     * column, and giving up the whole layer 2 corridor refinement there is wasteful; often there's land just a few blocks away.
      *
-     * <p>{@code maxRadius}内で最も近い列を返す（同着はスキャン順で先着＝小さいZ・小さいXを優先、
-     * 呼び出しごとに結果が変わらないようにするため）。見つからなければ{@code null}。
+     * <p>Returns the closest column within {@code maxRadius} (ties go to the first in scan order = smaller Z, then
+     * smaller X, so the result doesn't vary between calls). {@code null} if none is found.
      */
     public BlockPos resolveNearestStandable(int x, int z, int maxRadius) {
         BlockPos direct = resolveStandable(x, z);

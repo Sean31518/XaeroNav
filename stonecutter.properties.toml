@@ -1,15 +1,15 @@
-# ノードごとの依存バージョン。ノードを増やすときはここへテーブルを1つ足す。
-# テーブル名は `[<ローダー>."<MCバージョン>"]` で、build.<ローダー>.gradle.kts の
-# `properties.tags(...)` が選ぶ。
+# Per-node dependency versions. When adding a node, add one table here.
+# Table names are `[<loader>."<MC version>"]`, selected by `properties.tags(...)` in
+# build.<loader>.gradle.kts.
 #
-# deps.xaero_worldmap / deps.xaero_minimap はコンパイルと開発クライアントに使う版。
-# deps.xaero_worldmap_min / deps.xaero_minimap_min はMOD定義へ書く「動く下限」で、上の版を上げても動かさない
-# （古いXaeroを入れた人をNeoForge/Forgeが起動させなくなる）。下限を下げるときは、その版でビルドして
-# Xaeroへの参照（javapで見たメソッド・フィールドの型、refmap）が今の版でのビルドと変わらないことを確かめる。
+# deps.xaero_worldmap / deps.xaero_minimap are the versions used for compilation and the dev client.
+# deps.xaero_worldmap_min / deps.xaero_minimap_min are the "works from" lower bounds written into the mod metadata, and don't move when the versions above are bumped
+# (NeoForge/Forge would refuse to launch for people with an older Xaero installed). When lowering a lower bound, build against that version and
+# confirm that the references to Xaero (method and field types as seen with javap, and the refmap) are unchanged from a build against the current version.
 
-# 経路探索のテストを実際に走らせるノード。pathfinding/ はローダーにもMCバージョンにも
-# 依存しない（//? を書かない鉄則）ので、1ノードで回せば全ノードぶんの検証になる。
-# 全ノードで回すとCIの時間が丸ごと倍になるだけで、見つかるものは増えない。
+# The node that actually runs the pathfinding tests. pathfinding/ depends on neither the loader nor the
+# MC version (the iron rule of never writing //?), so running on one node verifies all nodes.
+# Running on every node would just double the CI time wholesale without finding anything more.
 canonical_test_node = "1.21.1-neoforge"
 
 [fabric."1.21.10"]
@@ -241,7 +241,7 @@ deps.xaero_minimap_min = "26.4.2"
 [forge."1.21.5"]
 deps.minecraft = "1.21.5"
 deps.forge = "55.1.14"
-# HUDを差し込むAddGuiOverlayLayersEventはForge 55.0.24から
+# AddGuiOverlayLayersEvent, which the HUD hooks into, is available from Forge 55.0.24
 deps.forge_loader_range = "[55.0.24,)"
 deps.mixinextras = "0.5.5"
 deps.xaerolib = "1.7.3"
@@ -279,7 +279,7 @@ deps.xaero_minimap_min = "26.4.2"
 [forge."1.21.4"]
 deps.minecraft = "1.21.4"
 deps.forge = "54.1.18"
-# HUDを差し込むAddGuiOverlayLayersEventはForge 54.1.5から
+# AddGuiOverlayLayersEvent, which the HUD hooks into, is available from Forge 54.1.5
 deps.forge_loader_range = "[54.1.5,)"
 deps.mixinextras = "0.5.5"
 deps.xaerolib = "1.7.3"
@@ -302,7 +302,7 @@ deps.xaero_minimap_min = "26.4.2"
 [neoforge."1.21.1"]
 deps.minecraft = "1.21.1"
 deps.neoforge = "21.1.228"
-# 21.0.xはMinecraft 1.21用。jarは1.21にも使う
+# 21.0.x is for Minecraft 1.21. The jar is also used on 1.21
 deps.neoforge_range = "[21.0,)"
 deps.neoforge_loader_range = "[4,)"
 deps.xaerolib = "1.7.3"
@@ -313,13 +313,13 @@ deps.xaero_minimap_min = "26.4.2"
 
 [forge."1.21.1"]
 deps.minecraft = "1.21.1"
-# 開発・実行時に使うForge（正確な版）
+# Forge used for development and runtime (exact version)
 deps.forge = "52.1.16"
-# mods.tomlへ書く「動く下限」。開発で使う版とは別物にしておく——Fabricで踏んだ落とし穴と同じ理由
-# （stonecutter.properties.tomlのdeps.fabric_loader_rangeのコメント参照）
-# HUDを差し込むAddGuiOverlayLayersEventはForge 52.1.2から
+# The "works from" lower bound written into mods.toml. Kept separate from the version used for development, for the same reason as the pitfall hit on Fabric
+# (see the comment on deps.fabric_loader_range in stonecutter.properties.toml)
+# AddGuiOverlayLayersEvent, which the HUD hooks into, is available from Forge 52.1.2
 deps.forge_loader_range = "[52.1.2,)"
-# Forgeは本体にMixinExtrasを同梱していない（NeoForge/Fabricとの違い）。jar-in-jarで足す版
+# Forge doesn't bundle MixinExtras itself (unlike NeoForge/Fabric). The version added via jar-in-jar
 deps.mixinextras = "0.5.5"
 deps.xaerolib = "1.7.3"
 deps.xaero_worldmap = "1.46.0"
@@ -345,7 +345,7 @@ deps.xaero_minimap_min = "25.3.5"
 [forge."1.21.3"]
 deps.minecraft = "1.21.3"
 deps.forge = "53.1.12"
-# HUDを差し込むAddGuiOverlayLayersEventはForge 53.1.2から
+# AddGuiOverlayLayersEvent, which the HUD hooks into, is available from Forge 53.1.2
 deps.forge_loader_range = "[53.1.2,)"
 deps.mixinextras = "0.5.5"
 deps.xaerolib = "1.0.45"
@@ -374,7 +374,7 @@ deps.fabric_api_range = "0.97.8+1.20.5"
 deps.modmenu = "10.0.0"
 deps.mixinextras = "0.5.3"
 deps.night_config = "3.8.3"
-# 1.20.6のXaeroは更新が止まっていてXaeroのMavenに無い（xaerolibも使わない頃の版）。Modrinthから取る
+# Xaero for 1.20.6 is no longer updated and isn't on Xaero's Maven (a version from before it used xaerolib). Pulled from Modrinth
 deps.xaerolib = "none"
 deps.xaero_worldmap = "modrinth:1.39.12_Fabric_1.20.6"
 deps.xaero_minimap = "modrinth:25.2.10_Fabric_1.20.6"
@@ -384,7 +384,7 @@ deps.xaero_minimap_min = "25.2.10"
 [forge."1.20.6"]
 deps.minecraft = "1.20.6"
 deps.forge = "50.2.10"
-# HUDを差し込むAddGuiOverlayLayersEventはForge 50.2.1から
+# AddGuiOverlayLayersEvent, which the HUD hooks into, is available from Forge 50.2.1
 deps.forge_loader_range = "[50.2.1,)"
 deps.mixinextras = "0.5.5"
 deps.xaerolib = "none"
@@ -422,7 +422,7 @@ deps.xaero_minimap_min = "26.4.2"
 [forge."1.20.4"]
 deps.minecraft = "1.20.4"
 deps.forge = "49.2.9"
-# ClientTickEvent.PostはForge 49.1.10から
+# ClientTickEvent.Post is available from Forge 49.1.10
 deps.forge_loader_range = "[49.1.10,)"
 deps.mixinextras = "0.5.5"
 deps.xaerolib = "1.7.3"
@@ -451,7 +451,7 @@ deps.fabric_api_range = "0.91.6+1.20.2"
 deps.modmenu = "8.0.1"
 deps.mixinextras = "0.5.3"
 deps.night_config = "3.8.3"
-# 1.20.2のXaeroは更新が止まっていてXaeroのMavenに無い（xaerolibも使わない頃の版）。Modrinthから取る
+# Xaero for 1.20.2 is no longer updated and isn't on Xaero's Maven (a version from before it used xaerolib). Pulled from Modrinth
 deps.xaerolib = "none"
 deps.xaero_worldmap = "modrinth:1.39.12_Fabric_1.20.2"
 deps.xaero_minimap = "modrinth:25.2.10_Fabric_1.20.2"
@@ -497,18 +497,18 @@ deps.xaero_minimap_min = "26.5.0"
 
 [fabric."1.21.1"]
 deps.minecraft = "1.21.1"
-# 開発・実行時に使うローダー（loom 1.17のClassTweakerが0.19.0以降を要る）
+# Loader used for development and runtime (loom 1.17's ClassTweaker requires 0.19.0 or later)
 deps.fabric_loader = "0.19.5"
-# fabric.mod.jsonへ書く「動く下限」。開発で使う版とは別物にしておく——ここを開発版に
-# 引きずられて上げると、XaeroNavが実際には要らない新しさをユーザーへ強制することになる。
-# 下限はハード依存のfabric-apiが要求する値に合わせてある
+# The "works from" lower bound written into fabric.mod.json. Kept separate from the version used for development: letting
+# the dev version drag this up would force users onto a newer version than XaeroNav actually needs.
+# The lower bound matches what the hard dependency fabric-api requires
 deps.fabric_loader_range = ">=0.15.11"
 deps.fabric_api = "0.116.7+1.21.1"
 deps.fabric_api_range = "0.102.0+1.21"
 deps.modmenu = "11.0.4"
-# NeoForgeは本体に同梱しているものと同じ版に揃える（mixinの@Local / @WrapOperation）
+# NeoForge: match the version it bundles itself (mixin @Local / @WrapOperation)
 deps.mixinextras = "0.5.3"
-# NeoForge 21.1.228 が同梱している版に揃える
+# Match the version bundled with NeoForge 21.1.228
 deps.night_config = "3.8.3"
 deps.xaerolib = "1.7.3"
 deps.xaero_worldmap = "1.46.0"
@@ -533,9 +533,9 @@ deps.xaero_minimap_min = "26.5.0"
 
 [forge."1.16.5"]
 deps.minecraft = "1.16.5"
-# 36.2.42以降はFART（SpecialSourceの代わり）で再オブファスケートされており、
-# Architectury Loomのsrg->named remapが一部のメソッド/クラスで壊れる既知の不具合がある
-# （https://github.com/architectury/architectury-loom/issues/320）。36.2.39まで下げて回避する。
+# 36.2.42 and later are reobfuscated with FART (instead of SpecialSource), and there's a known bug where
+# Architectury Loom's srg->named remap breaks on some methods/classes
+# (https://github.com/architectury/architectury-loom/issues/320). Worked around by dropping to 36.2.39.
 deps.forge = "36.2.39"
 deps.forge_loader_range = "[36,)"
 deps.mixinextras = "0.5.5"

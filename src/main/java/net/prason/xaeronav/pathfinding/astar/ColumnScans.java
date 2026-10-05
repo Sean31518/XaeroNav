@@ -6,56 +6,56 @@ import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
 /**
- * 足元より下へ向かう縦走査と、その結果の覚え書き。
+ * Vertical scans downward from underfoot, and a memo of their results.
  *
- * <p>1ノードを展開するたびに、4方向ぶんの「踏み出した先の下に何があるか」と、跳躍の
- * 「外したら溶岩か」を辿る。床がすぐ下にある地形なら1〜2マスで止まるが、<b>下が開けていると
- * {@link #SCAN_DEPTH}マス下まで辿る</b>——ジ・エンドの奈落やネザーの溶岩の海がその形で、
- * 実測では探索時間の23%がここに集まっていた（1ノードあたりのセル読みは236〜630回で、
- * その31〜47%がこの走査）。
+ * <p>Every time a node is expanded, it walks "what's below the step-out spot" for four directions, and for jumps
+ * "is it lava if missed". Where the floor is right below it stops after 1-2 blocks, but <b>when it's open below it walks
+ * {@link #SCAN_DEPTH} blocks down</b>; End voids and Nether lava seas have that shape, and
+ * measurements showed 23% of search time concentrated here (236-630 cell reads per node,
+ * 31-47% of which were this scan).
  *
- * <p>隣り合うノードは同じ列を何度も辿り直す。そこで<b>読んだセルの分類だけを列ごとのビットに
- * 残し、次からは語単位で空気を飛ばす</b>。地形を先読みして表を作るのではなく、
- * 走査が実際に読んだ範囲だけを覚えるので、<b>浅い列では余分な読みが1回も増えない</b>——
- * 1列あたりの走査回数は現世53回に対しエンド3,500回・溶岩の海6,000回と2桁違うため、
- * 一律に列全体の索引を組むと現世では損になる。
+ * <p>Neighboring nodes walk the same columns again and again. So <b>only the classification of cells read is kept as per-column
+ * bits, and later scans skip air word by word</b>. Rather than prefetching terrain into a table,
+ * it remembers only the range the scan actually read, so <b>shallow columns never get a single extra read</b>:
+ * scans per column differ by two orders of magnitude (53 in the Overworld vs. 3,500 in the End and 6,000 over lava seas),
+ * so uniformly indexing whole columns would be a loss in the Overworld.
  *
- * <p><b>探索範囲の外は覚えない。</b>{@link CellSource}が範囲外に何を返すかは実装ごとの約束で
- * （{@code WindowedCells}は窓の外を未ロードとして返しつつ{@code isInBounds}は真を返す）、
- * ここで先回りすると走査の意味が変わる。
+ * <p><b>Nothing outside the search bounds is remembered.</b> What {@link CellSource} returns out of bounds is a per-implementation contract
+ * ({@code WindowedCells} returns outside the window as unloaded while {@code isInBounds} returns true),
+ * and getting ahead of it here would change what the scan means.
  */
 final class ColumnScans {
 
     /**
-     * 下へ辿る最大の深さ（ブロック）。落下・設置・跳躍の判断はどれもこの深さで打ち切る。
+     * Maximum depth (blocks) to walk down. Fall, placement and jump decisions all cut off at this depth.
      *
-     * <p>層1の{@code LiveCoarseSampler}が同じ理由で使っている値に揃えてある。以前は32だったため、
-     * 32マスを超える空洞の下にある溶岩を見逃し、溶岩の上へ跳躍を提示することがあった。
+     * <p>Matches the value layer 1's {@code LiveCoarseSampler} uses for the same reason. It used to be 32, so
+     * lava under cavities deeper than 32 blocks was missed and jumps over lava were sometimes suggested.
      *
-     * <p><b>落下・設置と跳躍で値を分けてはいけない。</b>分けると、落下では見える深さの溶岩が
-     * 跳躍では見えないという食い違いが起きる（実機で、深い割れ目の底の溶岩へ跳び損ねて死んだ）。
-     * 「落ちても平気な高さ」で切るのも誤り——溶岩は深さに関わらず落ちれば死ぬ。
+     * <p><b>Don't use different values for fall/placement and jumps.</b> Doing so creates a mismatch where lava visible to falls
+     * is invisible to jumps (in-game, a player died missing a jump into lava at the bottom of a deep crevice).
+     * Cutting off at "a height that's safe to fall" is also wrong: falling into lava is fatal at any depth.
      */
     static final int SCAN_DEPTH = 128;
 
     /**
-     * 読めるセルだけを辿った末に、何にも当たらなかった（＝底が無い）。
+     * Walked only readable cells and hit nothing (i.e. no bottom).
      *
-     * <p>{@link #UNREADABLE_BELOW}と分けるのが要点——{@code ChunkView}は探索範囲外も未ロードも同じ
-     * {@link CellData#ABSENT}で表すので、セルの値だけでは「奈落」と「分からない」を区別できない。
+     * <p>Keeping this separate from {@link #UNREADABLE_BELOW} is the point: {@code ChunkView} represents both out-of-bounds and unloaded
+     * as {@link CellData#ABSENT}, so cell values alone can't tell "void" from "unknown".
      */
     static final int NOTHING_BELOW = Integer.MIN_VALUE;
 
     /**
-     * 未ロードチャンクに当たって走査が止まった（＝下に何があるか分からない）。
+     * The scan stopped at an unloaded chunk (i.e. what's below is unknown).
      *
-     * <p>区別せずに「読めなかったら諦める」としていた頃は、<b>奈落の上に橋の辺が一本も
-     * 生成されなかった</b>（ジ・エンドの島間で経路が岸で切れる正体）。
+     * <p>Back when it made no distinction and "gave up if unreadable", <b>not a single bridge edge was
+     * generated over the void</b> (the real reason paths broke off at the shore between End islands).
      */
     static final int UNREADABLE_BELOW = Integer.MIN_VALUE + 1;
 
     private static final int KNOWN = 0;
-    /** 空気ではない（{@code passableEmpty}でない）。未ロード・範囲外もここに入る。 */
+    /** Not air (not {@code passableEmpty}). Unloaded and out-of-bounds also fall here. */
     private static final int BLOCKER = 1;
     private static final int PRESENT = 2;
     private static final int STANDABLE = 3;
@@ -76,8 +76,8 @@ final class ColumnScans {
     }
 
     /**
-     * {@code topY}から下へ、空気ではない最初のセルのYを返す。水・地面・梯子のどれで止まったかは
-     * 呼び出し側がそのセルを見て判断する。
+     * Returns the Y of the first non-air cell going down from {@code topY}. Whether it stopped at water, ground or a ladder
+     * is for the caller to decide by looking at that cell.
      */
     int firstNonAirBelow(int x, int topY, int z) {
         int lowestY = topY - SCAN_DEPTH + 1;
@@ -112,12 +112,12 @@ final class ColumnScans {
     }
 
     /**
-     * 足元から{@link #SCAN_DEPTH}マス下までに溶岩があるか、それとも見通せないか。
+     * Whether there is lava within {@link #SCAN_DEPTH} blocks below the feet, or it can't be seen through.
      *
-     * <p>奈落（読めるセルだけを辿って底に当たらない）は{@code false}を返す——落ちれば死ぬのは
-     * 溶岩と同じだが、そちらは{@code PathSafetyChecker#assessJumpRisk}が
-     * {@link PathRisk#VOID_BELOW}で警告する担当になっている。ここで一律に禁止すると、
-     * ジ・エンドでは全ての隙間が奈落の上なので跳ぶ移動が丸ごと消える。
+     * <p>Void (walking readable cells without hitting bottom) returns {@code false}: falling in is as deadly as
+     * lava, but that case is {@code PathSafetyChecker#assessJumpRisk}'s job, which warns with
+     * {@link PathRisk#VOID_BELOW}. Forbidding it uniformly here would wipe out every jump move in the End,
+     * where every gap is over the void.
      */
     boolean lavaOrUnknownBelow(int x, int y, int z) {
         int lowestY = y - SCAN_DEPTH;
@@ -160,8 +160,8 @@ final class ColumnScans {
     }
 
     /**
-     * {@code index}のすぐ下から{@code lowestY}までを語単位で飛ばし、次に見るべきセルのYを返す。
-     * 途中が全部「見る必要のない既知のセル」なら{@code lowestY - 1}を返す（＝走査の終わり）。
+     * Skips word by word from just below {@code index} to {@code lowestY}, and returns the Y of the next cell to look at.
+     * If everything in between is "known cells that need no look", returns {@code lowestY - 1} (i.e. the end of the scan).
      */
     private int skipDown(long[] column, int index, int lowestY, boolean lavaScan) {
         int lowIndex = lowestY - minY;
@@ -184,10 +184,10 @@ final class ColumnScans {
         return lowestY - 1;
     }
 
-    /** その語のうち、走査が立ち止まるべきセル（まだ読んでいないセルも含む）。 */
+    /** The cells in that word where the scan should stop (including cells not yet read). */
     private long stopMask(long[] column, int word, boolean lavaScan) {
         if (lavaScan) {
-            // 未読のセルはPRESENTが0なので、~PRESENTがそのまま「読み直し」も兼ねる
+            // Unread cells have PRESENT at 0, so ~PRESENT doubles as "re-read" as-is
             return column[LAVA * words + word] | column[STANDABLE * words + word]
                     | ~column[PRESENT * words + word];
         }

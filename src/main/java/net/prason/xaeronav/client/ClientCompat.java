@@ -6,7 +6,7 @@ import net.minecraft.client.Options;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.world.phys.Vec3;
 
-/** Minecraft 1.16と新しい版とで呼び方だけが違うクライアントのAPI。 */
+/** Client APIs whose only difference between Minecraft 1.16 and newer versions is what they're called. */
 public final class ClientCompat {
     private ClientCompat() {
     }

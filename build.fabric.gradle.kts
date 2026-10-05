@@ -15,21 +15,21 @@ val minecraftVersion = dep("minecraft")
 if (minecraftVersion.startsWith("1.16.")) {
     pluginManager.apply("xyz.wagyourtail.jvmdowngrader")
 
-    // 1.16.5が既定で解決するLWJGL 3.3.2はmacOS（特にApple Silicon）で
-    // `GLFW error 65548: Cocoa: Regular windows do not have icons on macOS`を投げて
-    // Minecraft.<init>が止まる（既知の問題、LWJGL/lwjgl3#695）。新しい版へ強制する。
+    // The LWJGL 3.3.2 that 1.16.5 resolves by default throws
+    // `GLFW error 65548: Cocoa: Regular windows do not have icons on macOS` on macOS (especially Apple Silicon)
+    // and Minecraft.<init> stops (known issue, LWJGL/lwjgl3#695). Force a newer version.
     configurations.all {
         resolutionStrategy.eachDependency {
             if (requested.group == "org.lwjgl") {
                 useVersion("3.3.3")
-                because("1.16.5既定のLWJGLはmacOSでウィンドウアイコン設定が例外になる")
+                because("1.16.5's default LWJGL throws when setting the window icon on macOS")
             }
         }
     }
 }
 
-// fabric.mod.jsonの"java"依存へ渡す実行時要件。
-// 1.16.5試作ノードはJava 21でコンパイルした後にJava 8へ変換する予定。
+// Runtime requirement passed to the "java" dependency in fabric.mod.json.
+// The 1.16.5 prototype node is planned to be compiled with Java 21 and then converted to Java 8.
 val javaVersion = javaVersionFor(minecraftVersion)
 val mixinCompatibilityLevel = mixinCompatibilityLevelFor(minecraftVersion)
 val packFormat = packFormatFor(minecraftVersion)
@@ -38,11 +38,11 @@ repositories {
     maven("https://maven.terraformersmc.com/releases") { name = "TerraformersMC" }
 }
 
-// 開放しているのはRenderType.CompositeState等（NavRenderTypes）で、1.21.11ではクラスごと無くなった
+// What's opened is RenderType.CompositeState etc. (NavRenderTypes); in 1.21.11 the whole class is gone
 val usesAccessWidener = !stonecutter.eval(minecraftVersion, ">=1.21.11")
 
-// 開放するものが無い版にも同じ名前のファイルを置く。fabric.mod.jsonの"accessWidener"を版で出し分けると
-// テンプレートがJSONとして読めなくなり、Loomが設定のたびに警告を出す。Loomは設定時にこのファイルを読むので、ここで書く
+// Place a file with the same name even on versions with nothing to open. Varying fabric.mod.json's "accessWidener" by version
+// makes the template unreadable as JSON, and Loom warns on every configuration. Loom reads this file at configuration time, so write it here
 val emptyAccessWidener: File = layout.buildDirectory.file("generated/emptyAccessWidener/xaeronav.accesswidener").get().asFile.also {
     if (!usesAccessWidener) {
         it.parentFile.mkdirs()
@@ -50,8 +50,8 @@ val emptyAccessWidener: File = layout.buildDirectory.file("generated/emptyAccess
     }
 }
 
-// RenderType.createが公開されたのは1.20から。1.18・1.19では7引数版がprivateなので、その版だけアクセスを開放する。
-// 全ノード共通のファイルへ足すと、メソッドの形が違う1.16.5・1.21.xでAWの適用が失敗する
+// RenderType.create became public in 1.20. On 1.18 and 1.19 the 7-argument version is private, so access is opened only for those versions.
+// Adding it to the file shared by all nodes makes AW application fail on 1.16.5 and 1.21.x, where the method signature differs
 val opensRenderTypeCreate = minecraftVersion.startsWith("1.18.") || minecraftVersion.startsWith("1.19.")
 val generatedAccessWidenerDir = layout.buildDirectory.dir("generated/accessWidener")
 val nodeAccessWidener: File = generatedAccessWidenerDir.get().file("xaeronav.accesswidener").asFile.also {
@@ -72,30 +72,30 @@ loom {
         else -> rootProject.file("src/main/resources/xaeronav.accesswidener")
     }
 
-    // 実行ディレクトリはノード配下（versions/<ノード>/run）のloom既定のまま。
-    // ローダーごとにmodsの中身が違うので、NeoForge側のrun/と共有すると
-    // 相手のローダー向けXaeroが混ざって読み込みに失敗する。
+    // The run directory stays at loom's default under the node (versions/<node>/run).
+    // The contents of mods differ per loader, so sharing NeoForge's run/ would mix in
+    // Xaero built for the other loader and fail to load.
     runs {
         named("client") {
             client()
             configName = "Fabric Client (${stonecutter.current.project})"
-            // NeoForgeノードと同じ口（CIのruntime hook probeを手元で走らせるときなど）
+            // Same hook as the NeoForge node (e.g. for running CI's runtime hook probe locally)
             providers.gradleProperty("xaeronav.clientJvmArgs").orNull?.split(" ")?.filter { it.isNotBlank() }
                 ?.forEach { vmArg(it) }
         }
-        // loomが既定で用意するserverの実行設定はこのMODでは使わない（クライアント専用MOD）。
-        // runsコンテナから消してもloomが後から登録し直すので、名前が残るのは避けられない
+        // This mod doesn't use the server run configuration loom provides by default (client-only mod).
+        // Even if removed from the runs container, loom registers it again later, so the name can't be avoided
     }
 }
 
 val xaeroModules = xaeroModuleCoordinates(
     "fabric", minecraftVersion, dep("xaerolib"), dep("xaero_worldmap"), dep("xaero_minimap"))
 
-// Xaeroを開発実行（runClient）へ載せるか。`./gradlew runClient -Pwith_xaero=false` で外せる。
-// このMODはXaero未導入でもワールド内描画だけで動く設計なので、その前提を実際に確かめる手段を残す。
+// Whether to load Xaero into dev runs (runClient). Can be removed with `./gradlew runClient -Pwith_xaero=false`.
+// This mod is designed to work with in-world rendering alone even without Xaero, so a way to actually verify that is kept.
 val withXaero = withXaeroProperty()
 
-// XaeroはMODとして読み込ませる必要があるので、実行時クラスパスではなくrun/modsへ置く。
+// Xaero must be loaded as a mod, so it goes into run/mods rather than the runtime classpath.
 val xaeroRuntimeMods: Configuration = createXaeroRuntimeModsConfiguration()
 
 dependencies {
@@ -105,27 +105,27 @@ dependencies {
     modImplementation("net.fabricmc:fabric-loader:${dep("fabric_loader")}")
     modImplementation("net.fabricmc.fabric-api:fabric-api:${dep("fabric_api")}")
 
-    // NeoForgeは本体に含んでいるが、Fabricには無いので同梱する（mixinの@Local / @WrapOperationが依存）
+    // NeoForge includes it in the base, but Fabric doesn't, so it's bundled (mixin's @Local / @WrapOperation depend on it)
     implementation("io.github.llamalad7:mixinextras-fabric:${dep("mixinextras")}")
     include("io.github.llamalad7:mixinextras-fabric:${dep("mixinextras")}")
 
-    // 設定のTOML読み書き。NeoForgeは本体が同じライブラリ(night-config)を含んでいるので、
-    // 設定の定義はローダーによらず1箇所のままにできる。
+    // TOML reading/writing for config. NeoForge's base includes the same library (night-config),
+    // so the config definition can stay in one place regardless of loader.
     implementation("com.electronwill.night-config:core:${dep("night_config")}")
     implementation("com.electronwill.night-config:toml:${dep("night_config")}")
     include("com.electronwill.night-config:core:${dep("night_config")}")
     include("com.electronwill.night-config:toml:${dep("night_config")}")
 
-    // Modsの一覧から設定画面を開けるようにするだけの連携。未導入でもエントリポイントが
-    // 呼ばれなくなるだけなので、配布物にも実行時依存にも含めない。
-    // 1.16.5用ModMenu 1.16.23は自身の依存にfabric-loaderを直接持つ古い形式で、
-    // Loomのremapが本来のfabric-loader(0.19.5)とは別物として扱い、runClientが
-    // 「duplicate fabric loader classes」で落ちる。ModMenu自身はloaderをMOD経由で
-    // 読み込まないので除外して問題ない。
+    // An integration that only lets the config screen be opened from the Mods list. Without it, the entry point
+    // just isn't called, so it's included neither in the distributable nor as a runtime dependency.
+    // ModMenu 1.16.23 for 1.16.5 is an old format that directly lists fabric-loader in its own dependencies,
+    // and Loom's remap treats it as distinct from the real fabric-loader (0.19.5), so runClient crashes with
+    // "duplicate fabric loader classes". ModMenu itself doesn't load the loader via a mod, so excluding it
+    // is safe.
     modCompileOnly("com.terraformersmc:modmenu:${dep("modmenu")}") {
         exclude(group = "net.fabricmc", module = "fabric-loader")
-        // ModMenu 9.xの任意連携先。XaeroNavは設定画面APIしか使わないので、
-        // ModMenu側のPlaceholder APIをコンパイルクラスパスへ引き込む必要はない。
+        // An optional integration target of ModMenu 9.x. XaeroNav only uses the config screen API, so
+        // there's no need to pull ModMenu's Placeholder API into the compile classpath.
         exclude(group = "eu.pb4", module = "placeholder-api")
     }
     modLocalRuntime("com.terraformersmc:modmenu:${dep("modmenu")}") {
@@ -133,15 +133,15 @@ dependencies {
         exclude(group = "eu.pb4", module = "placeholder-api")
     }
 
-    // Xaeroはfabric.mod.json上optionalな連携先。コンパイルにだけ必要。
-    // compileOnly（modの付かない方）だとMinecraftの型が中間マッピングのままで解決できない。
+    // Xaero is an optional integration in fabric.mod.json. Needed only for compilation.
+    // With compileOnly (the one without mod), Minecraft types stay in intermediary mappings and can't resolve.
     xaeroModules.forEach { modCompileOnly(it) }
     if (withXaero) {
         xaeroModules.forEach { xaeroRuntimeMods(it) }
     }
 }
 
-// Syncではなくコピーにして、手で入れた他のMODを消さない。
+// Copy rather than Sync, so other manually added mods aren't deleted.
 val installXaeroMods = tasks.register<Copy>("installXaeroMods") {
     from(xaeroRuntimeMods)
     into(layout.projectDirectory.dir("run/mods"))
@@ -151,8 +151,8 @@ tasks.matching { it.name == "runClient" }.configureEach {
     dependsOn(installXaeroMods)
 }
 
-// CIの起動スモークテスト（mc-runtime-test）へ渡す一式。配布jarとXaeroを1箇所へ集める。
-// Fabricで配るのは中間マッピングへ戻したremapJarの方で、素のjarではない
+// The set passed to CI's launch smoke test (mc-runtime-test). Gathers the distribution jar and Xaero in one place.
+// What Fabric distributes is remapJar, mapped back to intermediary, not the plain jar
 val stageRuntimeTestMods = tasks.register<Copy>("stageRuntimeTestMods") {
     from(xaeroRuntimeMods)
     from(tasks.named(if (minecraftVersion.startsWith("1.16.")) "java8Jar" else "remapJar"))
@@ -163,7 +163,7 @@ tasks.named<ProcessResources>("processResources").configure {
     val replaceProperties = commonNodeResourceProperties(
         minecraftVersion, dep("xaero_worldmap_min"), dep("xaero_minimap_min"), mixinCompatibilityLevel, packFormat) + mapOf(
         "fabric_loader_range" to dep("fabric_loader_range"),
-        // fabric-apiは"*"のままだと古いAPIでもloaderが起動を許してしまう。動作を確かめた最も低い版を下限として宣言する
+        // With "*", fabric-api lets the loader start even with an old API. Declare the lowest version verified to work as the lower bound
         "fabric_api_range" to dep("fabric_api_range"),
         "fabric_api_mod_id" to fabricApiModIdFor(minecraftVersion),
         "java_version" to javaVersion.toString()
@@ -171,18 +171,18 @@ tasks.named<ProcessResources>("processResources").configure {
 
     inputs.properties(replaceProperties)
 
-    // NeoForge/Forge側のMOD定義・AT定義はFabricのjarには要らない
+    // NeoForge/Forge mod and AT definitions aren't needed in the Fabric jar
     exclude("META-INF/neoforge.mods.toml")
     exclude("META-INF/mods.toml")
     exclude("META-INF/accesstransformer.cfg")
     if (opensRenderTypeCreate) {
-        // jarへ入るAWも、開放を足した方にする。excludeで外して足し直すと、excludeが足した側にも効いてしまう
+        // The AW going into the jar is also the one with the added opening. Excluding and re-adding would make the exclude apply to the added one too
         doLast {
             nodeAccessWidener.copyTo(destinationDir.resolve("xaeronav.accesswidener"), overwrite = true)
         }
     }
     if (!usesAccessWidener) {
-        // 開放する行を落として見出しだけにする（emptyAccessWidenerと同じ中身）
+        // Drop the opening lines, leaving only the header (same contents as emptyAccessWidener)
         filesMatching("xaeronav.accesswidener") {
             filter { line -> if (line.startsWith("accessWidener ")) line else "" }
         }
@@ -204,7 +204,7 @@ tasks.named("configureLaunch") {
 }
 
 if (minecraftVersion.startsWith("1.16.")) {
-    // 配布するのはJava 8へ変換した方（java8Jar）。変換前のjarは名前をずらして残す
+    // What's distributed is the Java 8-converted one (java8Jar). The pre-conversion jar is kept under a shifted name
     tasks.named<AbstractArchiveTask>("remapJar") { archiveClassifier.set("java21") }
     val downgraded = tasks.register<DowngradeJar>("downgradeRemapJar") {
         inputFile.set(tasks.named<AbstractArchiveTask>("remapJar").flatMap { it.archiveFile })

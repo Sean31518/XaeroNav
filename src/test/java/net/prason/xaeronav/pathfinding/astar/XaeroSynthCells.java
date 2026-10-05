@@ -7,27 +7,27 @@ import net.prason.xaeronav.pathfinding.world.FakeCells;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
- * <b>実験用。</b>Xaeroの地図が持っている情報だけから組み直した世界。
+ * <b>Experimental.</b> A world rebuilt only from the information Xaero's map holds.
  *
- * <p>航法グラフを窓の外で作るとき、実機で使えるのはこれだけ——ここで作ったグラフが
- * 本物の地形のグラフにどこまで近いかが、抽象グラフの到達点を決める。
+ * <p>When building the nav graph outside the window, this is all that's available in-game; how close a graph built here
+ * comes to the graph of the real terrain determines how far the abstract graph can go.
  *
  * <ul>
- * <li><b>地表</b>（現世・エンド）: 列ごとに最上面のブロックだけ。水面の下の底も分かる
- *     （{@code XaeroMapReader#readSurfaceDetailed}）。最上面より下は「普通の石」、何も無い列は奈落</li>
- * <li><b>床</b>（ネザー）: 列ごとに「空気の下にある固体の面」を上から最大8枚
- *     （{@code XaeroMapModel}の濃いモデルと同じ規則）。床の上の空洞がどこまで続くかは分からないので
- *     {@link #FLOOR_HEADROOM}だけ空気にし、それ以外は石。列は2ブロックおき（{@code SAMPLE_STEP}）</li>
+ * <li><b>Surface</b> (Overworld, End): only the topmost block of each column. The bottom under a water surface is known too
+ *     ({@code XaeroMapReader#readSurfaceDetailed}). Below the topmost block is "ordinary stone"; columns with nothing are void</li>
+ * <li><b>Floors</b> (Nether): per column, up to 8 "solid surfaces with air above", from the top
+ *     (the same rule as {@code XaeroMapModel}'s dense model). How far the cavity above a floor extends isn't known, so
+ *     only {@link #FLOOR_HEADROOM} is made air and the rest is stone. Columns every 2 blocks ({@code SAMPLE_STEP})</li>
  * </ul>
  */
 final class XaeroSynthCells implements CellSource {
 
-    /** 床の上に空気として置く高さ。立った姿勢（2）＋跳躍の頭上（1）。 */
+    /** Height placed as air above a floor. Standing pose (2) + jump headroom (1). */
     private static final int FLOOR_HEADROOM = 3;
 
     private static final int MAX_FLOORS = 8;
 
-    /** ネザーの床を読む列の間隔（{@code XaeroMapReader#SAMPLE_STEP}の床版）。 */
+    /** Spacing of the columns whose Nether floors are read (the floor version of {@code XaeroMapReader#SAMPLE_STEP}). */
     private static final int FLOOR_SAMPLE_STEP = 2;
 
     private static final FakeCells SAMPLE = FakeCells.empty(new SearchBounds(0, 0, 0, 1, 1, 1))
@@ -39,7 +39,7 @@ final class XaeroSynthCells implements CellSource {
     private final SearchBounds bounds;
     private final boolean floors;
     private final int sizeX;
-    /** 地表: [最上面Y, 底のY]。床: 床のY×{@link #MAX_FLOORS}（無ければMIN_VALUE）。 */
+    /** Surface: [topmost Y, bottom Y]. Floors: floor Y × {@link #MAX_FLOORS} (MIN_VALUE if absent). */
     private final int[] heights;
     private final long[] surfaceCells;
 
@@ -65,12 +65,12 @@ final class XaeroSynthCells implements CellSource {
         }
     }
 
-    /** 地表だけの世界（現世・エンド）。 */
+    /** A world of surface only (Overworld, End). */
     static XaeroSynthCells surface(CellSource real) {
         return new XaeroSynthCells(real, false);
     }
 
-    /** 洞窟の床だけの世界（ネザー）。 */
+    /** A world of cave floors only (Nether). */
     static XaeroSynthCells floors(CellSource real) {
         return new XaeroSynthCells(real, true);
     }
@@ -253,7 +253,7 @@ final class XaeroSynthCells implements CellSource {
         return real.openSkyY(x, z);
     }
 
-    /** 窓の中は本物、外は合成という世界（読み込み済みチャンクとXaeroの地図の組み合わせ）。 */
+    /** A world that is real inside the window and synthetic outside (the combination of loaded chunks and Xaero's map). */
     static CellSource hybrid(CellSource real, CellSource synth, BlockPos center, int radius) {
         return new CellSource() {
             @Override

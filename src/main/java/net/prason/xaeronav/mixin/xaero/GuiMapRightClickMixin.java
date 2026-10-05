@@ -21,24 +21,24 @@ import xaero.map.gui.GuiMap;
 import xaero.map.gui.dropdown.rightclick.RightClickOption;
 
 /**
- * 世界地図の何もない場所を右クリックしたときのメニューに「ここへ経路探索」を足す。
- * {@code GuiMap}自身が{@code IRightClickableElement}で、地図の背景を右クリックしたときだけ
- * この{@code getRightClickOptions}が呼ばれる（ウェイポイント上での右クリックは
- * {@link WaypointReaderMixin}側が受け持つ）。
+ * Adds "Navigate Here" to the menu shown when right-clicking an empty spot on the world map.
+ * {@code GuiMap} itself is an {@code IRightClickableElement}, and this {@code getRightClickOptions} is called
+ * only when right-clicking the map background (right-clicking on a waypoint is handled by
+ * {@link WaypointReaderMixin}).
  *
- * <p>required=falseの専用mixin configに属し、対象メソッドが見つからない場合はこの機能だけが無効化される。
+ * <p>Belongs to a dedicated mixin config with required=false; if the target method isn't found, only this feature is disabled.
  */
 @Mixin(GuiMap.class)
 public abstract class GuiMapRightClickMixin {
 
     /**
-     * Xaeroが末尾に独自描画する距離表示（例: "245.0m"、{@code getRightClickOptions}が返す
-     * リストの要素ではない）の下に埋もれないよう、先頭の情報行（タイトル・チャンク座標・ブロック座標）
-     * より後ろ、最初の操作項目より前に挿入したい。ただし先頭の情報行の数は
-     * 「Display Map Distances」設定やタイル選択の有無で0〜2件と変動するため固定インデックスでは
-     * 決め打ちできない（実機フィードバックで発覚、2026-08-13）。そこで、実際に見つかった最初の
-     * 操作項目（Xaero自身の{@code GuiMap#getRightClickOptions}実装が追加する翻訳キー）の直前に
-     * 挿入する。どれも見つからない場合は末尾へ（元の挙動と同じ、安全側）。
+     * We want to insert after the leading info rows (title, chunk coordinates, block coordinates) and before the first
+     * action item, so it isn't buried under the distance readout Xaero draws at the end on its own (e.g. "245.0m", not an
+     * element of the list {@code getRightClickOptions} returns). However, the number of leading info rows varies from 0 to 2
+     * depending on the "Display Map Distances" setting and whether a tile is selected, so a fixed index
+     * can't be hard-coded (found through in-game feedback, 2026-08-13). So insert right before the first action item
+     * actually found (a translation key added by Xaero's own {@code GuiMap#getRightClickOptions} implementation).
+     * If none is found, append to the end (same as the original behavior, the safe side).
      */
     private static final Set<String> FIRST_ACTION_KEYS = Set.of(
             "gui.xaero_right_click_map_create_waypoint",
@@ -64,7 +64,7 @@ public abstract class GuiMapRightClickMixin {
     @Shadow(remap = false)
     private ResourceKey<Level> rightClickDim;
 
-    // Xaero自身のメソッドなのでSRGの対応が無い。remapさせると1.20.1-forgeのAPがビルドを止める
+    // Xaero's own method, so there's no SRG mapping. Letting it remap makes the AP on 1.20.1-forge stop the build
     @ModifyReturnValue(method = "getRightClickOptions", at = @At("RETURN"), remap = false)
     private ArrayList<RightClickOption> xaeronav$addGoHereOption(ArrayList<RightClickOption> original) {
         XaeroHookProbe.record(XaeroHookProbe.Point.WORLD_MAP_MENU);
@@ -87,8 +87,8 @@ public abstract class GuiMapRightClickMixin {
                 PathfindingState.INSTANCE.setGoal(new BlockPos(goalX, goalY, goalZ));
             }
         });
-        // 「ここへ経路探索」のすぐ下に置く。目的地が無い間は押しても意味が無いので灰色表示にする
-        // （項目自体を消すとメニューの位置が探索中/未探索で変わってしまい押し間違えやすい）
+        // Placed right below "Navigate Here". Pointless to press while there's no goal, so it's shown grayed out
+        // (removing the item itself would shift menu positions between searching/not searching and invite misclicks)
         int clearIndex = insertIndex + 1;
         original.add(clearIndex, new RightClickOption("gui.xaeronav_clear_route", clearIndex, (GuiMap) (Object) this) {
             @Override

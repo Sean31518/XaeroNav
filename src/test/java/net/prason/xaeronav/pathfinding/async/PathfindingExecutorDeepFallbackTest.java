@@ -21,20 +21,20 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link PathfindingExecutor#submitWithDeepFallback}——通常予算と深い予算を並列に試す経路。
+ * {@link PathfindingExecutor#submitWithDeepFallback}: the path that tries the regular and deep budgets in parallel.
  *
- * <p>直列（通常予算の失敗を確認してから次tickで深い予算を投げ直す）だと2回分の待ち時間が
- * 足し算になる（実測は{@link net.prason.xaeronav.client.PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}
- * のjavadoc参照）。ここでは<b>正しさ</b>——通常予算で届く地形は通常予算の結果を、通常予算では
- * 届かず深い予算でだけ届く地形は深い予算の結果を、どちらも届かない地形は失敗を返すこと、
- * および新しいリクエストが来たら両方とも打ち切られることを見る。
+ * <p>Serially (confirming the regular budget failed, then submitting the deep budget on the next tick), the two waits
+ * add up (for measurements see the javadoc of {@link net.prason.xaeronav.client.PathfindingState#DEEP_SEARCH_BUDGET_FACTOR}).
+ * Here we check <b>correctness</b>: terrain reachable within the regular budget returns the regular result, terrain
+ * reachable only with the deep budget returns the deep result, terrain reachable with neither returns a failure,
+ * and both are cancelled when a new request arrives.
  *
- * <p>結果の選び方を見るケースは1つの{@link FakeCells}を両方の探索へ渡している。{@code FakeCells}は
- * 探索中に書き換わらないので共有してよい——本物の{@code ChunkView}はセルのキャッシュを持つので
- * 共有できず、それを見るのが{@link #givesEachParallelSearchItsOwnView()}。
+ * <p>The cases checking which result is picked pass one {@link FakeCells} to both searches. {@code FakeCells}
+ * doesn't change during the search, so sharing is fine; a real {@code ChunkView} has a cell cache and can't be
+ * shared, which is what {@link #givesEachParallelSearchItsOwnView()} checks.
  *
- * <p>{@code PathfindingExecutorLooseningTest}と同じ大きい島（径80）を使うため1ケースが
- * 数秒かかる。{@code @Tag("slow")}で既定の{@code test}から外す。
+ * <p>It uses the same large island (diameter 80) as {@code PathfindingExecutorLooseningTest}, so each case takes
+ * a few seconds. {@code @Tag("slow")} keeps it out of the default {@code test}.
  */
 @Tag("slow")
 class PathfindingExecutorDeepFallbackTest {
@@ -44,21 +44,21 @@ class PathfindingExecutorDeepFallbackTest {
     private static final int LARGE_ISLAND_RADIUS = 80;
 
     /**
-     * 通常予算では{@code NODE_BUDGET}で終わる小さめの上限。<b>この地形の実測は2万で予算切れ・
-     * 3万で到達</b>（28,408ノード）なので、帯の下側を採る。
+     * A smallish cap at which the regular budget ends with {@code NODE_BUDGET}. <b>Measured on this terrain: budget runs out at 20k,
+     * reaches at 30k</b> (28,408 nodes), so this takes the low side of the band.
      *
-     * <p>コストモデルが動くと必要ノード数も動く。<b>ここが「届いてしまう」側へ落ちると、
-     * 深い予算へフォールバックする経路を一度も通らないまま緑になる</b>ので、対照の
-     * {@code assertFalse}を各ケースの先頭に置いてある。
+     * <p>When the cost model changes, the required node count changes too. <b>If this falls to the "reaches anyway" side, the test
+     * goes green without ever exercising the fallback to the deep budget</b>, so a control
+     * {@code assertFalse} is placed at the top of each case.
      */
     private static final SearchLimits NORMAL =
             new SearchLimits(20_000, 20_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
 
-    /** 同じ地形を舐め尽くせる大きい上限。 */
+    /** A large cap that can exhaust the same terrain. */
     private static final SearchLimits DEEP =
             new SearchLimits(300_000, 20_000, AStarPathfinder.DEFAULT_HEURISTIC_WEIGHT);
 
-    /** 出発の島 → 奈落{@link #VOID_GAP}マス → 同じ高さの島。{@code PathfindingExecutorLooseningTest}と同じ地形。 */
+    /** Start island -> {@link #VOID_GAP} blocks of void -> island at the same height. Same terrain as {@code PathfindingExecutorLooseningTest}. */
     private static FakeCells twoIslands(int islandRadius) {
         SearchBounds bounds = new SearchBounds(-8, 20, -8,
                 islandRadius * 2 + VOID_GAP + 16, 93, islandRadius * 2 + 8);
@@ -77,8 +77,8 @@ class PathfindingExecutorDeepFallbackTest {
     }
 
     /**
-     * 通常予算では{@code NODE_BUDGET}で終わり、深い予算なら渡れる地形。並列フォールバックは
-     * 深い方の結果を採用して渡り切ること。
+     * Terrain where the regular budget ends with {@code NODE_BUDGET} but the deep budget can cross. The parallel fallback
+     * must adopt the deep result and cross all the way.
      */
     @Test
     void fallsBackToTheDeepBudgetWhenTheNormalOneRunsOut() throws Exception {
@@ -86,19 +86,19 @@ class PathfindingExecutorDeepFallbackTest {
         BlockPos start = new BlockPos(LARGE_ISLAND_RADIUS, 61, LARGE_ISLAND_RADIUS);
         BlockPos goal = new BlockPos(LARGE_ISLAND_RADIUS + VOID_GAP + 5, 61, LARGE_ISLAND_RADIUS);
 
-        // 対照。通常予算だけでは本当に届かないことがこのテストの前提そのもの
+        // Control. That the regular budget alone really can't reach is the very premise of this test
         PathResult normalOnly = new PathfindingExecutor().submit(cells, start, goal, NORMAL, true, 0).get();
         assertFalse(normalOnly.complete(),
-                "通常予算だけで届いてしまう＝深い予算にフォールバックする効果を確かめられない: "
+                "reaches with the regular budget alone, so the effect of falling back to the deep budget can't be checked: "
                         + normalOnly.termination());
 
         PathResult result = new PathfindingExecutor()
                 .submitWithDeepFallback(cells, cells, start, goal, NORMAL, DEEP, true, 0).get();
 
-        assertTrue(result.complete(), "深い予算までフォールバックすれば渡れるはず: " + result.termination());
+        assertTrue(result.complete(), "should cross when falling back to the deep budget: " + result.termination());
     }
 
-    /** 通常予算で届く地形では、素直にその結果を返すこと（深い方を律儀に待たない）。 */
+    /** On terrain reachable within the regular budget, return that result directly (without dutifully waiting for the deep one). */
     @Test
     void usesTheNormalResultWhenItAlreadyReachesTheGoal() throws Exception {
         FakeCells cells = twoIslands(10);
@@ -108,14 +108,14 @@ class PathfindingExecutorDeepFallbackTest {
         PathResult result = new PathfindingExecutor()
                 .submitWithDeepFallback(cells, cells, start, goal, NORMAL, DEEP, true, 0).get();
 
-        assertTrue(result.complete(), "小さい島からは元から渡れていたはず: " + result.termination());
+        assertTrue(result.complete(), "should have crossed from the small island already: " + result.termination());
     }
 
-    /** どちらの予算でも届かない地形では、通常予算の打ち切り理由をそのまま返すこと。 */
+    /** On terrain reachable with neither budget, return the regular budget's termination reason as-is. */
     @Test
     void reportsTheNormalTerminationWhenNeitherBudgetReachesTheGoal() throws Exception {
-        // 奈落そのものを渡れない上限（0=無制限ではなく、橋を架けさせない）にして、
-        // 深い予算をもってしても本当に道が無い地形を作る
+        // Set a cap that can't cross the void itself (not 0=unlimited, but no bridging allowed),
+        // making terrain with truly no way even with the deep budget
         SearchBounds bounds = new SearchBounds(-8, 20, -8, 40, 93, 40);
         FakeCells cells = FakeCells.empty(bounds).canPlaceBlocks(false);
         for (int x = 0; x <= 10; x++) {
@@ -123,30 +123,30 @@ class PathfindingExecutorDeepFallbackTest {
                 cells.set(x, 60, z, FakeCells.BEDROCK);
             }
         }
-        // ゴールの島は孤立させたまま置かない＝そもそも到達可能セルがゴールに届かない
+        // The goal island isn't left isolated as-is, i.e. no reachable cell gets to the goal at all
         BlockPos start = new BlockPos(5, 61, 5);
         BlockPos goal = new BlockPos(35, 61, 35);
 
         PathResult result = new PathfindingExecutor()
                 .submitWithDeepFallback(cells, cells, start, goal, NORMAL, DEEP, true, 0).get();
 
-        assertFalse(result.complete(), "孤立した目的地に届いてしまっている: " + result.termination());
+        assertFalse(result.complete(), "reached an isolated goal: " + result.termination());
     }
 
     /**
-     * 2つの探索が<b>それぞれ別のビューを占有する</b>こと。
+     * The two searches <b>each occupy a separate view</b>.
      *
-     * <p>同じ{@link net.prason.xaeronav.pathfinding.world.CellSource}を両方へ渡していた頃、実機で
-     * {@code ChunkView}のセルキャッシュ（{@code Long2LongOpenHashMap}）が並行に書き換わって
-     * {@code ArrayIndexOutOfBoundsException}が出ていた。例外が出るかどうかはタイミング次第なので、
-     * ここでは<b>どのビューも1スレッドしか触っていないこと</b>を直接見る。
+     * <p>Back when the same {@link net.prason.xaeronav.pathfinding.world.CellSource} was passed to both, in-game the
+     * {@code ChunkView} cell cache ({@code Long2LongOpenHashMap}) was modified concurrently and threw
+     * {@code ArrayIndexOutOfBoundsException}. Whether the exception occurs depends on timing, so
+     * here we directly check <b>that each view is touched by only one thread</b>.
      *
-     * <p>「2つのビューの占有者が違う」まで見るのが要点——深い探索が実は走っていなければ
-     * 違反ゼロは当たり前に成立してしまい、番人として空振りになる。
+     * <p>The key is checking as far as "the two views have different owners": if the deep search weren't actually running,
+     * zero violations would hold trivially, and the guard would be a no-op.
      */
     @Test
     void givesEachParallelSearchItsOwnView() throws Exception {
-        // 通常予算では届かない地形。深い探索が最後まで走るので、2つが本当に重なる
+        // Terrain the regular budget can't reach. The deep search runs to the end, so the two really overlap
         FakeCells cells = twoIslands(LARGE_ISLAND_RADIUS);
         BlockPos start = new BlockPos(LARGE_ISLAND_RADIUS, 61, LARGE_ISLAND_RADIUS);
         BlockPos goal = new BlockPos(LARGE_ISLAND_RADIUS + VOID_GAP + 5, 61, LARGE_ISLAND_RADIUS);
@@ -158,15 +158,15 @@ class PathfindingExecutorDeepFallbackTest {
                 .submitWithDeepFallback(normalView.view(), deepView.view(), start, goal, NORMAL, DEEP, true, 0)
                 .get();
 
-        assertNull(normalView.intruder(), "通常予算のビューを占有者以外のスレッドが触っている");
-        assertNull(deepView.intruder(), "深い予算のビューを占有者以外のスレッドが触っている");
-        assertNotNull(normalView.owner(), "通常予算のビューが一度も使われていない");
-        assertNotNull(deepView.owner(), "深い予算のビューが一度も使われていない＝並列に走っていない");
+        assertNull(normalView.intruder(), "a thread other than the owner touched the regular budget's view");
+        assertNull(deepView.intruder(), "a thread other than the owner touched the deep budget's view");
+        assertNotNull(normalView.owner(), "the regular budget's view was never used");
+        assertNotNull(deepView.owner(), "the deep budget's view was never used, so it didn't run in parallel");
         assertNotSame(normalView.owner(), deepView.owner(),
-                "2つの探索が同じスレッドで走っている＝並列フォールバックが働いていない");
+                "the two searches ran on the same thread, so the parallel fallback isn't working");
     }
 
-    /** 新しいリクエストが来たら、通常・深い両方の探索が打ち切られること。 */
+    /** When a new request arrives, both the regular and deep searches are cancelled. */
     @Test
     void cancelsBothSearchesWhenSupersededByANewRequest() throws Exception {
         FakeCells cells = twoIslands(LARGE_ISLAND_RADIUS);
@@ -175,19 +175,19 @@ class PathfindingExecutorDeepFallbackTest {
 
         PathfindingExecutor executor = new PathfindingExecutor();
         var superseded = executor.submitWithDeepFallback(cells, cells, start, goal, NORMAL, DEEP, true, 0);
-        // 同じexecutorへの次のsubmitが前のジョブ(通常・深い両方)を打ち切る
+        // The next submit to the same executor cancels the previous job (both regular and deep)
         PathResult next = executor.submit(cells, start, goal, NORMAL, true, 0).get();
 
         assertTrue(superseded.isCancelled() || superseded.isCompletedExceptionally(),
-                "前のリクエストが打ち切られていない");
+                "the previous request was not cancelled");
         try {
             superseded.get();
         } catch (CancellationException expected) {
-            // 期待どおり
+            // As expected
         } catch (ExecutionException e) {
-            throw new AssertionError("キャンセルではなく別の例外で終わった", e);
+            throw new AssertionError("ended with a different exception, not cancellation", e);
         }
-        // 新しいリクエスト自体は普通に完了する（打ち切られたのは前のジョブだけ）
+        // The new request itself completes normally (only the previous job was cancelled)
         assertEquals(PathResult.Termination.NODE_BUDGET, next.termination());
     }
 }
