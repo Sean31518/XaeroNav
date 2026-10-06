@@ -20,13 +20,26 @@ public final class SurfaceCellSource implements CellSource {
     private final SearchBounds bounds;
     private final boolean jumpGapEnabled;
     private final int maxSubmergedTicks;
+    private final boolean swimmingEnabled;
 
     public SurfaceCellSource(SurfaceGrid grid, SearchBounds bounds, boolean jumpGapEnabled,
                              int maxSubmergedTicks) {
+        this(grid, bounds, jumpGapEnabled, maxSubmergedTicks, true);
+    }
+
+    /**
+     * @param swimmingEnabled whether the corridor may cross water. Layer 2 doesn't know the inventory and never offers
+     *                        boats ({@link #boatAvailable()}), so its swimming moves stand in for any way of crossing
+     *                        water: pass {@code false} only when neither swimming nor boats are allowed, otherwise a
+     *                        layer 1 route that paddles across a lake could never be refined
+     */
+    public SurfaceCellSource(SurfaceGrid grid, SearchBounds bounds, boolean jumpGapEnabled,
+                             int maxSubmergedTicks, boolean swimmingEnabled) {
         this.grid = grid;
         this.bounds = bounds;
         this.jumpGapEnabled = jumpGapEnabled;
         this.maxSubmergedTicks = maxSubmergedTicks;
+        this.swimmingEnabled = swimmingEnabled;
     }
 
     @Override
@@ -147,6 +160,11 @@ public final class SurfaceCellSource implements CellSource {
     @Override
     public boolean boatAvailable() {
         return false;
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return swimmingEnabled;
     }
 
     @Override

@@ -92,6 +92,22 @@ public final class ForgeConfigSpecStore implements NavConfigStore, NavConfigSpec
         return value::get;
     }
 
+    @Override
+    public <E extends Enum<E>> EnumValue<E> defineEnum(String path, E defaultValue) {
+        ForgeConfigSpec.EnumValue<E> value = builder.defineEnum(path, defaultValue);
+        return new EnumValue<>() {
+            @Override
+            public E get() {
+                return value.get();
+            }
+
+            @Override
+            public void set(E newValue) {
+                value.set(newValue);
+            }
+        };
+    }
+
     // Forge's `defineListAllowEmpty` lacks the 4-argument version NeoForge has (taking a Supplier for new elements).
     // It only means Forge can't hold the initial value created by the GUI's "add element" button; the defaults and storage format don't change.
     // Below 1.21, align on the version taking List<String> and a Supplier (Forge 46 has no (String, List, Predicate) version)

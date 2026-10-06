@@ -1,6 +1,7 @@
 package net.prason.xaeronav.pathfinding.world;
 
 import net.minecraft.core.BlockPos;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
 /**
  * <b>A world where only the area around the player is loaded.</b> Outside the window it returns unloaded ({@link CellData#ABSENT}).
@@ -139,6 +140,16 @@ public record WindowedCells(CellSource all, BlockPos player, int radius, SearchB
     @Override
     public boolean ridingBoat() {
         return all.ridingBoat();
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return all.routeProfile();
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return all.swimmingEnabled();
     }
 
     @Override

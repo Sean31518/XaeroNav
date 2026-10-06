@@ -331,7 +331,7 @@ final class Extend {
         }
         List<PathStep> steps = shown.result().steps();
         BlockPos from = steps.get(steps.size() - 1).pos();
-        boolean boatAvailable = ChunkView.boatAvailable(player);
+        boolean boatAvailable = XaeroNavConfig.INSTANCE.boatsEnabled() && ChunkView.boatAvailable(player);
         int renderRadius = ClientCompat.renderDistance(mc.options) * 16;
         // The continuation runs on a worker thread, so copy the player and dimension here before passing them
         BlockPos playerAt = player.blockPosition();

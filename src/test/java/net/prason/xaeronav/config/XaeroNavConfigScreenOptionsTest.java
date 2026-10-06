@@ -34,6 +34,6 @@ class XaeroNavConfigScreenOptionsTest {
         assertDoesNotThrow(() -> XaeroNavConfigScreen.addAllOptions(cfg, collected::add));
         // Must match the number of addBig.accept calls in XaeroNavConfigScreen.addAllOptions.
         // This catches it when items are added or removed.
-        assertEquals(14, collected.size());
+        assertEquals(17, collected.size());
     }
 }

@@ -6,6 +6,7 @@ import java.util.List;
 import net.prason.xaeronav.pathfinding.astar.AStarPathfinder;
 import net.prason.xaeronav.pathfinding.astar.NavigationTuning;
 import net.prason.xaeronav.pathfinding.astar.SearchLimits;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 import net.prason.xaeronav.pathfinding.world.MovementOptions;
 
 /**
@@ -46,6 +47,9 @@ public final class XaeroNavConfig {
         return STORE;
     }
 
+    private final NavConfigSpec.EnumValue<RouteProfile> routeProfile;
+    private final NavConfigSpec.BoolValue swimmingEnabled;
+    private final NavConfigSpec.BoolValue boatsEnabled;
     private final NavConfigSpec.BoolValue diggingEnabled;
     private final NavConfigSpec.BoolValue bridgingEnabled;
     private final NavConfigSpec.BoolValue jumpGapEnabled;
@@ -94,6 +98,19 @@ public final class XaeroNavConfig {
     XaeroNavConfig(NavConfigSpec spec) {
         spec.comment("XaeroNav pathfinding settings").push("pathfinding");
 
+        routeProfile = spec
+                .comment("What routes are optimised for",
+                        "BALANCED: the default trade-off between travel time and risk",
+                        "FASTEST: shortest travel time. Jumps, fall damage, edges and drops are weighed half as much,",
+                        "so routes cut closer to danger to save time",
+                        "SAFEST: avoids risk even at the cost of longer routes. Jumps, fall damage and walking along deadly",
+                        "edges are weighed 4x, drops and bridges over lava or the void 2x, and staying underwater a little more.",
+                        "Also always avoids risky jumps (avoidRiskyJumps) and never takes fall damage",
+                        "(fallDamageToleranceEnabled), whatever those two are set to",
+                        "RESOURCE_SAVING: places and breaks as few blocks as possible. Placing a block and digging",
+                        "one are weighed 3x, so routes walk further around obstacles instead")
+                .defineEnum("routeProfile", RouteProfile.BALANCED);
+
         diggingEnabled = spec
                 .comment("Allow routes to include digging (false searches only for routes reachable on foot)")
                 .define("diggingEnabled", true);
@@ -132,6 +149,18 @@ public final class XaeroNavConfig {
                         "If false, gaps that could be jumped are instead crossed by detouring or by placing blocks (bridgingEnabled)",
                         "A missed landing means a fall, so turn this off if you are unsure of your jumps or falling would be dangerous")
                 .define("jumpGapEnabled", true);
+
+        swimmingEnabled = spec
+                .comment("Allow routes to swim or wade through water",
+                        "If false, routes go around water instead (or cross it by boat when boatsEnabled is true and you carry one)",
+                        "You can still swim out if you are already in water, and a destination placed in water is still reached")
+                .define("swimmingEnabled", true);
+
+        boatsEnabled = spec
+                .comment("Allow routes to cross water by boat when you carry one",
+                        "Launching and stowing the boat takes time, so it only pays off on longer stretches of water (about 28 blocks or more)",
+                        "If false, a boat in your inventory is ignored")
+                .define("boatsEnabled", true);
 
         avoidRiskyJumps = spec
                 .comment("Avoid jumps over the bottomless void (the End's abyss) and over drops that would kill you at your",
@@ -390,6 +419,30 @@ public final class XaeroNavConfig {
         spec.pop();
     }
 
+    public RouteProfile routeProfile() {
+        return routeProfile.get();
+    }
+
+    public void setRouteProfile(RouteProfile value) {
+        routeProfile.set(value);
+    }
+
+    public boolean swimmingEnabled() {
+        return swimmingEnabled.get();
+    }
+
+    public void setSwimmingEnabled(boolean value) {
+        swimmingEnabled.set(value);
+    }
+
+    public boolean boatsEnabled() {
+        return boatsEnabled.get();
+    }
+
+    public void setBoatsEnabled(boolean value) {
+        boatsEnabled.set(value);
+    }
+
     public boolean diggingEnabled() {
         return diggingEnabled.get();
     }
@@ -583,7 +636,7 @@ public final class XaeroNavConfig {
         return new MovementOptions(diggingEnabled(), bridgingEnabled(), jumpGapEnabled(), lavaBridgingEnabled(),
                 maxBridgeRunBlocks(), maxLavaBridgeRunBlocks(), maxVoidBridgeRunBlocks(), maxSubmergedTicks(),
                 fallDamageToleranceEnabled(), avoidRiskyJumps(), blockBudgetEnabled(), blockBudgetReserve(),
-                strictLimits());
+                strictLimits(), routeProfile(), swimmingEnabled(), boatsEnabled());
     }
 
     public boolean blockBudgetEnabled() {

@@ -7,11 +7,13 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.file.FileNotFoundAction;
@@ -162,6 +164,35 @@ public final class NightConfigStore implements NavConfigStore, NavConfigSpec {
             return list.stream().allMatch(elementValidator) ? list : defaultValue;
         });
         return () -> file.<List<String>>get(path);
+    }
+
+    @Override
+    public <E extends Enum<E>> EnumValue<E> defineEnum(String name, E defaultValue) {
+        Class<E> type = defaultValue.getDeclaringClass();
+        E[] constants = type.getEnumConstants();
+        String allowed = Arrays.stream(constants).map(Enum::name).collect(Collectors.joining(", "));
+        // Stored by name. Same "Allowed Values" line, default fallback and case-insensitive match as ModConfigSpec
+        List<String> path = define(name, defaultValue.name(), takeComment() + "\nAllowed Values: " + allowed,
+                value -> {
+                    String text = value instanceof Enum<?> constant ? constant.name() : String.valueOf(value);
+                    for (E constant : constants) {
+                        if (constant.name().equalsIgnoreCase(text)) {
+                            return constant.name();
+                        }
+                    }
+                    return defaultValue.name();
+                });
+        return new EnumValue<>() {
+            @Override
+            public E get() {
+                return Enum.valueOf(type, file.<String>get(path));
+            }
+
+            @Override
+            public void set(E value) {
+                file.set(path, value.name());
+            }
+        };
     }
 
     private List<String> define(String name, Object defaultValue, String comment, Function<Object, Object> corrector) {

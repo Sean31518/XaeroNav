@@ -185,10 +185,10 @@ final class BuildMoves {
                 : ActionCosts.TERRAIN_EDIT_INTERRUPTION_TICKS;
         double cost = ActionCosts.SPRINT_ONE_BLOCK / owner.takeoffSpeedFactor(from.x, from.y, from.z)
                 + owner.placementCostTicks + interruption
-                + (lavaNearby ? ActionCosts.LAVA_BRIDGE_PENALTY_TICKS : 0.0)
+                + (lavaNearby ? owner.profile.lavaBridgePenaltyTicks() : 0.0)
                 // If far below is lava, don't measure the drop. The lava surcharge already represents the outcome of
                 // a miss, so charging again by depth would also shift the price of unmeasured Nether bridges
-                + (lavaFarBelow ? 0.0 : ActionCosts.dropRiskPenalty(dropBelow, owner.view.fatalFallBlocks()))
+                + (lavaFarBelow ? 0.0 : owner.profile.dropRiskPenalty(dropBelow, owner.view.fatalFallBlocks()))
                 + owner.submerged(from, bodyCost);
         owner.relax(from, x, y, z, cost, MoveKind.BRIDGE, bridgeRun);
     }

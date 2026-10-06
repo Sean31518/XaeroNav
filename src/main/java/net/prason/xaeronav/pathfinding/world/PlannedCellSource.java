@@ -5,6 +5,7 @@ import java.util.List;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 
 import net.minecraft.core.BlockPos;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 
 /**
@@ -152,6 +153,16 @@ public final class PlannedCellSource implements CellSource {
     @Override
     public boolean ridingBoat() {
         return source.ridingBoat();
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return source.routeProfile();
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return source.swimmingEnabled();
     }
 
     @Override

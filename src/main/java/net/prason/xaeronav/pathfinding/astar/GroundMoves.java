@@ -283,7 +283,7 @@ final class GroundMoves {
                 owner.markRiskyJumpBlocked();
                 return;
             }
-            dropRisk += ActionCosts.dropRiskPenalty(gapDrop, owner.view.fatalFallBlocks());
+            dropRisk += owner.profile.dropRiskPenalty(gapDrop, owner.view.fatalFallBlocks());
             int x = from.x + (gap + 1) * dx;
             int z = from.z + (gap + 1) * dz;
             if (!CellData.standable(owner.view.cell(x, y - 1, z))) {
@@ -293,7 +293,7 @@ final class GroundMoves {
             if (!owner.clearWithoutDigging(x, y, z)) {
                 return;
             }
-            owner.relax(from, x, y, z, ActionCosts.jumpAcrossGap(gap) + dropRisk, MoveKind.JUMP);
+            owner.relax(from, x, y, z, owner.profile.jumpAcrossGap(gap) + dropRisk, MoveKind.JUMP);
             return;
         }
     }
@@ -432,7 +432,7 @@ final class GroundMoves {
             return;
         }
         owner.relax(from, x, obstacleY + 1, z,
-                ActionCosts.fallCost(drop, takeoff) + damage * ActionCosts.FALL_DAMAGE_PENALTY_PER_POINT,
+                ActionCosts.fallCost(drop, takeoff) + damage * owner.profile.fallDamagePenaltyPerPoint(),
                 MoveKind.FALL_DAMAGE);
     }
 }

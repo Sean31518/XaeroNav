@@ -1,6 +1,7 @@
 package net.prason.xaeronav.pathfinding.world;
 
 import net.minecraft.core.BlockPos;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
 /**
  * A {@link CellSource} copying part of the terrain into an array. {@link FakeCells} looks cells up in a hash table, so reads are
@@ -147,6 +148,16 @@ public final class ArrayCells implements CellSource {
     @Override
     public boolean ridingBoat() {
         return all.ridingBoat();
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return all.routeProfile();
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return all.swimmingEnabled();
     }
 
     @Override

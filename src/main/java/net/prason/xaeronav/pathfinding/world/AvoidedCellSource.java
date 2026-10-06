@@ -6,6 +6,7 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 
 import net.minecraft.core.BlockPos;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
 /**
  * Terrain where only the given cells are treated as "absent". <b>Keeps the next search from picking again the cells
@@ -155,6 +156,16 @@ public final class AvoidedCellSource implements CellSource {
     @Override
     public boolean ridingBoat() {
         return source.ridingBoat();
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return source.routeProfile();
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return source.swimmingEnabled();
     }
 
     @Override

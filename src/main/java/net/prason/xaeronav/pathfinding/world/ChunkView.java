@@ -34,6 +34,7 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.prason.xaeronav.util.GameCompat;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.cost.DigCost;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
 import java.util.function.Predicate;
 
@@ -284,7 +285,9 @@ public final class ChunkView implements CellSource {
         boolean waterEvaporates = GameCompat.waterEvaporates(level, player.blockPosition());
         boolean canMlgWaterBucket = options.fallDamageToleranceEnabled() && !waterEvaporates
                 && hasItem(GameCompat.inventory(player), stack -> stack.getItem() == Items.WATER_BUCKET);
-        boolean boatAvailable = boatAvailable(player);
+        // A boat in the inventory is ignored when boats are turned off in the settings. Already riding one is still
+        // the physical starting state (paddling on to the shore is cheaper than getting out mid-water)
+        boolean boatAvailable = options.boatUsable(boatAvailable(player));
         boolean ridingBoat = ridingBoat(player);
 
         // The lower bound of the descent heuristic is set by the largest drop that can actually be generated.
@@ -518,6 +521,16 @@ public final class ChunkView implements CellSource {
     @Override
     public boolean ridingBoat() {
         return ridingBoat;
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return options.routeProfile();
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return options.swimmingEnabled();
     }
 
     /** Computed and cached on first access. */

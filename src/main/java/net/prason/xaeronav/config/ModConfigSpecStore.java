@@ -93,6 +93,22 @@ public final class ModConfigSpecStore implements NavConfigStore, NavConfigSpec {
     }
 
     @Override
+    public <E extends Enum<E>> EnumValue<E> defineEnum(String path, E defaultValue) {
+        ModConfigSpec.EnumValue<E> value = builder.defineEnum(path, defaultValue);
+        return new EnumValue<>() {
+            @Override
+            public E get() {
+                return value.get();
+            }
+
+            @Override
+            public void set(E newValue) {
+                value.set(newValue);
+            }
+        };
+    }
+
+    @Override
     public StringListValue defineStringList(String path, List<String> defaultValue,
             Supplier<String> newElement, Predicate<Object> elementValidator) {
         ModConfigSpec.ConfigValue<List<? extends String>> value =

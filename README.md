@@ -278,10 +278,13 @@ Other markings:
 
 | Key | Default | Description |
 |---|---|---|
+| `routeProfile` | `BALANCED` | What routes optimise for: `BALANCED`, `FASTEST` (risk surcharges halved), `SAFEST` (risk weighed up to 4x; also forces `avoidRiskyJumps` on and `fallDamageToleranceEnabled` off) or `RESOURCE_SAVING` (placing and digging weighed 3x) |
 | `diggingEnabled` | `true` | Allow digging in routes |
 | `bridgingEnabled` | `true` | Allow placing blocks to bridge gaps or climb cliffs |
 | `lavaBridgingEnabled` | `true` | Allow bridging over lava (also requires `bridgingEnabled`; last resort when no route avoiding lava exists) |
 | `jumpGapEnabled` | `true` | Allow jumping gaps up to 3 blocks wide |
+| `swimmingEnabled` | `true` | Allow routes to swim or wade. When `false`, routes go around water (or take a boat); you can still swim out of water you are already in, and a destination in water is still reached |
+| `boatsEnabled` | `true` | Allow crossing water by boat when you carry one. When `false`, a boat in your inventory is ignored |
 | `avoidRiskyJumps` | `true` | Avoid jumps over the void or a fatal drop (opened only when no way around exists at all) |
 | `blockBudgetEnabled` | `true` | Cap the total blocks a route may place at how many you carry (lifted when no route fits, with a shortage warning; never applied in creative) |
 | `blockBudgetReserve` | `0` | Blocks held back from that budget |
