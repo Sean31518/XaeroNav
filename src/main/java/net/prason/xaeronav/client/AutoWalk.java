@@ -52,6 +52,8 @@ public final class AutoWalk {
     /** Whether auto-walk is holding the keys right now (false while paused, e.g. a screen is open or the route is being computed). */
     private boolean holding;
     private float lastYaw;
+    /** The boat's heading last tick, for its turn rate ({@link AutoWalkSteer.Player#turnRate}); NaN when not in one. */
+    private float lastBoatYaw = Float.NaN;
 
     private AutoWalk() {
     }
@@ -132,10 +134,12 @@ public final class AutoWalk {
         }
 
         float heading = inBoat ? GameCompat.yaw(player.getVehicle()) : GameCompat.yaw(player);
+        float turnRate = inBoat && !Float.isNaN(lastBoatYaw) ? AutoWalkSteer.wrapDegrees(heading - lastBoatYaw) : 0.0F;
+        lastBoatYaw = inBoat ? heading : Float.NaN;
         AutoWalkSteer.Command command = AutoWalkSteer.steer(result.steps(), PathProgress.INSTANCE.indexFor(result),
                 new AutoWalkSteer.Player(player.getX(), player.getY(), player.getZ(), heading,
                         GameCompat.onGround(player), player.isInWater(), player.horizontalCollision, inBoat,
-                        onMount),
+                        onMount, turnRate),
                 XaeroNavConfig.INSTANCE.autoWalkSprint());
         switch (command.stop()) {
             case NONE -> apply(player, options, command, inBoat);

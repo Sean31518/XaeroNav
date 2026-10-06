@@ -245,6 +245,37 @@ class AutoWalkSteerTest {
         assertFalse(around.forward(), "Turns on the spot when facing away");
     }
 
+    private static AutoWalkSteer.Player turningBoat(float boatYaw, float turnRate) {
+        return new AutoWalkSteer.Player(3.5, Y, 0.5, boatYaw, false, false, false, true, false, turnRate);
+    }
+
+    @Test
+    void letsGoOfTheTurnBeforeTheBoatIsLinedUp() {
+        // 10 degrees still to go, but already turning left at 1 degree/tick: it coasts the rest of the way by itself
+        AutoWalkSteer.Command command = AutoWalkSteer.steer(boatRouteX(20), 3, turningBoat(-80.0F, -1.0F), true);
+
+        assertFalse(command.left(), "holding on would overshoot");
+        assertFalse(command.right());
+    }
+
+    @Test
+    void counterSteersWhenTheBoatIsTurningTooFast() {
+        // 10 degrees to go while turning at 3 degrees/tick: it would end up ~17 degrees past the route
+        AutoWalkSteer.Command command = AutoWalkSteer.steer(boatRouteX(20), 3, turningBoat(-80.0F, -3.0F), true);
+
+        assertTrue(command.right(), "brakes the turn");
+        assertFalse(command.left());
+    }
+
+    @Test
+    void aimsAFewBlocksAheadOnTheWater() {
+        List<PathStep> steps = boatRouteX(30);
+
+        int aim = AutoWalkSteer.boatAimIndex(steps, 4, inBoat(3.5, 0.5, -90.0F));
+
+        assertTrue(steps.get(aim).pos().getX() >= 9, "aims about six blocks ahead, not at the next block");
+    }
+
     @Test
     void stopsTheBoatBeforeTheShore() {
         List<PathStep> steps = boatRouteX(6);
