@@ -27,6 +27,11 @@ final class PathNode {
     final boolean boating;
 
     /**
+     * Whether riding an animal ({@code MountMoves}). Part of identity like {@link #boating}; never both at once.
+     */
+    final boolean mounted;
+
+    /**
      * Estimated cost to the goal. Computed once at creation. Only {@link #guideHole} nodes inherit it from the parent and rise with each relaxation.
      */
     double estimatedCostToGoal;
@@ -123,10 +128,15 @@ final class PathNode {
     }
 
     PathNode(int x, int y, int z, boolean boating, double estimatedCostToGoal, boolean guideHole) {
+        this(x, y, z, boating, false, estimatedCostToGoal, guideHole);
+    }
+
+    PathNode(int x, int y, int z, boolean boating, boolean mounted, double estimatedCostToGoal, boolean guideHole) {
         this.x = x;
         this.y = y;
         this.z = z;
         this.boating = boating;
+        this.mounted = mounted;
         this.estimatedCostToGoal = estimatedCostToGoal;
         this.guideHole = guideHole;
     }

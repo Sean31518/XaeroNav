@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.astar;
 
+import org.jspecify.annotations.Nullable;
 import java.util.Arrays;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -7,6 +8,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 import net.prason.xaeronav.pathfinding.world.CellSource;
+import net.prason.xaeronav.pathfinding.world.Mount;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
 /**
@@ -192,6 +194,11 @@ final class MemoCells implements CellSource {
     @Override
     public boolean ridingBoat() {
         return source.ridingBoat();
+    }
+
+    @Override
+    public @Nullable Mount mount() {
+        return source.mount();
     }
 
     @Override

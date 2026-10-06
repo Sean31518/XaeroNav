@@ -35,4 +35,9 @@ public record PathStep(BlockPos pos, MovementType movement, double cost,
     public boolean climbing() {
         return movement == MovementType.CLIMB;
     }
+
+    /** Whether this step is ridden on an animal. */
+    public boolean riding() {
+        return movement == MovementType.RIDE;
+    }
 }

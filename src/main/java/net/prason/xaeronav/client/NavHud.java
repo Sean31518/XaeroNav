@@ -227,7 +227,8 @@ public final class NavHud {
             DIG("hud.xaeronav.action_dig"),
             PLACE("hud.xaeronav.action_place"),
             JUMP("hud.xaeronav.action_jump"),
-            CLIMB("hud.xaeronav.action_climb");
+            CLIMB("hud.xaeronav.action_climb"),
+            DISMOUNT("hud.xaeronav.action_dismount");
 
             private final String key;
 
@@ -267,7 +268,8 @@ public final class NavHud {
                 actions[i] = step.digging() ? Action.DIG
                         : step.bridging() ? Action.PLACE
                         : step.movement() == MovementType.JUMP ? Action.JUMP
-                        : step.climbing() ? Action.CLIMB : null;
+                        : step.climbing() ? Action.CLIMB
+                        : step.movement() == MovementType.DISMOUNT ? Action.DISMOUNT : null;
                 nextActionSteps[i] = actions[i] != null ? i : nextActionSteps[i + 1];
             }
         }

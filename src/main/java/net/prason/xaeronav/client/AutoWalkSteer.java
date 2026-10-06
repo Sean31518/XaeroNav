@@ -51,7 +51,9 @@ final class AutoWalkSteer {
         /** A step ahead is dangerous to walk without care (lava, void, fall damage, drowning). */
         DANGER,
         /** In a boat, and the route goes ashore ahead: the player gets out and picks the boat up themselves. */
-        SHORE
+        SHORE,
+        /** Riding, and the route gets off ahead: the player gets off where the animal can't go on. */
+        DISMOUNT
     }
 
     /**
@@ -76,12 +78,18 @@ final class AutoWalkSteer {
      * @param inWater      in water
      * @param bumped       walked into a wall last tick ({@code horizontalCollision})
      * @param inBoat       riding a boat; {@code yaw} is then the boat's heading
+     * @param onMount      riding an animal; it follows where the rider looks, and steps up by itself
      */
     record Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped,
-                  boolean inBoat) {
+                  boolean inBoat, boolean onMount) {
 
         Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped) {
-            this(x, y, z, yaw, onGround, inWater, bumped, false);
+            this(x, y, z, yaw, onGround, inWater, bumped, false, false);
+        }
+
+        Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped,
+               boolean inBoat) {
+            this(x, y, z, yaw, onGround, inWater, bumped, inBoat, false);
         }
     }
 
@@ -105,7 +113,7 @@ final class AutoWalkSteer {
         }
         index = Math.max(0, Math.min(index, last));
 
-        Stop ahead = blockedAhead(steps, index, player.inBoat());
+        Stop ahead = player.onMount() ? leavesMountAhead(steps, index) : blockedAhead(steps, index, player.inBoat());
         if (ahead != Stop.NONE) {
             return Command.stop(player.yaw(), ahead);
         }
@@ -130,6 +138,10 @@ final class AutoWalkSteer {
         boolean forward = (facing || player.inWater()) && !climbingDown;
 
         boolean jump = false;
+        if (player.onMount()) {
+            // A horse steps up on its own; its jump key charges a leap that would overshoot the route
+            return new Command(yaw, forward, false, false, false, false, Stop.NONE);
+        }
         if (player.inWater()) {
             // Holding jump in water rises; releasing it sinks. Rise unless the route goes down
             jump = targetPos.getY() >= player.y() - 0.2;
@@ -236,6 +248,17 @@ final class AutoWalkSteer {
             count++;
         }
         return count;
+    }
+
+    /** While riding: {@link Stop#DISMOUNT} once a step ahead isn't ridden any more. */
+    static Stop leavesMountAhead(List<PathStep> steps, int index) {
+        int to = Math.min(steps.size() - 1, index + STOP_LOOKAHEAD);
+        for (int i = index + 1; i <= to; i++) {
+            if (!steps.get(i).riding()) {
+                return Stop.DISMOUNT;
+            }
+        }
+        return Stop.NONE;
     }
 
     /** Why the next few steps can't be walked automatically, or {@link Stop#NONE}. */

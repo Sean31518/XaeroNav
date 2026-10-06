@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import org.jspecify.annotations.Nullable;
 import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
@@ -140,6 +141,11 @@ public record WindowedCells(CellSource all, BlockPos player, int radius, SearchB
     @Override
     public boolean ridingBoat() {
         return all.ridingBoat();
+    }
+
+    @Override
+    public @Nullable Mount mount() {
+        return all.mount();
     }
 
     @Override

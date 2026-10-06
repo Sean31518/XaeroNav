@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import org.jspecify.annotations.Nullable;
 import java.util.Collection;
 
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -156,6 +157,11 @@ public final class AvoidedCellSource implements CellSource {
     @Override
     public boolean ridingBoat() {
         return source.ridingBoat();
+    }
+
+    @Override
+    public @Nullable Mount mount() {
+        return source.mount();
     }
 
     @Override

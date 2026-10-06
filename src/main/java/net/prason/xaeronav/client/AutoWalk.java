@@ -21,7 +21,8 @@ import net.prason.xaeronav.util.GameCompat;
  * gap jumps or painful falls), so switching it on or off plans the route again.
  *
  * <p>In a boat it steers the boat with the left/right keys along the water part of the route and stops at the shore,
- * where the player gets out and picks the boat up. Other vehicles (horses and the like) aren't steered yet.
+ * where the player gets out and picks the boat up. On a horse (or donkey, mule, camel) it looks along the route and
+ * holds forward; the animal follows the rider's view, and auto-walk stops where the route gets off.
  *
  * <p>Sprinting is set on the player rather than through the sprint key: with "Sprint: Toggle" in the controls that key is
  * a {@code ToggleKeyMapping}, whose {@code setDown(true)} flips the state, so holding it every tick would flicker.
@@ -82,7 +83,7 @@ public final class AutoWalk {
             GameCompat.tell(player, TextCompat.translatable("hud.xaeronav.autowalk.no_route"), true);
             return;
         }
-        if (player.isPassenger() && !ChunkView.ridingBoat(player)) {
+        if (player.isPassenger() && !ChunkView.ridingBoat(player) && ChunkView.ridingMount(player) == null) {
             GameCompat.tell(player, TextCompat.translatable("hud.xaeronav.autowalk.unsupported_vehicle"), true);
             return;
         }
@@ -114,7 +115,8 @@ public final class AutoWalk {
             return;
         }
         boolean inBoat = ChunkView.ridingBoat(player);
-        String reason = stopReason(player, options, inBoat);
+        boolean onMount = !inBoat && ChunkView.ridingMount(player) != null;
+        String reason = stopReason(player, options, inBoat, onMount);
         if (reason != null) {
             stop(mc, reason);
             return;
@@ -132,7 +134,8 @@ public final class AutoWalk {
         float heading = inBoat ? GameCompat.yaw(player.getVehicle()) : GameCompat.yaw(player);
         AutoWalkSteer.Command command = AutoWalkSteer.steer(result.steps(), PathProgress.INSTANCE.indexFor(result),
                 new AutoWalkSteer.Player(player.getX(), player.getY(), player.getZ(), heading,
-                        GameCompat.onGround(player), player.isInWater(), player.horizontalCollision, inBoat),
+                        GameCompat.onGround(player), player.isInWater(), player.horizontalCollision, inBoat,
+                        onMount),
                 XaeroNavConfig.INSTANCE.autoWalkSprint());
         switch (command.stop()) {
             case NONE -> apply(player, options, command, inBoat);
@@ -145,11 +148,12 @@ public final class AutoWalk {
             case MANUAL_STEP -> stop(mc, "hud.xaeronav.autowalk.manual_step");
             case DANGER -> stop(mc, "hud.xaeronav.autowalk.danger");
             case SHORE -> stop(mc, "hud.xaeronav.autowalk.shore");
+            case DISMOUNT -> stop(mc, "hud.xaeronav.autowalk.dismount");
         }
     }
 
     /** Translation key of why auto-walk must stop now, or {@code null} to keep going. */
-    private String stopReason(LocalPlayer player, Options options, boolean inBoat) {
+    private String stopReason(LocalPlayer player, Options options, boolean inBoat, boolean onMount) {
         PathfindingState state = PathfindingState.INSTANCE;
         if (state.arrived()) {
             return "hud.xaeronav.autowalk.arrived";
@@ -163,7 +167,7 @@ public final class AutoWalk {
         if (state.flying() || player.isFallFlying()) {
             return "hud.xaeronav.autowalk.manual_step";
         }
-        if (player.isPassenger() && !inBoat) {
+        if (player.isPassenger() && !inBoat && !onMount) {
             return "hud.xaeronav.autowalk.unsupported_vehicle";
         }
         if (options.keyDown.isDown() || options.keyShift.isDown()) {

@@ -25,13 +25,16 @@ import net.prason.xaeronav.pathfinding.cost.RouteProfile;
  * @param swimmingEnabled whether routes may enter water to swim or wade. When off, a player already in water can still
  *                        swim out, and the exact destination may still be a water cell
  * @param boatsEnabled whether routes may launch a boat. When off, a boat in the inventory is ignored
+ * @param mountsEnabled whether a route may be planned for the animal the player is riding (horse, donkey, camel...).
+ *                      When off, a route is planned on foot even while riding
  */
 public record MovementOptions(boolean diggingEnabled, boolean bridgingEnabled, boolean jumpGapEnabled,
                                boolean lavaBridgingEnabled, int maxBridgeRunBlocks, int maxLavaBridgeRunBlocks,
                                int maxVoidBridgeRunBlocks, int maxSubmergedTicks,
                                boolean fallDamageToleranceEnabled, boolean avoidRiskyJumps,
                                boolean blockBudgetEnabled, int blockBudgetReserve, boolean strictLimits,
-                               RouteProfile routeProfile, boolean swimmingEnabled, boolean boatsEnabled) {
+                               RouteProfile routeProfile, boolean swimmingEnabled, boolean boatsEnabled,
+                               boolean mountsEnabled) {
 
     /**
      * Allows none of digging, placing, jumping or dangerous drops. Used when you only want to see whether terrain
@@ -41,7 +44,7 @@ public record MovementOptions(boolean diggingEnabled, boolean bridgingEnabled, b
      */
     public static final MovementOptions NONE =
             new MovementOptions(false, false, false, false, 0, 0, 0, 0, false, true, false, 0, true,
-                    RouteProfile.BALANCED, true, true);
+                    RouteProfile.BALANCED, true, true, false);
 
     public MovementOptions {
         if (routeProfile.forcesSafeLimits()) {
@@ -66,13 +69,13 @@ public record MovementOptions(boolean diggingEnabled, boolean bridgingEnabled, b
         return new MovementOptions(diggingEnabled, false, false, false,
                 maxBridgeRunBlocks, maxLavaBridgeRunBlocks, maxVoidBridgeRunBlocks, maxSubmergedTicks,
                 false, true, blockBudgetEnabled, blockBudgetReserve, strictLimits,
-                routeProfile, false, boatsEnabled);
+                routeProfile, false, boatsEnabled, mountsEnabled);
     }
 
     public MovementOptions withoutDigging() {
         return new MovementOptions(false, bridgingEnabled, jumpGapEnabled, lavaBridgingEnabled,
                 maxBridgeRunBlocks, maxLavaBridgeRunBlocks, maxVoidBridgeRunBlocks, maxSubmergedTicks,
                 fallDamageToleranceEnabled, avoidRiskyJumps, blockBudgetEnabled, blockBudgetReserve, strictLimits,
-                routeProfile, swimmingEnabled, boatsEnabled);
+                routeProfile, swimmingEnabled, boatsEnabled, mountsEnabled);
     }
 }

@@ -14,6 +14,7 @@ import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
+import net.prason.xaeronav.pathfinding.world.Mount;
 import net.prason.xaeronav.util.MonotonicTime;
 
 /**
@@ -367,6 +368,10 @@ public final class AStarPathfinder {
     private final GroundMoves groundMoves = new GroundMoves(this);
     private final WaterMoves waterMoves = new WaterMoves(this);
     private final BuildMoves buildMoves = new BuildMoves(this);
+    private final MountMoves mountMoves = new MountMoves(this);
+
+    /** The animal being ridden ({@link CellSource#mount()}), or {@code null}. Read once; constant for the search. */
+    private final @Nullable Mount mount;
 
     private final NodeTable nodes = new NodeTable();
 
@@ -376,6 +381,9 @@ public final class AStarPathfinder {
      * so no bit can be added to the key, and the table itself is split instead. Stays empty if no boat is held.
      */
     private final NodeTable boatNodes = new NodeTable();
+
+    /** Nodes in the riding state ({@link PathNode#mounted}); split off for the same reason. Empty on foot. */
+    private final NodeTable mountNodes = new NodeTable();
 
     /** Total number of nodes created (including those around expanded nodes). */
     private int createdNodes;
@@ -472,6 +480,7 @@ public final class AStarPathfinder {
                             double placementCostScale) {
         RunCaps caps = tolerances.caps();
         this.profile = view.routeProfile();
+        this.mount = view.mount();
         this.swimmingEnabled = view.swimmingEnabled();
         this.digSurchargeTicks = profile.digSurchargeTicks();
         this.placementCostTicks = ActionCosts.PLACE_BLOCK_AIM_TICKS * placementCostScale
@@ -662,7 +671,10 @@ public final class AStarPathfinder {
         // It also checks that this is a water-surface cell to exclude the case of a boat beached on land while riding
         boolean startBoating = view.ridingBoat()
                 && isBoatSurface(start.getX(), start.getY(), start.getZ());
-        PathNode startNode = node(start.getX(), start.getY(), start.getZ(), startBoating);
+        // Riding at the start: plan for the animal until the route gets off it. It starts mounted even where its
+        // footprint check would fail (it is standing there after all); only the moves away are checked
+        boolean startMounted = mount != null && !startBoating;
+        PathNode startNode = node(start.getX(), start.getY(), start.getZ(), startBoating, startMounted);
         startNode.bridgeRun = carried.bridgeRun();
         // Charge up front the count the previous leg has committed to using. Without this, the budget is full
         // for each leg and paths come out that place many times what's in hand in total
@@ -918,6 +930,9 @@ public final class AStarPathfinder {
             // "digging cost that wasn't paid"
             case DIAGONAL_ASCEND, DIAGONAL_DESCEND -> {
             }
+            // Riding never digs; getting off happens where the animal stands, which is clear for a person
+            case RIDE, RIDE_ASCEND, RIDE_DESCEND, DISMOUNT -> {
+            }
             // Climbing only digs the cell that becomes the new head. Counting the two body cells at the arrival point
             // would also show the old head (already confirmed passable) as a dug cell
             case PILLAR -> columnCost(from.x, from.y + 2, from.y + 2, from.z, cells);
@@ -931,7 +946,11 @@ public final class AStarPathfinder {
     }
 
     private PathNode node(int x, int y, int z, boolean boating) {
-        PathNode[] page = (boating ? boatNodes : nodes).page(x, y, z);
+        return node(x, y, z, boating, false);
+    }
+
+    private PathNode node(int x, int y, int z, boolean boating, boolean mounted) {
+        PathNode[] page = (mounted ? mountNodes : boating ? boatNodes : nodes).page(x, y, z);
         int index = NodeTable.index(x, y, z);
         PathNode existing = page[index];
         if (existing != null) {
@@ -948,8 +967,10 @@ public final class AStarPathfinder {
         } else {
             // For a node riding a boat, the horizontal lower bound drops to paddling speed. Estimating at sprint speed
             // would be inadmissible for the boat branch, and together with the one-time boarding cost it would never be expanded
-            heuristic = Heuristic.estimate(x, y, z, goalX, goalY, goalZ, minDescentPerBlock,
-                    boating ? ActionCosts.PADDLE_ONE_BLOCK : ActionCosts.SPRINT_ONE_BLOCK);
+            // Riding is faster still: estimating at sprint speed would overestimate every mounted node
+            double horizontalTicks = mounted ? Math.min(mount.ticksPerBlock(), ActionCosts.SPRINT_ONE_BLOCK)
+                    : boating ? ActionCosts.PADDLE_ONE_BLOCK : ActionCosts.SPRINT_ONE_BLOCK;
+            heuristic = Heuristic.estimate(x, y, z, goalX, goalY, goalZ, minDescentPerBlock, horizontalTicks);
             // With a region goal, the estimate to the center overestimates by the radius = inadmissible.
             // Subtract it, assuming the radius can be closed with the cheapest horizontal movement (same idea as
             // searchToSurface rewriting it into a lower bound on "how many more blocks to climb" only)
@@ -968,17 +989,23 @@ public final class AStarPathfinder {
                 // h gets a 16-block-period sawtooth, and paths get pulled toward chunk boundaries and turn at right angles
                 double guide = costToGo.searchEstimate(x, y, z);
                 guideHole = Double.isNaN(guide);
+                // The guide is priced on foot; scale it down to the animal's pace for mounted nodes
+                double pace = mounted ? horizontalTicks / ActionCosts.SPRINT_ONE_BLOCK : 1.0;
                 heuristic = Math.max(heuristic,
-                        (guideHole ? costToGo.estimate(x, y, z) : guide) - radiusAllowance);
+                        (guideHole ? costToGo.estimate(x, y, z) : guide) * pace - radiusAllowance);
             }
         }
-        PathNode created = new PathNode(x, y, z, boating, heuristic, guideHole);
+        PathNode created = new PathNode(x, y, z, boating, mounted, heuristic, guideHole);
         page[index] = created;
         createdNodes++;
         return created;
     }
 
     private void expand(PathNode current) {
+        if (current.mounted) {
+            mountMoves.expand(current, mount);
+            return;
+        }
         for (int i = 0; i < CARDINAL_DX.length; i++) {
             int dx = CARDINAL_DX[i];
             int dz = CARDINAL_DZ[i];
@@ -1199,6 +1226,11 @@ public final class AStarPathfinder {
         relax(from, x, y, z, edgeCost, kind, 0);
     }
 
+    /** Relaxes to the node in the riding state. Only for {@link MountMoves}. */
+    void relaxMounted(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind) {
+        relax(from, x, y, z, edgeCost, kind, 0, false, true);
+    }
+
     /** Relaxes to the node in the boating state. Only for {@link #addBoatEnter}/{@link #addBoatPaddle}. */
     void relaxBoating(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind) {
         relax(from, x, y, z, edgeCost, kind, 0, true);
@@ -1214,14 +1246,20 @@ public final class AStarPathfinder {
 
     void relax(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind, int bridgeRun,
                boolean boating) {
+        relax(from, x, y, z, edgeCost, kind, bridgeRun, boating, false);
+    }
+
+    void relax(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind, int bridgeRun,
+               boolean boating, boolean mounted) {
         // Cut before the edge is reported, so the nav graph doesn't learn water entries the search never makes
-        if (waterEntryBlocked && !boating && entersWater(from, x, y, z)) {
+        if (waterEntryBlocked && !boating && !mounted && entersWater(from, x, y, z)) {
             return;
         }
         if (from.boating && !boating) {
             edgeCost += ActionCosts.BOAT_STOW_TICKS;
         }
-        if (edgeSink != null) {
+        // The nav graph is built on foot; riding edges would be priced for one particular animal
+        if (edgeSink != null && !from.mounted && !mounted) {
             edgeSink.edge(from.x, from.y, from.z, from.boating, x, y, z, boating, edgeCost, kind);
         }
         // Before the air accounting, discard "candidates that won't get cheaper anyway". The surcharge (SUBMERGED_TRAVEL_PENALTY)
@@ -1231,7 +1269,7 @@ public final class AStarPathfinder {
         // This misses setting {@code submergedRunCapBlocked} further down, and that's fine:
         // an edge that doesn't improve vanishing because of the cap doesn't change the answer, so removing the cap for that reason
         // and searching again gives the same path
-        PathNode neighbor = node(x, y, z, boating);
+        PathNode neighbor = node(x, y, z, boating, mounted);
         if (neighbor.closed || neighbor.cost - (from.cost + edgeCost) <= MIN_IMPROVEMENT) {
             return;
         }

@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import org.jspecify.annotations.Nullable;
 import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
@@ -148,6 +149,11 @@ public final class ArrayCells implements CellSource {
     @Override
     public boolean ridingBoat() {
         return all.ridingBoat();
+    }
+
+    @Override
+    public @Nullable Mount mount() {
+        return all.mount();
     }
 
     @Override

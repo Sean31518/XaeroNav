@@ -19,5 +19,9 @@ public enum MovementType {
     /** A leg descending while taking fall damage (only when allowed in the config). Actually costs health. */
     FALL_DAMAGE,
     /** A leg that places a water bucket just before landing to cancel fall damage. Requires timing. */
-    FALL_MLG
+    FALL_MLG,
+    /** Riding an animal ({@code MountMoves}). */
+    RIDE,
+    /** Getting off the animal; from here on the route is walked. */
+    DISMOUNT
 }

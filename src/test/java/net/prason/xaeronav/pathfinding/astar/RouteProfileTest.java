@@ -91,7 +91,7 @@ class RouteProfileTest {
     /** Options with fall damage allowed and risky jumps not avoided, so forcing them is visible. */
     private static MovementOptions options(RouteProfile profile) {
         return new MovementOptions(true, true, true, true, 96, 30, 96, 250, true, false, true, 0, false,
-                profile, true, true);
+                profile, true, true, true);
     }
 
     @Test

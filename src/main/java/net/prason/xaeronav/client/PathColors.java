@@ -110,7 +110,7 @@ final class PathColors {
             // Always caught earlier by the switch on risk, so execution never falls through to here
             case FALL_DAMAGE -> FALL_DAMAGE;
             case FALL_MLG -> MLG_REQUIRED;
-            case TRAVERSE -> WALK;
+            case TRAVERSE, RIDE, DISMOUNT -> WALK;
         };
     }
 }

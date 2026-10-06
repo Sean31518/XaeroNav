@@ -15,7 +15,7 @@ class MovementOptionsAutoWalkTest {
 
     private static MovementOptions everythingAllowed() {
         return new MovementOptions(true, true, true, true, 96, 30, 96, 250, true, false, true, 4, false,
-                RouteProfile.FASTEST, true, true);
+                RouteProfile.FASTEST, true, true, true);
     }
 
     @Test
