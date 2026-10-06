@@ -10,6 +10,7 @@ import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.astar.AStarPathfinder;
 import net.prason.xaeronav.pathfinding.astar.Carryover;
 import net.prason.xaeronav.pathfinding.astar.PathResult;
+import net.prason.xaeronav.pathfinding.astar.PathSafetyChecker;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 import net.prason.xaeronav.pathfinding.astar.SearchLimits;
 import net.prason.xaeronav.pathfinding.world.CellSource;
@@ -29,8 +30,10 @@ import net.prason.xaeronav.pathfinding.world.CellSource;
  * @param ticks        estimated ticks from the start to each point
  * @param complete     whether it reaches the destination; otherwise it stops where the readable terrain or the
  *                     search ran out
+ * @param steps        the moves themselves, risk-annotated like the live route's, one per point after the start; this is
+ *                     what the live route takes over ({@link PathfindingState#adoptFullRoute})
  */
-record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
+record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete, List<PathStep> steps) {
 
     static final RoutePreview NONE = new RoutePreview(List.of(), new double[0], false);
 
@@ -54,6 +57,12 @@ record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
 
     RoutePreview {
         points = List.copyOf(points);
+        steps = List.copyOf(steps);
+    }
+
+    /** Points only, without the moves (enough for drawing). */
+    RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
+        this(points, ticks, complete, List.of());
     }
 
     boolean isEmpty() {
@@ -133,6 +142,7 @@ record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
                              BooleanSupplier cancelled, Consumer<RoutePreview> progress) {
         List<BlockPos> points = new ArrayList<>();
         List<Double> ticks = new ArrayList<>();
+        List<PathStep> moves = new ArrayList<>();
         points.add(start);
         ticks.add(0.0);
         BlockPos from = start;
@@ -146,17 +156,21 @@ record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
             boolean reached = false;
             for (int attempt = 0; attempt < TRIES_PER_TARGET && !reached; attempt++) {
                 if (cancelled.getAsBoolean()) {
-                    return snapshot(points, ticks, false);
+                    return snapshot(points, ticks, false, moves);
                 }
-                PathResult leg = new AStarPathfinder(legViews.get(), LEG_LIMITS)
+                CellSource legView = legViews.get();
+                PathResult leg = new AStarPathfinder(legView, LEG_LIMITS)
                         .search(from, target, cancelled, new Carryover(bridgeRun, placed), radius);
+                // The same risk marks as the live route, so auto-walk and the HUD warn about this one too
+                leg = PathSafetyChecker.annotate(legView, leg);
                 List<PathStep> steps = leg.steps();
                 if (steps.isEmpty() || horizontal(from, steps.get(steps.size() - 1).pos()) < MIN_LEG_PROGRESS
                         && !leg.complete()) {
-                    return snapshot(points, ticks, false);
+                    return snapshot(points, ticks, false, moves);
                 }
                 for (PathStep step : steps) {
                     total += step.cost();
+                    moves.add(step);
                     points.add(step.pos());
                     ticks.add(total);
                     bridgeRun = step.bridging() ? bridgeRun + 1 : 0;
@@ -164,13 +178,13 @@ record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
                 }
                 from = steps.get(steps.size() - 1).pos();
                 reached = leg.complete();
-                progress.accept(snapshot(points, ticks, false));
+                progress.accept(snapshot(points, ticks, false, moves));
             }
             if (!reached && last) {
-                return snapshot(points, ticks, false);
+                return snapshot(points, ticks, false, moves);
             }
         }
-        RoutePreview done = snapshot(points, ticks, true);
+        RoutePreview done = snapshot(points, ticks, true, moves);
         progress.accept(done);
         return done;
     }
@@ -181,11 +195,12 @@ record RoutePreview(List<BlockPos> points, double[] ticks, boolean complete) {
         return Math.sqrt(dx * dx + dz * dz);
     }
 
-    private static RoutePreview snapshot(List<BlockPos> points, List<Double> ticks, boolean complete) {
+    private static RoutePreview snapshot(List<BlockPos> points, List<Double> ticks, boolean complete,
+                                         List<PathStep> moves) {
         double[] array = new double[ticks.size()];
         for (int i = 0; i < array.length; i++) {
             array[i] = ticks.get(i);
         }
-        return new RoutePreview(points, array, complete);
+        return new RoutePreview(points, array, complete, moves);
     }
 }

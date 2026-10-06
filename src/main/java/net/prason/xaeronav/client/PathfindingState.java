@@ -30,6 +30,7 @@ import net.prason.xaeronav.util.MonotonicTime;
 import net.prason.xaeronav.pathfinding.astar.Carryover;
 import net.prason.xaeronav.pathfinding.astar.CostToGo;
 import net.prason.xaeronav.pathfinding.astar.NavigationTuning;
+import net.prason.xaeronav.pathfinding.astar.PathLoops;
 import net.prason.xaeronav.pathfinding.astar.PathResult;
 import net.prason.xaeronav.pathfinding.astar.PathStep;
 import net.prason.xaeronav.pathfinding.astar.SearchLimits;
@@ -741,6 +742,70 @@ public final class PathfindingState {
         }
         publishNavigationView();
         return this.goal;
+    }
+
+    /**
+     * Makes the whole route planned ahead ({@link FullRoutePlanner}) the route being followed, from the step after
+     * {@code fromIndex} (the one nearest the player). Searches still running are discarded first: their shorter result
+     * would otherwise replace it the moment it arrives.
+     *
+     * <p>From here on it is an ordinary complete route to the destination: checked against block changes near the
+     * player, planned again on deviation (and the planner glues its tail back on, {@link #attachFullRoute}).
+     */
+    public void adoptFullRoute(List<PathStep> fullSteps, int fromIndex) {
+        if (goal == null || flying || arrived || fromIndex + 1 >= fullSteps.size()) {
+            return;
+        }
+        generation.incrementAndGet();
+        executor.cancelAll();
+        computing = false;
+        splice.clearBlock();
+        seamRepair.clear();
+        extend.clear();
+        stuckTracker.reset();
+        PathResult result = new PathResult(List.copyOf(fullSteps.subList(fromIndex + 1, fullSteps.size())),
+                PathResult.Termination.REACHED_GOAL, 0, 0);
+        displayed = new DisplayedPath(result, PathMode.GOAL, -1);
+        publishNavigationView();
+    }
+
+    /**
+     * Continues the route being followed with the rest of the whole route, if it ends on it: the live route was
+     * planned again near the player (a deviation, a block change) and stops after a few hundred blocks, while the whole
+     * route still knows the way on from there. Returns whether it did.
+     */
+    public boolean attachFullRoute(List<PathStep> fullSteps) {
+        DisplayedPath shown = displayed;
+        if (goal == null || flying || arrived || shown == null || shown.mode() == PathMode.TO_SURFACE
+                || shown.result().steps().isEmpty() || currentPathEndsAtDestination()) {
+            return false;
+        }
+        List<PathStep> steps = shown.result().steps();
+        BlockPos end = steps.get(steps.size() - 1).pos();
+        int join = -1;
+        int best = Integer.MAX_VALUE;
+        for (int i = 0; i < fullSteps.size() - 1; i++) {
+            BlockPos pos = fullSteps.get(i).pos();
+            int dx = Math.abs(pos.getX() - end.getX());
+            int dy = Math.abs(pos.getY() - end.getY());
+            int dz = Math.abs(pos.getZ() - end.getZ());
+            if (dx <= 1 && dy <= 1 && dz <= 1 && dx + dy + dz < best) {
+                best = dx + dy + dz;
+                join = i;
+            }
+        }
+        if (join < 0) {
+            return false;
+        }
+        List<PathStep> merged = new ArrayList<>(steps);
+        merged.addAll(fullSteps.subList(join + 1, fullSteps.size()));
+        PathLoops.Folded folded = PathLoops.fold(merged);
+        PathResult combined = new PathResult(List.copyOf(folded.steps()), PathResult.Termination.REACHED_GOAL,
+                shown.result().expandedNodes(), shown.result().distinctNodes());
+        PathProgress.INSTANCE.carryOver(combined);
+        displayed = new DisplayedPath(combined, PathMode.GOAL, -1);
+        publishNavigationView();
+        return true;
     }
 
     /**
