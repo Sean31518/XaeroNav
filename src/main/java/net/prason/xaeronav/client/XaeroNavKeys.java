@@ -48,6 +48,8 @@ public final class XaeroNavKeys {
     public static final KeyMapping CLEAR = unbound("key.xaeronav.clear");
     public static final KeyMapping TOGGLE_HUD = unbound("key.xaeronav.toggle_hud");
     public static final KeyMapping OPEN_CONFIG_SCREEN = unbound("key.xaeronav.open_config_screen");
+    /** Only registered where auto-walk is supported ({@link AutoWalk#SUPPORTED}). */
+    public static final KeyMapping TOGGLE_AUTO_WALK = unbound("key.xaeronav.toggle_auto_walk");
 
     /**
      * Pathfind-to-cursor key that only works while Xaero's world map screen ({@code GuiMap}) is open.
@@ -72,6 +74,9 @@ public final class XaeroNavKeys {
         sink.accept(TOGGLE_HUD);
         sink.accept(OPEN_CONFIG_SCREEN);
         sink.accept(GOTO_MAP_CURSOR);
+        if (AutoWalk.SUPPORTED) {
+            sink.accept(TOGGLE_AUTO_WALK);
+        }
     }
 
     /**
@@ -107,6 +112,9 @@ public final class XaeroNavKeys {
                     ? "hud.xaeronav.hud_on"
                     : "hud.xaeronav.hud_off"), true);
         }
+        while (TOGGLE_AUTO_WALK.consumeClick()) {
+            AutoWalk.INSTANCE.toggle();
+        }
     }
 
     /** Allows targeting up to roughly the render distance, not the block-interaction reach (about 4.5-5 blocks) */
@@ -137,6 +145,9 @@ public final class XaeroNavKeys {
             // drain
         }
         while (TOGGLE_HUD.consumeClick()) {
+            // drain
+        }
+        while (TOGGLE_AUTO_WALK.consumeClick()) {
             // drain
         }
     }

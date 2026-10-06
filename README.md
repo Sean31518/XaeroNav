@@ -228,6 +228,21 @@ All unbound by default (`Options → Controls → XaeroNav`).
 | Clear route | |
 | Toggle HUD | Show or hide the on-screen guidance (persisted to the config file) |
 | Open config screen | Edit `config/xaeronav-client.toml` via GUI |
+| Toggle auto-walk | Minecraft 26.3+ only. Walk the shown route automatically (see below) |
+
+### Auto-walk (Minecraft 26.3+)
+
+With a destination set, the auto-walk key steers along the route and holds forward, jump and sprint for you
+(walking, stepping up, swimming, ladders). It stops and tells you why when:
+
+- the next few steps need you: digging, placing a bridge block, a boat, a gap jump, or flying
+- a dangerous section is ahead: lava, void, fall damage, drowning, magma
+- you take over: any other movement key, sneaking, or turning the camera
+- you take damage, or your health drops to `autoWalk.stopHealth` or below
+- you arrive, or the route is cleared
+
+It pauses while a screen is open or while the route is being computed. Many multiplayer servers treat automated
+movement as cheating, so it only runs in singleplayer unless `autoWalk.allowOnServers` is set.
 
 ## Route colors
 
@@ -328,6 +343,14 @@ neither are blocks with an inventory, and anything unrecognized is treated as no
 | `hudEnabled` | `true` | On-screen guidance at the top of the screen |
 | `straightLineEnabled` | `true` | Show a dotted line to the destination for stretches with no known route |
 | `goalMarkerEnabled` | `true` | Mark the destination on Xaero's maps (a temporary waypoint with the minimap installed, otherwise a pin drawn by XaeroNav) |
+
+### `[autoWalk]` (Minecraft 26.3+)
+
+| Key | Default | Description |
+|---|---|---|
+| `allowOnServers` | `false` | Allow auto-walk on multiplayer servers. Only enable it where the server rules allow automated movement |
+| `sprint` | `true` | Sprint on straight, level stretches |
+| `stopHealth` | `6` | Stop once health is at or below this many half-hearts (0 = never) |
 
 ## Known limitations
 
