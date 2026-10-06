@@ -148,7 +148,7 @@ final class WaterMoves {
         }
         int x = from.x + dx;
         int z = from.z + dz;
-        if (!owner.isBoatSurface(x, from.y, z)) {
+        if (!owner.boatFits(x, from.y, z)) {
             return;
         }
         if (diagonal && (!owner.clearWithoutDigging(x, from.y, from.z)
@@ -179,7 +179,7 @@ final class WaterMoves {
         int x = from.x + dx;
         int z = from.z + dz;
         for (int y = from.y; y >= from.y - 1; y--) {
-            if (owner.isBoatSurface(x, y, z)) {
+            if (owner.boatFits(x, y, z)) {
                 owner.relaxBoating(from, x, y, z,
                         ActionCosts.PADDLE_ONE_BLOCK + ActionCosts.BOAT_LAUNCH_TICKS, MoveKind.BOAT_ENTER);
                 return;

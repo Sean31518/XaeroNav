@@ -1087,6 +1087,29 @@ public final class AStarPathfinder {
                 && CellData.occupiableWithoutDigging(above);
     }
 
+    /**
+     * Whether a boat can be paddled into this cell: it is water surface, and part of an open stretch at least 2x2 blocks
+     * of it. A boat is 1.375 blocks wide, so it sticks out of a single cell on both sides; in a 1-wide channel (swamps:
+     * water between roots, lily pads and mud) it jams against the banks, whereas in a 2-wide one it runs along the seam.
+     *
+     * <p>Only for moves into the boating state. Starting already afloat ({@link #runSearch}) keeps the plain surface
+     * check: the boat is there, and paddling out of a narrow spot is still possible.
+     */
+    boolean boatFits(int x, int y, int z) {
+        if (!isBoatSurface(x, y, z)) {
+            return false;
+        }
+        for (int ox = -1; ox <= 0; ox++) {
+            for (int oz = -1; oz <= 0; oz++) {
+                if (isBoatSurface(x + ox, y, z + oz) && isBoatSurface(x + ox + 1, y, z + oz)
+                        && isBoatSurface(x + ox, y, z + oz + 1) && isBoatSurface(x + ox + 1, y, z + oz + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** Whether the two cells occupied by a standing pose can be passed through as is, without digging. */
     boolean clearWithoutDigging(int x, int y, int z) {
         return CellData.occupiableWithoutDigging(view.cell(x, y, z))
