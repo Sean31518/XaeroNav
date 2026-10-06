@@ -698,12 +698,24 @@ public final class XaeroNavConfig {
         return autoWalkOnServers.get();
     }
 
+    public void setAutoWalkOnServers(boolean value) {
+        autoWalkOnServers.set(value);
+    }
+
     public boolean autoWalkSprint() {
         return autoWalkSprint.get();
     }
 
+    public void setAutoWalkSprint(boolean value) {
+        autoWalkSprint.set(value);
+    }
+
     public int autoWalkStopHealth() {
         return autoWalkStopHealth.get();
+    }
+
+    public void setAutoWalkStopHealth(int value) {
+        autoWalkStopHealth.set(value);
     }
 
     public boolean hudEnabled() {
