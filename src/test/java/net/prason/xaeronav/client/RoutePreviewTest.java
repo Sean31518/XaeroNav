@@ -122,4 +122,33 @@ class RoutePreviewTest {
         assertTrue(corridor.size() < FullRoutePlanner.MAX_CORRIDOR_CHUNKS + square, "size " + corridor.size());
         assertTrue(corridor.contains(GameCompat.chunkKey(0, 0)), "keeps the part nearest the start");
     }
+
+    @Test
+    void keepsTheMovesForTheLiveRouteToTakeOver() {
+        FakeCells cells = flat(400);
+        BlockPos goal = new BlockPos(200, FEET, 0);
+        List<BlockPos> targets = RoutePreview.legTargets(cells, List.of(new BlockPos(0, FEET, 0), goal), 80);
+
+        RoutePreview preview = RoutePreview.plan(() -> cells, new BlockPos(0, FEET, 0), targets, () -> false,
+                ignored -> { });
+
+        assertEquals(preview.points().size() - 1, preview.steps().size(), "one move per point after the start");
+        for (int i = 0; i < preview.steps().size(); i++) {
+            assertEquals(preview.points().get(i + 1), preview.steps().get(i).pos());
+        }
+    }
+
+    @Test
+    void takesOverOnlyWhenThePlayerIsOnTheWholeRoute() {
+        FakeCells cells = flat(400);
+        List<BlockPos> targets = RoutePreview.legTargets(cells,
+                List.of(new BlockPos(0, FEET, 0), new BlockPos(200, FEET, 0)), 80);
+        RoutePreview preview = RoutePreview.plan(() -> cells, new BlockPos(0, FEET, 0), targets, () -> false,
+                ignored -> { });
+
+        int near = FullRoutePlanner.nearestStep(preview, new BlockPos(50, FEET, 2));
+        assertTrue(near >= 0);
+        assertTrue(Math.abs(preview.steps().get(near).pos().getX() - 50) <= 2);
+        assertEquals(-1, FullRoutePlanner.nearestStep(preview, new BlockPos(50, FEET, 20)), "too far off to take over");
+    }
 }

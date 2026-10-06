@@ -480,13 +480,13 @@ class AStarPathfinderTest {
 
     @Test
     void takesTheBoatAcrossAWideStrait() {
-        CellSource cells = strait(40).boatAvailable(true);
+        CellSource cells = strait(90).boatAvailable(true);
 
-        PathResult result = search(cells, new BlockPos(0, 63, 0), new BlockPos(41, 63, 0));
+        PathResult result = search(cells, new BlockPos(0, 63, 0), new BlockPos(91, 63, 0));
 
         assertTrue(result.complete());
         assertTrue(result.steps().stream().anyMatch(PathStep::boating),
-                "40 blocks of water are crossed by boat: " + movements(result));
+                "90 blocks of water are crossed by boat: " + movements(result));
         assertEquals(1, result.steps().stream().filter(step -> step.movement() == MovementType.BOAT
                         && step.cost() > ActionCosts.BOAT_LAUNCH_TICKS).count(),
                 "the cost of placing and boarding is paid only once, on launch: " + movements(result));

@@ -448,12 +448,35 @@ public final class ActionCosts {
      *       via {@code setDefaultPickUpDelay}</li>
      * </ul>
      *
-     * <p>Together with {@link #BOAT_LAUNCH_TICKS}, 84 ticks set the break-even: swimming
+     * <p>Together with {@link #BOAT_LAUNCH_TICKS}, 84 ticks (before {@link #BOAT_DOCK_TICKS} and
+     * {@link #MODE_SWITCH_PENALTY_TICKS}, which move it to roughly 60 blocks) set the break-even: swimming
      * ({@link #SWIM_ONE_BLOCK}) and boating ({@link #PADDLE_ONE_BLOCK}) differ by about 3 ticks per block, so
      * the boat is chosen only when the water stretch exceeds roughly 28 blocks. For ponds or river widths,
      * placing and breaking the boat costs more.
      */
     public static final double BOAT_STOW_TICKS = PLACE_BLOCK_AIM_TICKS + 28.0 + 10.0;
+
+    /**
+     * Bringing a moving boat to the bank and getting onto land, paid on top of {@link #BOAT_STOW_TICKS} by the move
+     * that gets out.
+     *
+     * <p>Breakdown: a boat at full speed (0.4 blocks/tick) only loses 10% of its speed per tick once forward is let
+     * go, so it glides about 4 blocks / 10 ticks; lining it up with the exact cell of the bank takes about as long
+     * again; getting out (sneak) and stepping or jumping up onto the bank, which usually stands a block above the
+     * water, about 10 more.
+     */
+    public static final double BOAT_DOCK_TICKS = 30.0;
+
+    /**
+     * Surcharge on every change of how you travel: launching a boat, leaving it, getting off a mount.
+     *
+     * <p>Not time but preference, like the risk surcharges: each change is a moment of fiddling where things go wrong
+     * (the boat drifts off, a misclick breaks the wrong block, the horse wanders), and a route that hops out of the
+     * boat onto every small island it passes is tiresome to follow even when it is a few seconds shorter on paper.
+     * At 40 ticks per change, leaving the water for an island and getting back in costs about 190 ticks in all, so a
+     * route only crosses an island when going round it would be some 75 blocks longer.
+     */
+    public static final double MODE_SWITCH_PENALTY_TICKS = 40.0;
 
     /**
      * Additional penalty per block for crossing lava by placing footing. A single missed placement is death,

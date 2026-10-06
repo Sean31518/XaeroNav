@@ -35,9 +35,12 @@ import net.prason.xaeronav.util.GameCompat;
  *   <li>Plan leg after leg on a background thread, publishing each leg as it is found.</li>
  * </ol>
  *
- * <p>It is a preview: the live route near the player is still planned, checked and followed as before; this only adds
- * what lies beyond it. It is planned again when the destination, the movement options or the long-distance route
- * change, or when the player strays far from it.
+ * <p>Once it reaches the destination it becomes the route being followed ({@link PathfindingState#adoptFullRoute}):
+ * drawn in the world, guiding the HUD and auto-walk, checked near the player like any route. When the live search
+ * plans a stretch again (a deviation, a changed block) and that stretch ends on the whole route, the rest of the whole
+ * route is attached to it again ({@link PathfindingState#attachFullRoute}), so the route never shrinks back to the
+ * few hundred blocks the live search reaches. It is planned again when the destination, the movement options or the
+ * long-distance route change, or when the player strays far from it.
  *
  * <p>Minecraft 26.3+ in singleplayer only ({@link SavedChunks#available()}).
  */
@@ -55,7 +58,13 @@ public final class FullRoutePlanner {
     private static final int STRAY_BLOCKS = 48;
 
     /** Least time between two plans for the same destination (ms). */
-    private static final long REPLAN_INTERVAL_MILLIS = 15_000L;
+    private static final long REPLAN_INTERVAL_MILLIS = 5_000L;
+
+    /** Least time between two takeovers of the same whole route (ms), so it never fights the live search. */
+    private static final long READOPT_INTERVAL_MILLIS = 10_000L;
+
+    /** How close (blocks, horizontally) the player must be to the whole route for it to be taken over. */
+    private static final int ADOPT_RADIUS = 4;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "XaeroNav full route");
@@ -75,6 +84,9 @@ public final class FullRoutePlanner {
     private @Nullable MovementOptions plannedOptions;
     private List<BlockPos> plannedWaypoints = List.of();
     private long plannedAt;
+    /** The whole route last taken over, and when. */
+    private @Nullable RoutePreview adopted;
+    private long adoptedAt;
 
     private FullRoutePlanner() {
     }
@@ -101,6 +113,7 @@ public final class FullRoutePlanner {
         plannedDimension = null;
         plannedOptions = null;
         plannedWaypoints = List.of();
+        adopted = null;
     }
 
     /** Decides each tick whether to plan (again). Cheap when nothing changed. */
@@ -125,9 +138,11 @@ public final class FullRoutePlanner {
                 || !options.equals(plannedOptions);
         long now = System.currentTimeMillis();
         boolean due = now - plannedAt >= REPLAN_INTERVAL_MILLIS;
-        boolean better = due && waypoints.size() != plannedWaypoints.size();
+        // A better long-distance route only matters while the whole route doesn't reach the destination yet
+        boolean better = due && !preview.complete() && waypoints.size() != plannedWaypoints.size();
         boolean strayed = due && !planning && !preview.isEmpty() && strayed(player.blockPosition());
         if (!changed && !better && !strayed) {
+            follow(player, state, now);
             return;
         }
         if (changed) {
@@ -139,6 +154,43 @@ public final class FullRoutePlanner {
         plannedWaypoints = waypoints;
         plannedAt = now;
         start(mc, player, goal, dimension, waypoints);
+    }
+
+    /** Makes the finished whole route the one being followed, or attaches its rest to the live route. */
+    private void follow(LocalPlayer player, PathfindingState state, long now) {
+        RoutePreview full = preview;
+        if (!full.complete() || full.steps().isEmpty() || state.currentPathEndsAtDestination()) {
+            return;
+        }
+        if (state.attachFullRoute(full.steps())) {
+            return;
+        }
+        if (full == adopted && now - adoptedAt < READOPT_INTERVAL_MILLIS) {
+            return;
+        }
+        int nearest = nearestStep(full, player.blockPosition());
+        if (nearest >= 0) {
+            state.adoptFullRoute(full.steps(), nearest);
+            adopted = full;
+            adoptedAt = now;
+        }
+    }
+
+    /** Index of the step nearest to {@code at}, if within {@link #ADOPT_RADIUS} horizontally and 3 vertically; else -1. */
+    static int nearestStep(RoutePreview full, BlockPos at) {
+        int best = -1;
+        long bestDistance = (long) ADOPT_RADIUS * ADOPT_RADIUS;
+        for (int i = 0; i < full.steps().size(); i++) {
+            BlockPos pos = full.steps().get(i).pos();
+            long dx = pos.getX() - at.getX();
+            long dz = pos.getZ() - at.getZ();
+            long distance = dx * dx + dz * dz;
+            if (distance <= bestDistance && Math.abs(pos.getY() - at.getY()) <= 3) {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+        return best;
     }
 
     private boolean strayed(BlockPos at) {

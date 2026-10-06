@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.astar;
 
+import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.Mount;
 
@@ -39,7 +40,8 @@ final class MountMoves {
         for (int i = 0; i < DX.length; i++) {
             addRide(from, mount, DX[i], DZ[i]);
         }
-        owner.relax(from, from.x, from.y, from.z, DISMOUNT_TICKS, MoveKind.DISMOUNT);
+        owner.relax(from, from.x, from.y, from.z, DISMOUNT_TICKS + ActionCosts.MODE_SWITCH_PENALTY_TICKS,
+                MoveKind.DISMOUNT);
     }
 
     private void addRide(PathNode from, Mount mount, int dx, int dz) {

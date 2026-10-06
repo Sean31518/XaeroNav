@@ -79,22 +79,40 @@ final class AutoWalkSteer {
      * @param bumped       walked into a wall last tick ({@code horizontalCollision})
      * @param inBoat       riding a boat; {@code yaw} is then the boat's heading
      * @param onMount      riding an animal; it follows where the rider looks, and steps up by itself
+     * @param turnRate     how far the heading turned since the last tick (degrees, positive = yaw rising). Only used
+     *                     in a boat, whose turning carries on after the key is let go
      */
     record Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped,
-                  boolean inBoat, boolean onMount) {
+                  boolean inBoat, boolean onMount, float turnRate) {
 
         Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped) {
-            this(x, y, z, yaw, onGround, inWater, bumped, false, false);
+            this(x, y, z, yaw, onGround, inWater, bumped, false, false, 0.0F);
         }
 
         Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped,
                boolean inBoat) {
-            this(x, y, z, yaw, onGround, inWater, bumped, inBoat, false);
+            this(x, y, z, yaw, onGround, inWater, bumped, inBoat, false, 0.0F);
+        }
+
+        Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped,
+               boolean inBoat, boolean onMount) {
+            this(x, y, z, yaw, onGround, inWater, bumped, inBoat, onMount, 0.0F);
         }
     }
 
     /** Heading error (degrees) a boat tolerates before it's turned. Boats drift, so a tighter value only zigzags. */
-    static final float BOAT_TURN_DEADBAND = 8.0F;
+    static final float BOAT_TURN_DEADBAND = 6.0F;
+
+    /**
+     * How much further a boat keeps turning per degree/tick of current turn rate once the key is let go. A boat's
+     * turn rate is multiplied by 0.9 every tick on water ({@code AbstractBoat#floatBoat}), so after letting go it
+     * still turns {@code rate * (0.9 + 0.81 + ...) = 9 * rate}. Holding a key adds 1 degree/tick per tick, so the rate
+     * climbs towards 9 degrees/tick: steering on the heading error alone overshoots every turn by tens of degrees.
+     */
+    static final float BOAT_COAST_FACTOR = 9.0F;
+
+    /** How far ahead along the water route a boat aims (blocks). Aiming at the next block makes it weave. */
+    static final double BOAT_AIM_BLOCKS = 6.0;
     /** Only paddle forward while the boat faces within this of the target (degrees); turn on the spot beyond it. */
     static final float BOAT_PADDLE_ANGLE = 45.0F;
 
@@ -161,13 +179,35 @@ final class AutoWalkSteer {
      * with the forward key, so heading and throttle are separate here; the player's own yaw is left to the camera.
      */
     private static Command paddle(List<PathStep> steps, int target, Player boat) {
-        BlockPos aim = steps.get(aimIndex(steps, target)).pos();
+        BlockPos aim = steps.get(boatAimIndex(steps, target, boat)).pos();
         float error = wrapDegrees(yawTowards(boat, aim) - boat.yaw());
+        // Steer on where the heading will end up once the turn coasts out, not where it is now: let go early, and
+        // counter-steer when it's already turning too far
+        float settled = error - boat.turnRate() * BOAT_COAST_FACTOR;
         // Left lowers the boat's yaw, right raises it (Boat#controlBoat)
-        boolean left = error < -BOAT_TURN_DEADBAND;
-        boolean right = error > BOAT_TURN_DEADBAND;
+        boolean left = settled < -BOAT_TURN_DEADBAND;
+        boolean right = settled > BOAT_TURN_DEADBAND;
         boolean forward = Math.abs(error) <= BOAT_PADDLE_ANGLE;
         return new Command(boat.yaw(), forward, false, false, left, right, Stop.NONE);
+    }
+
+    /**
+     * The boat step about {@link #BOAT_AIM_BLOCKS} ahead of the boat along the route, stopping at the last boat step.
+     * Boat steps only lie in open water at least two blocks wide, so the straight line there stays on the water
+     * except around the tightest bends.
+     */
+    static int boatAimIndex(List<PathStep> steps, int target, Player boat) {
+        int aim = target;
+        for (int i = target; i < steps.size() && steps.get(i).boating(); i++) {
+            aim = i;
+            BlockPos pos = steps.get(i).pos();
+            double dx = pos.getX() + 0.5 - boat.x();
+            double dz = pos.getZ() + 0.5 - boat.z();
+            if (dx * dx + dz * dz >= BOAT_AIM_BLOCKS * BOAT_AIM_BLOCKS) {
+                break;
+            }
+        }
+        return aim;
     }
 
     /**

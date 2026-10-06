@@ -181,7 +181,8 @@ final class WaterMoves {
         for (int y = from.y; y >= from.y - 1; y--) {
             if (owner.boatFits(x, y, z)) {
                 owner.relaxBoating(from, x, y, z,
-                        ActionCosts.PADDLE_ONE_BLOCK + ActionCosts.BOAT_LAUNCH_TICKS, MoveKind.BOAT_ENTER);
+                        ActionCosts.PADDLE_ONE_BLOCK + ActionCosts.BOAT_LAUNCH_TICKS
+                                + ActionCosts.MODE_SWITCH_PENALTY_TICKS, MoveKind.BOAT_ENTER);
                 return;
             }
         }
