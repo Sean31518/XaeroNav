@@ -349,6 +349,7 @@ neither are blocks with an inventory, and anything unrecognized is treated as no
 | `hudEnabled` | `true` | On-screen guidance at the top of the screen |
 | `straightLineEnabled` | `true` | Show a dotted line to the destination for stretches with no known route |
 | `goalMarkerEnabled` | `true` | Mark the destination on Xaero's maps (a temporary waypoint with the minimap installed, otherwise a pin drawn by XaeroNav) |
+| `fullRoutePreviewEnabled` | `true` | Minecraft 26.3+, singleplayer: plan the whole route at once and draw all of it on the map (pale green). The terrain past render distance is read from the world save, so it reaches as far as chunks you have ever generated; past that the dotted lines carry on. The time estimate then comes from this route too |
 
 ### `[autoWalk]` (Minecraft 26.3+)
 

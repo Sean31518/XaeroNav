@@ -230,4 +230,53 @@ class MapPathOverlayTest {
         }
         return max - min;
     }
+
+    private static List<BlockPos> dotsOfColor(MapPathOverlay.Snapshot snapshot, float[] color) {
+        List<BlockPos> dots = new ArrayList<>();
+        MapPathOverlay.draw(snapshot, (x1, z1, x2, z2, red, green, blue) -> {
+            if (red == color[0] && green == color[1] && blue == color[2]) {
+                dots.add(new BlockPos(x1, Y, z1));
+            }
+        }, PIXELS_PER_BLOCK);
+        return dots;
+    }
+
+    private static RoutePreview fullRoute(int toX, boolean complete) {
+        List<BlockPos> points = new ArrayList<>();
+        double[] ticks = new double[toX + 1];
+        for (int x = 0; x <= toX; x++) {
+            points.add(new BlockPos(x, Y, 0));
+            ticks[x] = x * 3.5;
+        }
+        return new RoutePreview(points, ticks, complete);
+    }
+
+    @Test
+    void aCompleteWholeRouteReplacesTheDottedLines() {
+        PathResult detail = path(List.of(new BlockPos(0, Y, 0), new BlockPos(25, Y, 0), new BlockPos(50, Y, 0)));
+        BlockPos goal = new BlockPos(300, Y, 0);
+        MapPathOverlay.Snapshot snapshot = new MapPathOverlay.Snapshot(detail, goal, true, true,
+                new BlockPos(0, Y, 0), List.of(new BlockPos(150, Y, 40), goal), List.of(), 0, List.of(),
+                fullRoute(300, true));
+
+        assertTrue(hasDotBetween(dotsOfColor(snapshot, PathColors.FULL_ROUTE), 50, 300), "the whole route is drawn");
+        assertFalse(hasDotBetween(dotsOfColor(snapshot, PathColors.FULL_ROUTE), -1, 40),
+                "not over the part the detailed route already shows");
+        assertTrue(coarseDots(snapshot).isEmpty(), "no long-distance guess where the real route is known");
+        assertTrue(dotsOfColor(snapshot, PathColors.STRAIGHT).isEmpty());
+        assertFalse(markerRects(snapshot).isEmpty(), "the destination pin stays");
+    }
+
+    @Test
+    void aPartialWholeRouteHandsOverToTheDottedLine() {
+        PathResult detail = path(List.of(new BlockPos(0, Y, 0), new BlockPos(25, Y, 0), new BlockPos(50, Y, 0)));
+        BlockPos goal = new BlockPos(300, Y, 0);
+        MapPathOverlay.Snapshot snapshot = new MapPathOverlay.Snapshot(detail, goal, true, false,
+                new BlockPos(0, Y, 0), List.of(new BlockPos(250, Y, 0), goal), List.of(), 0, List.of(),
+                fullRoute(150, false));
+
+        List<BlockPos> coarse = coarseDots(snapshot);
+        assertTrue(hasDotBetween(coarse, 150, 250), "the dotted line carries on from where the whole route stops");
+        assertFalse(hasDotBetween(coarse, 50, 140), "and not alongside it");
+    }
 }

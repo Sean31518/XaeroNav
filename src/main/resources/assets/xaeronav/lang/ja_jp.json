@@ -118,6 +118,8 @@
   "gui.xaeronav.config.straight_line_enabled": "未探索区間を点線で表示する",
   "gui.xaeronav.config.goal_marker_enabled": "Xaeroの地図に目的地マーカーを表示する",
   "gui.xaeronav.config.danger_dashed_enabled": "危険区間の線を破線にする",
+  "gui.xaeronav.config.full_route_preview": "経路全体を計画して表示（シングルプレイ）",
+  "gui.xaeronav.config.full_route_preview.tooltip": "描画距離の外の地形をワールドのセーブデータから読み、経路全体をマップに描きます。行ったことのある場所だけが分かります。",
   "hud.xaeronav.hud_on": "XaeroNav: 案内表示 オン",
   "hud.xaeronav.hud_off": "XaeroNav: 案内表示 オフ",
   "hud.xaeronav.autowalk.on": "XaeroNav: 自動歩行オン（移動か視点操作で解除）",

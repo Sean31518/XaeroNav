@@ -39,6 +39,9 @@ public final class ClientTickHandler {
         PathfindingState.INSTANCE.onClientTick();
         TickLaps.add("route state", lap);
         lap = TickLaps.start();
+        FullRoutePlanner.INSTANCE.onClientTick();
+        TickLaps.add("full route", lap);
+        lap = TickLaps.start();
         AutoWalk.INSTANCE.onClientTick();
         TickLaps.add("auto-walk", lap);
         lap = TickLaps.start();
@@ -73,6 +76,8 @@ public final class ClientTickHandler {
      */
     public void onLoggingOut() {
         AutoWalk.INSTANCE.reset();
+        FullRoutePlanner.INSTANCE.clear();
+        SavedChunks.INSTANCE.clear();
         PathfindingState.INSTANCE.clear();
     }
 

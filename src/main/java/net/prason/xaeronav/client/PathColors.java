@@ -19,6 +19,8 @@ final class PathColors {
     static final float[] FLIGHT = {0.35f, 0.85f, 1.0f};
     /** The coarse intermediate targets of a long-distance route. A different hue to tell it apart from the straight line to the goal ({@link #STRAIGHT}). */
     static final float[] COARSE_ROUTE = {0.95f, 0.75f, 0.2f};
+    /** The whole route planned ahead on the map ({@link FullRoutePlanner}): the walking green, paler, as "planned, not yet checked". */
+    static final float[] FULL_ROUTE = {0.55f, 0.95f, 0.7f};
     /** Pillar of light marking the landing point while gliding under open sky. Near white so it rarely clashes with Xaero waypoint colors. */
     static final float[] SKY_PILLAR = {1.0f, 0.95f, 0.7f};
     static final float[] BRIDGE = {0.4f, 0.9f, 0.9f};
