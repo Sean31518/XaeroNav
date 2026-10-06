@@ -49,14 +49,19 @@ final class AutoWalkSteer {
         /** A step ahead needs the player's hands (digging, placing, a boat, a gap jump). */
         MANUAL_STEP,
         /** A step ahead is dangerous to walk without care (lava, void, fall damage, drowning). */
-        DANGER
+        DANGER,
+        /** In a boat, and the route goes ashore ahead: the player gets out and picks the boat up themselves. */
+        SHORE
     }
 
-    /** What to do this tick. {@code yaw} is the yaw to set (already limited to {@link #MAX_TURN_PER_TICK}). */
-    record Command(float yaw, boolean forward, boolean jump, boolean sprint, Stop stop) {
+    /**
+     * What to do this tick. {@code yaw} is the yaw to set (already limited to {@link #MAX_TURN_PER_TICK}); in a boat it's
+     * left alone and the boat is turned with {@code left}/{@code right} instead.
+     */
+    record Command(float yaw, boolean forward, boolean jump, boolean sprint, boolean left, boolean right, Stop stop) {
 
         static Command stop(float yaw, Stop stop) {
-            return new Command(yaw, false, false, false, stop);
+            return new Command(yaw, false, false, false, false, false, stop);
         }
     }
 
@@ -70,9 +75,20 @@ final class AutoWalkSteer {
      * @param onGround     standing on a block
      * @param inWater      in water
      * @param bumped       walked into a wall last tick ({@code horizontalCollision})
+     * @param inBoat       riding a boat; {@code yaw} is then the boat's heading
      */
-    record Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped) {
+    record Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped,
+                  boolean inBoat) {
+
+        Player(double x, double y, double z, float yaw, boolean onGround, boolean inWater, boolean bumped) {
+            this(x, y, z, yaw, onGround, inWater, bumped, false);
+        }
     }
+
+    /** Heading error (degrees) a boat tolerates before it's turned. Boats drift, so a tighter value only zigzags. */
+    static final float BOAT_TURN_DEADBAND = 8.0F;
+    /** Only paddle forward while the boat faces within this of the target (degrees); turn on the spot beyond it. */
+    static final float BOAT_PADDLE_ANGLE = 45.0F;
 
     private AutoWalkSteer() {
     }
@@ -89,7 +105,7 @@ final class AutoWalkSteer {
         }
         index = Math.max(0, Math.min(index, last));
 
-        Stop ahead = blockedAhead(steps, index);
+        Stop ahead = blockedAhead(steps, index, player.inBoat());
         if (ahead != Stop.NONE) {
             return Command.stop(player.yaw(), ahead);
         }
@@ -98,6 +114,9 @@ final class AutoWalkSteer {
         BlockPos targetPos = steps.get(target).pos();
         if (target == last && horizontalDistance(targetPos, player) <= END_RADIUS) {
             return Command.stop(player.yaw(), Stop.END);
+        }
+        if (player.inBoat()) {
+            return paddle(steps, target, player);
         }
 
         BlockPos aim = steps.get(aimIndex(steps, target)).pos();
@@ -122,7 +141,21 @@ final class AutoWalkSteer {
 
         boolean run = sprint && forward && facing && !player.inWater()
                 && straightAhead(steps, target) >= SPRINT_STRAIGHT_STEPS;
-        return new Command(yaw, forward, jump, run, Stop.NONE);
+        return new Command(yaw, forward, jump, run, false, false, Stop.NONE);
+    }
+
+    /**
+     * Steers a boat. The boat turns with the left/right keys (about 1 degree per tick each way) and only moves forward
+     * with the forward key, so heading and throttle are separate here; the player's own yaw is left to the camera.
+     */
+    private static Command paddle(List<PathStep> steps, int target, Player boat) {
+        BlockPos aim = steps.get(aimIndex(steps, target)).pos();
+        float error = wrapDegrees(yawTowards(boat, aim) - boat.yaw());
+        // Left lowers the boat's yaw, right raises it (Boat#controlBoat)
+        boolean left = error < -BOAT_TURN_DEADBAND;
+        boolean right = error > BOAT_TURN_DEADBAND;
+        boolean forward = Math.abs(error) <= BOAT_PADDLE_ANGLE;
+        return new Command(boat.yaw(), forward, false, false, left, right, Stop.NONE);
     }
 
     /**
@@ -165,14 +198,17 @@ final class AutoWalkSteer {
         BlockPos to = steps.get(target).pos();
         int dx = to.getX() - from.getX();
         int dz = to.getZ() - from.getZ();
-        if (to.getY() != from.getY() || (dx == 0 && dz == 0)) {
+        // Walking and paddling run straight; anything else (steps up, ladders, swimming) is aimed at step by step
+        MovementType kind = steps.get(target).movement();
+        if (to.getY() != from.getY() || (dx == 0 && dz == 0)
+                || (kind != MovementType.TRAVERSE && kind != MovementType.BOAT)) {
             return aim;
         }
         for (int i = target + 1; i < steps.size() && i <= target + AIM_LOOKAHEAD; i++) {
             BlockPos a = steps.get(i - 1).pos();
             BlockPos b = steps.get(i).pos();
             if (b.getX() - a.getX() != dx || b.getZ() - a.getZ() != dz || b.getY() != to.getY()
-                    || steps.get(i).movement() != MovementType.TRAVERSE) {
+                    || steps.get(i).movement() != kind) {
                 break;
             }
             aim = i;
@@ -204,9 +240,23 @@ final class AutoWalkSteer {
 
     /** Why the next few steps can't be walked automatically, or {@link Stop#NONE}. */
     static Stop blockedAhead(List<PathStep> steps, int index) {
+        return blockedAhead(steps, index, false);
+    }
+
+    /**
+     * @param inBoat whether the player is riding a boat. Then boat steps are what auto-walk does, and the first step off
+     *               the water is where it hands back
+     */
+    static Stop blockedAhead(List<PathStep> steps, int index, boolean inBoat) {
         int to = Math.min(steps.size() - 1, index + STOP_LOOKAHEAD);
         for (int i = index + 1; i <= to; i++) {
             PathStep step = steps.get(i);
+            if (inBoat) {
+                if (!step.boating()) {
+                    return Stop.SHORE;
+                }
+                continue;
+            }
             if (step.digging() || step.bridging() || step.boating() || step.movement() == MovementType.JUMP) {
                 return Stop.MANUAL_STEP;
             }

@@ -233,10 +233,14 @@ All unbound by default (`Options → Controls → XaeroNav`).
 ### Auto-walk (Minecraft 26.3+)
 
 With a destination set, the auto-walk key steers along the route and holds forward, jump and sprint for you
-(walking, stepping up, swimming, ladders). It stops and tells you why when:
+(walking, stepping up, ladders). While it is on, the route is planned for that: it avoids swimming, placing blocks
+(bridges, pillars), gap jumps and falls that hurt, and is planned again when you switch auto-walk on or off.
+In a boat it steers the boat across the water and stops at the shore, where you get out and pick the boat up.
+It stops and tells you why when:
 
-- the next few steps need you: digging, placing a bridge block, a boat, a gap jump, or flying
-- a dangerous section is ahead: lava, void, fall damage, drowning, magma
+- the next few steps need you: digging, launching a boat, or flying
+- a dangerous section is ahead: lava, void, drowning, magma
+- there is no route without swimming, building or jumps
 - you take over: any other movement key, sneaking, or turning the camera
 - you take damage, or your health drops to `autoWalk.stopHealth` or below
 - you arrive, or the route is cleared
