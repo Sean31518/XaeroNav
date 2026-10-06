@@ -61,7 +61,7 @@ public final class SavedChunks {
     /** Whether there is a save to read: singleplayer on a version that supports it. */
     public boolean available() {
         //? if >=26.3 {
-        /*return Minecraft.getInstance().hasSingleplayerServer();
+        /*return net.minecraft.client.Minecraft.getInstance().hasSingleplayerServer();
         *///?} else {
         return false;
         //?}
@@ -141,7 +141,8 @@ public final class SavedChunks {
 
     //? if >=26.3 {
     /*private CompletableFuture<@Nullable ChunkColumn> read(ResourceKey<Level> dimension, long key) {
-        net.minecraft.client.server.IntegratedServer server = Minecraft.getInstance().getSingleplayerServer();
+        net.minecraft.client.server.IntegratedServer server = net.minecraft.client.Minecraft.getInstance()
+                .getSingleplayerServer();
         net.minecraft.server.level.ServerLevel level = server == null ? null : server.getLevel(dimension);
         if (level == null) {
             return CompletableFuture.completedFuture(null);
