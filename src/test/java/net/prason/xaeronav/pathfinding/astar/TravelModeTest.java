@@ -32,12 +32,12 @@ class TravelModeTest {
     @Test
     void boatsDisabledOfferNoBoatEvenWhenOneIsCarried() {
         BlockPos start = new BlockPos(0, 63, 0);
-        BlockPos goal = new BlockPos(41, 63, 0);
+        BlockPos goal = new BlockPos(91, 63, 0);
 
-        PathResult allowed = search(strait(40).boatAvailable(options(true, true).boatUsable(true)), start, goal);
+        PathResult allowed = search(strait(90).boatAvailable(options(true, true).boatUsable(true)), start, goal);
         assertTrue(allowed.steps().stream().anyMatch(PathStep::boating), "boats on: the strait is paddled across");
 
-        PathResult refused = search(strait(40).boatAvailable(options(true, false).boatUsable(true)), start, goal);
+        PathResult refused = search(strait(90).boatAvailable(options(true, false).boatUsable(true)), start, goal);
         assertTrue(refused.complete(), "swims across instead");
         assertTrue(refused.steps().stream().noneMatch(PathStep::boating), "boats off: no boat moves at all");
     }

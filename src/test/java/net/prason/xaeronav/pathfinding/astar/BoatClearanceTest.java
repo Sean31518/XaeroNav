@@ -15,7 +15,7 @@ import net.prason.xaeronav.pathfinding.world.SearchBounds;
  */
 class BoatClearanceTest {
 
-    private static final int LENGTH = 40;
+    private static final int LENGTH = 90;
 
     /**
      * A channel along +X from the shore at x=0 to the far shore, {@code width} blocks wide (z=0..width-1), water surface

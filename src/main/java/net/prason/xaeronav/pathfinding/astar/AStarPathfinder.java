@@ -1279,7 +1279,8 @@ public final class AStarPathfinder {
             return;
         }
         if (from.boating && !boating) {
-            edgeCost += ActionCosts.BOAT_STOW_TICKS;
+            edgeCost += ActionCosts.BOAT_STOW_TICKS + ActionCosts.BOAT_DOCK_TICKS
+                    + ActionCosts.MODE_SWITCH_PENALTY_TICKS;
         }
         // The nav graph is built on foot; riding edges would be priced for one particular animal
         if (edgeSink != null && !from.mounted && !mounted) {
