@@ -40,3 +40,6 @@ display.hudEnabled | class=ValueSpec | type=Boolean | default=true | range=- | c
 display.straightLineEnabled | class=ValueSpec | type=Boolean | default=true | range=- | comment=Show a dotted line to the destination for sections with no known route (such as beyond unloaded chunks)
 display.goalMarkerEnabled | class=ValueSpec | type=Boolean | default=true | range=- | comment=Place a pin on the destination in Xaero's world map and minimap
 display.dangerDashedEnabled | class=ValueSpec | type=Boolean | default=true | range=- | comment=Draw dangerous sections (lava, void, drowning, fall damage, etc.) as dashed lines\nA cue besides color, for cases where color alone is hard to tell apart due to color vision differences or screen color adjustments
+autoWalk.allowOnServers | class=ValueSpec | type=Boolean | default=false | range=- | comment=Allow auto-walk on multiplayer servers. Many servers treat automated movement as cheating;\nonly enable this where the server rules allow it
+autoWalk.sprint | class=ValueSpec | type=Boolean | default=true | range=- | comment=Sprint on straight, level stretches while auto-walking
+autoWalk.stopHealth | class=ValueSpec | type=Integer | default=6 | range=0 ~ 20 | comment=Stop auto-walk once health drops to this many half-hearts or below (0 = never)\n Default: 6\n Range: 0 ~ 20

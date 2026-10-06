@@ -93,6 +93,9 @@ public final class XaeroNavConfig {
     private final NavConfigSpec.BoolValue straightLineEnabled;
     private final NavConfigSpec.BoolValue goalMarkerEnabled;
     private final NavConfigSpec.BoolValue dangerDashedEnabled;
+    private final NavConfigSpec.BoolValue autoWalkOnServers;
+    private final NavConfigSpec.BoolValue autoWalkSprint;
+    private final NavConfigSpec.IntValue autoWalkStopHealth;
 
     // package-private: tests check that both storage backends produce the same config file from the same definition
     XaeroNavConfig(NavConfigSpec spec) {
@@ -417,6 +420,22 @@ public final class XaeroNavConfig {
                 .define("dangerDashedEnabled", true);
 
         spec.pop();
+        spec.comment("XaeroNav auto-walk settings (Minecraft 26.3 and later)").push("autoWalk");
+
+        autoWalkOnServers = spec
+                .comment("Allow auto-walk on multiplayer servers. Many servers treat automated movement as cheating;",
+                        "only enable this where the server rules allow it")
+                .define("allowOnServers", false);
+
+        autoWalkSprint = spec
+                .comment("Sprint on straight, level stretches while auto-walking")
+                .define("sprint", true);
+
+        autoWalkStopHealth = spec
+                .comment("Stop auto-walk once health drops to this many half-hearts or below (0 = never)")
+                .defineInRange("stopHealth", 6, 0, 20);
+
+        spec.pop();
     }
 
     public RouteProfile routeProfile() {
@@ -663,6 +682,18 @@ public final class XaeroNavConfig {
     public NavigationTuning navigationTuning() {
         return new NavigationTuning(searchHorizontalMargin(), movementOptions(), searchLimits(),
                 costToGoGuideEnabled());
+    }
+
+    public boolean autoWalkOnServers() {
+        return autoWalkOnServers.get();
+    }
+
+    public boolean autoWalkSprint() {
+        return autoWalkSprint.get();
+    }
+
+    public int autoWalkStopHealth() {
+        return autoWalkStopHealth.get();
     }
 
     public boolean hudEnabled() {

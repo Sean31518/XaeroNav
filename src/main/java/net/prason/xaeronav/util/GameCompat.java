@@ -57,6 +57,22 @@ public final class GameCompat {
         *///?}
     }
 
+    public static void setYaw(Player player, float yaw) {
+        //? if >=1.17 {
+        player.setYRot(yaw);
+        //?} else {
+        /*player.yRot = yaw;
+        *///?}
+    }
+
+    public static boolean onGround(Player player) {
+        //? if >=1.20 {
+        return player.onGround();
+        //?} else {
+        /*return player.isOnGround();
+        *///?}
+    }
+
     public static Abilities abilities(Player player) {
         //? if >=1.17 {
         return player.getAbilities();
