@@ -94,6 +94,7 @@ public final class XaeroNavConfig {
     private final NavConfigSpec.BoolValue goalMarkerEnabled;
     private final NavConfigSpec.BoolValue dangerDashedEnabled;
     private final NavConfigSpec.BoolValue autoWalkOnServers;
+    private volatile boolean autoWalkRouting;
     private final NavConfigSpec.BoolValue autoWalkSprint;
     private final NavConfigSpec.IntValue autoWalkStopHealth;
 
@@ -652,10 +653,19 @@ public final class XaeroNavConfig {
      * copying the same sequence every time another place submits a search.
      */
     public MovementOptions movementOptions() {
-        return new MovementOptions(diggingEnabled(), bridgingEnabled(), jumpGapEnabled(), lavaBridgingEnabled(),
-                maxBridgeRunBlocks(), maxLavaBridgeRunBlocks(), maxVoidBridgeRunBlocks(), maxSubmergedTicks(),
-                fallDamageToleranceEnabled(), avoidRiskyJumps(), blockBudgetEnabled(), blockBudgetReserve(),
-                strictLimits(), routeProfile(), swimmingEnabled(), boatsEnabled());
+        MovementOptions configured = new MovementOptions(diggingEnabled(), bridgingEnabled(), jumpGapEnabled(),
+                lavaBridgingEnabled(), maxBridgeRunBlocks(), maxLavaBridgeRunBlocks(), maxVoidBridgeRunBlocks(),
+                maxSubmergedTicks(), fallDamageToleranceEnabled(), avoidRiskyJumps(), blockBudgetEnabled(),
+                blockBudgetReserve(), strictLimits(), routeProfile(), swimmingEnabled(), boatsEnabled());
+        return autoWalkRouting ? configured.forAutoWalk() : configured;
+    }
+
+    /**
+     * Whether routes are planned for auto-walk ({@link MovementOptions#forAutoWalk}). Set by the client while auto-walk
+     * is on; not saved, since it isn't a setting.
+     */
+    public void setAutoWalkRouting(boolean value) {
+        autoWalkRouting = value;
     }
 
     public boolean blockBudgetEnabled() {

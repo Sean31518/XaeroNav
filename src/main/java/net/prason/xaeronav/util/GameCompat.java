@@ -2,6 +2,7 @@ package net.prason.xaeronav.util;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Abilities;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -49,11 +50,11 @@ public final class GameCompat {
         //?}
     }
 
-    public static float yaw(Player player) {
+    public static float yaw(Entity entity) {
         //? if >=1.17 {
-        return player.getYRot();
+        return entity.getYRot();
         //?} else {
-        /*return player.yRot;
+        /*return entity.yRot;
         *///?}
     }
 

@@ -58,6 +58,17 @@ public record MovementOptions(boolean diggingEnabled, boolean bridgingEnabled, b
         return boatsEnabled && carriedOrRiding;
     }
 
+    /**
+     * What auto-walk can follow on its own: no swimming, no placing blocks (bridges, pillars, lava), no gap jumps and no
+     * painful falls. Digging and boats stay as configured; auto-walk hands those steps back to the player.
+     */
+    public MovementOptions forAutoWalk() {
+        return new MovementOptions(diggingEnabled, false, false, false,
+                maxBridgeRunBlocks, maxLavaBridgeRunBlocks, maxVoidBridgeRunBlocks, maxSubmergedTicks,
+                false, true, blockBudgetEnabled, blockBudgetReserve, strictLimits,
+                routeProfile, false, boatsEnabled);
+    }
+
     public MovementOptions withoutDigging() {
         return new MovementOptions(false, bridgingEnabled, jumpGapEnabled, lavaBridgingEnabled,
                 maxBridgeRunBlocks, maxLavaBridgeRunBlocks, maxVoidBridgeRunBlocks, maxSubmergedTicks,

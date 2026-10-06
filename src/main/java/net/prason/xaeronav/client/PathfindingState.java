@@ -744,6 +744,17 @@ public final class PathfindingState {
     }
 
     /**
+     * Plans the route to the same destination again from scratch, e.g. after the movement options changed
+     * (auto-walk switched on or off). A plain recalculation would keep the current path while it stays valid.
+     */
+    public void replan() {
+        BlockPos requested = unresolvedGoal != null ? unresolvedGoal : goal;
+        if (requested != null) {
+            setGoal(requested);
+        }
+    }
+
+    /**
      * Snaps the goal's Y to a height where you can actually stand in that column. Arrival is an exact coordinate match
      * ({@code AStarPathfinder}), so if Y is merely off from the ground the search exhausts the reachable space and ends unreached.
      * The goal's Y is normally the map's estimate for a map click or a rough value when typed in, and
@@ -2851,7 +2862,7 @@ public final class PathfindingState {
                                        boolean ceilingDimension) {
         long coarseLap = TickLaps.start();
         CoarseAttempt attempt = solveCoarseRoute(readCoarseMapFor(start, currentGoal), start, currentGoal,
-                boatAvailable, XaeroNavConfig.INSTANCE.swimmingEnabled());
+                boatAvailable, XaeroNavConfig.INSTANCE.movementOptions().swimmingEnabled());
         TickLaps.add("long-range route", coarseLap);
         // What was just planned synchronously is newer than the request being solved in the background
         solvingCoarse = null;
@@ -2874,7 +2885,7 @@ public final class PathfindingState {
         CoarseSolve solve = new CoarseSolve(currentGoal);
         solvingCoarse = solve;
         // Read the setting here on the main thread; the solve itself runs on coarseExecutor
-        boolean swimmingEnabled = XaeroNavConfig.INSTANCE.swimmingEnabled();
+        boolean swimmingEnabled = XaeroNavConfig.INSTANCE.movementOptions().swimmingEnabled();
         CompletableFuture.supplyAsync(() -> solveCoarseRoute(read, start, currentGoal, boatAvailable, swimmingEnabled),
                         coarseExecutor)
                 .whenComplete((attempt, error) -> onMainThread.accept(() -> {

@@ -205,6 +205,62 @@ class AutoWalkSteerTest {
         assertEquals(4, AutoWalkSteer.aimIndex(corner, 3), "Stops at the corner");
     }
 
+    /** A route along +X on the water surface, all boat steps after the launch. */
+    private static List<PathStep> boatRouteX(int length) {
+        List<PathStep> steps = new ArrayList<>();
+        steps.add(walk(0, Y, 0));
+        for (int x = 1; x < length; x++) {
+            steps.add(step(x, Y, 0, MovementType.BOAT, PathRisk.NONE));
+        }
+        return steps;
+    }
+
+    private static AutoWalkSteer.Player inBoat(double x, double z, float boatYaw) {
+        return new AutoWalkSteer.Player(x, Y, z, boatYaw, false, false, false, true);
+    }
+
+    @Test
+    void paddlesStraightWhenTheBoatFacesTheRoute() {
+        AutoWalkSteer.Command command = AutoWalkSteer.steer(boatRouteX(20), 3, inBoat(3.5, 0.5, -90.0F), true);
+
+        assertEquals(AutoWalkSteer.Stop.NONE, command.stop());
+        assertTrue(command.forward());
+        assertFalse(command.left());
+        assertFalse(command.right());
+        assertFalse(command.jump());
+        assertFalse(command.sprint());
+        assertEquals(-90.0F, command.yaw(), 1.0e-3F, "The rider's camera is left alone");
+    }
+
+    @Test
+    void turnsTheBoatWithTheSideKeys() {
+        // Boat heading -60 (a bit toward +Z of +X); the route is at -90: turning left lowers the yaw
+        AutoWalkSteer.Command slightly = AutoWalkSteer.steer(boatRouteX(20), 3, inBoat(3.5, 0.5, -60.0F), true);
+        assertTrue(slightly.left());
+        assertFalse(slightly.right());
+        assertTrue(slightly.forward(), "Paddles on while turning a little");
+
+        AutoWalkSteer.Command around = AutoWalkSteer.steer(boatRouteX(20), 3, inBoat(3.5, 0.5, 90.0F), true);
+        assertTrue(around.left() || around.right());
+        assertFalse(around.forward(), "Turns on the spot when facing away");
+    }
+
+    @Test
+    void stopsTheBoatBeforeTheShore() {
+        List<PathStep> steps = boatRouteX(6);
+        steps.add(walk(6, Y + 1, 0));
+        steps.add(walk(7, Y + 1, 0));
+
+        assertEquals(AutoWalkSteer.Stop.NONE, AutoWalkSteer.steer(steps, 1, inBoat(1.5, 0.5, -90.0F), true).stop());
+        assertEquals(AutoWalkSteer.Stop.SHORE, AutoWalkSteer.steer(steps, 4, inBoat(4.5, 0.5, -90.0F), true).stop());
+    }
+
+    @Test
+    void onFootABoatLaunchIsLeftToThePlayer() {
+        assertEquals(AutoWalkSteer.Stop.MANUAL_STEP,
+                AutoWalkSteer.steer(boatRouteX(10), 0, standingAt(0.5, 0.5, -90.0F), true).stop());
+    }
+
     @Test
     void wrapsYawTheShortWayRound() {
         assertEquals(10.0F, AutoWalkSteer.turnTowards(170.0F, -180.0F) - 170.0F, 1.0e-3F);

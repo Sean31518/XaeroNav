@@ -269,7 +269,7 @@ public final class XaeroNavCommands {
 
         BlockPos start = player.blockPosition();
         boolean boatAvailable = XaeroNavConfig.INSTANCE.boatsEnabled() && ChunkView.boatAvailable(player);
-        boolean swimmingEnabled = XaeroNavConfig.INSTANCE.swimmingEnabled();
+        boolean swimmingEnabled = XaeroNavConfig.INSTANCE.movementOptions().swimmingEnabled();
         CoarseMap map = readCoarseMapOrFail(out, start, goal);
         if (map == null) {
             return 0;

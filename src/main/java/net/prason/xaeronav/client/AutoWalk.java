@@ -6,14 +6,22 @@ import net.minecraft.client.Options;
 import net.minecraft.client.player.LocalPlayer;
 import net.prason.xaeronav.config.XaeroNavConfig;
 import net.prason.xaeronav.pathfinding.astar.PathResult;
+import net.prason.xaeronav.pathfinding.world.ChunkView;
+import net.prason.xaeronav.pathfinding.world.MovementOptions;
 import net.prason.xaeronav.util.GameCompat;
 
 /**
  * Auto-walk: steers the player along the shown route by holding the movement keys for them.
  *
  * <p>The steering itself is decided by {@link AutoWalkSteer}; this class only reads the player, applies the result to the
- * keys and decides when to stop. It only ever presses forward and jump (and sets sprinting), so any other movement key the
- * player presses, or turning the camera, is unambiguously the player taking over, and stops it.
+ * keys and decides when to stop. On foot it only ever presses forward and jump (and sets sprinting), so any other movement
+ * key the player presses, or turning the camera, is unambiguously the player taking over, and stops it.
+ *
+ * <p>While it's on, routes are planned for what it can follow ({@link MovementOptions#forAutoWalk}: no swimming, placing,
+ * gap jumps or painful falls), so switching it on or off plans the route again.
+ *
+ * <p>In a boat it steers the boat with the left/right keys along the water part of the route and stops at the shore,
+ * where the player gets out and picks the boat up. Other vehicles (horses and the like) aren't steered yet.
  *
  * <p>Sprinting is set on the player rather than through the sprint key: with "Sprint: Toggle" in the controls that key is
  * a {@code ToggleKeyMapping}, whose {@code setDown(true)} flips the state, so holding it every tick would flicker.
@@ -74,9 +82,14 @@ public final class AutoWalk {
             GameCompat.tell(player, TextCompat.translatable("hud.xaeronav.autowalk.no_route"), true);
             return;
         }
+        if (player.isPassenger() && !ChunkView.ridingBoat(player)) {
+            GameCompat.tell(player, TextCompat.translatable("hud.xaeronav.autowalk.unsupported_vehicle"), true);
+            return;
+        }
         enabled = true;
         holding = false;
         lastYaw = GameCompat.yaw(player);
+        setRouting(true);
         GameCompat.tell(player, TextCompat.translatable(server
                 ? "hud.xaeronav.autowalk.on_server"
                 : "hud.xaeronav.autowalk.on"), !server);
@@ -90,8 +103,7 @@ public final class AutoWalk {
         Minecraft mc = Minecraft.getInstance();
         LocalPlayer player = mc.player;
         if (player == null || mc.level == null) {
-            enabled = false;
-            holding = false;
+            reset();
             return;
         }
         Options options = mc.options;
@@ -101,7 +113,8 @@ public final class AutoWalk {
             lastYaw = GameCompat.yaw(player);
             return;
         }
-        String reason = stopReason(mc, player, options);
+        boolean inBoat = ChunkView.ridingBoat(player);
+        String reason = stopReason(player, options, inBoat);
         if (reason != null) {
             stop(mc, reason);
             return;
@@ -116,12 +129,13 @@ public final class AutoWalk {
             return;
         }
 
+        float heading = inBoat ? GameCompat.yaw(player.getVehicle()) : GameCompat.yaw(player);
         AutoWalkSteer.Command command = AutoWalkSteer.steer(result.steps(), PathProgress.INSTANCE.indexFor(result),
-                new AutoWalkSteer.Player(player.getX(), player.getY(), player.getZ(), GameCompat.yaw(player),
-                        GameCompat.onGround(player), player.isInWater(), player.horizontalCollision),
+                new AutoWalkSteer.Player(player.getX(), player.getY(), player.getZ(), heading,
+                        GameCompat.onGround(player), player.isInWater(), player.horizontalCollision, inBoat),
                 XaeroNavConfig.INSTANCE.autoWalkSprint());
         switch (command.stop()) {
-            case NONE -> apply(player, options, command);
+            case NONE -> apply(player, options, command, inBoat);
             case END -> {
                 // At the destination the route state notices the arrival itself (stopReason picks it up next tick);
                 // at the end of a partial route the rest is being searched. Either way, stand still meanwhile
@@ -130,11 +144,12 @@ public final class AutoWalk {
             }
             case MANUAL_STEP -> stop(mc, "hud.xaeronav.autowalk.manual_step");
             case DANGER -> stop(mc, "hud.xaeronav.autowalk.danger");
+            case SHORE -> stop(mc, "hud.xaeronav.autowalk.shore");
         }
     }
 
     /** Translation key of why auto-walk must stop now, or {@code null} to keep going. */
-    private String stopReason(Minecraft mc, LocalPlayer player, Options options) {
+    private String stopReason(LocalPlayer player, Options options, boolean inBoat) {
         PathfindingState state = PathfindingState.INSTANCE;
         if (state.arrived()) {
             return "hud.xaeronav.autowalk.arrived";
@@ -142,15 +157,27 @@ public final class AutoWalk {
         if (state.goal() == null) {
             return "hud.xaeronav.autowalk.route_ended";
         }
-        if (state.flying() || player.isFallFlying() || player.isPassenger()) {
+        if (state.stuckReason() != null) {
+            return "hud.xaeronav.autowalk.no_walkable_route";
+        }
+        if (state.flying() || player.isFallFlying()) {
             return "hud.xaeronav.autowalk.manual_step";
         }
-        if (options.keyDown.isDown() || options.keyLeft.isDown() || options.keyRight.isDown()
-                || options.keyShift.isDown()) {
+        if (player.isPassenger() && !inBoat) {
+            return "hud.xaeronav.autowalk.unsupported_vehicle";
+        }
+        if (options.keyDown.isDown() || options.keyShift.isDown()) {
             return "hud.xaeronav.autowalk.player_input";
         }
-        if (Math.abs(AutoWalkSteer.wrapDegrees(GameCompat.yaw(player) - lastYaw)) > TAKEOVER_TURN) {
-            return "hud.xaeronav.autowalk.player_input";
+        // In a boat auto-walk holds left/right itself, and the boat turning also turns the rider's camera, so neither
+        // tells the player apart from auto-walk there; back and sneak (which gets out) still do
+        if (!inBoat) {
+            if (options.keyLeft.isDown() || options.keyRight.isDown()) {
+                return "hud.xaeronav.autowalk.player_input";
+            }
+            if (Math.abs(AutoWalkSteer.wrapDegrees(GameCompat.yaw(player) - lastYaw)) > TAKEOVER_TURN) {
+                return "hud.xaeronav.autowalk.player_input";
+            }
         }
         if (player.hurtTime > 0) {
             return "hud.xaeronav.autowalk.hurt";
@@ -161,9 +188,15 @@ public final class AutoWalk {
         return null;
     }
 
-    private void apply(LocalPlayer player, Options options, AutoWalkSteer.Command command) {
-        GameCompat.setYaw(player, command.yaw());
-        lastYaw = command.yaw();
+    private void apply(LocalPlayer player, Options options, AutoWalkSteer.Command command, boolean inBoat) {
+        if (inBoat) {
+            options.keyLeft.setDown(command.left());
+            options.keyRight.setDown(command.right());
+            lastYaw = GameCompat.yaw(player);
+        } else {
+            GameCompat.setYaw(player, command.yaw());
+            lastYaw = command.yaw();
+        }
         options.keyUp.setDown(command.forward());
         options.keyJump.setDown(command.jump());
         if (command.sprint()) {
@@ -178,9 +211,22 @@ public final class AutoWalk {
     private void stop(Minecraft mc, String messageKey) {
         release(mc.options);
         enabled = false;
+        if (PathfindingState.INSTANCE.arrived()) {
+            // Nothing left to plan; replanning now would restart the route that just ended
+            XaeroNavConfig.INSTANCE.setAutoWalkRouting(false);
+        } else {
+            // Back to the route the player walks themselves
+            setRouting(false);
+        }
         if (mc.player != null) {
             GameCompat.tell(mc.player, TextCompat.translatable(messageKey), true);
         }
+    }
+
+    /** Switches the movement options routes are planned with, and plans the current route again under them. */
+    private static void setRouting(boolean autoWalk) {
+        XaeroNavConfig.INSTANCE.setAutoWalkRouting(autoWalk);
+        PathfindingState.INSTANCE.replan();
     }
 
     /** Lets go of the keys auto-walk holds. Only if it holds them, so it never cancels a key the player is pressing. */
@@ -190,6 +236,8 @@ public final class AutoWalk {
         }
         release(options.keyUp);
         release(options.keyJump);
+        release(options.keyLeft);
+        release(options.keyRight);
         holding = false;
     }
 
@@ -197,10 +245,11 @@ public final class AutoWalk {
         key.setDown(false);
     }
 
-    /** Stops without a message, e.g. when leaving the world. */
+    /** Stops without a message or replan, e.g. when leaving the world (the route is cleared anyway). */
     void reset() {
         Minecraft mc = Minecraft.getInstance();
         release(mc.options);
         enabled = false;
+        XaeroNavConfig.INSTANCE.setAutoWalkRouting(false);
     }
 }
