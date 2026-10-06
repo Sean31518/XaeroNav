@@ -94,6 +94,7 @@ public final class XaeroNavConfig {
     private final NavConfigSpec.BoolValue straightLineEnabled;
     private final NavConfigSpec.BoolValue goalMarkerEnabled;
     private final NavConfigSpec.BoolValue dangerDashedEnabled;
+    private final NavConfigSpec.BoolValue fullRoutePreviewEnabled;
     private final NavConfigSpec.BoolValue autoWalkOnServers;
     private volatile boolean autoWalkRouting;
     private final NavConfigSpec.BoolValue autoWalkSprint;
@@ -427,6 +428,12 @@ public final class XaeroNavConfig {
                         "A cue besides color, for cases where color alone is hard to tell apart due to color vision differences or screen color adjustments")
                 .define("dangerDashedEnabled", true);
 
+        fullRoutePreviewEnabled = spec
+                .comment("In singleplayer, plan the whole route to the destination at once and draw all of it on the map",
+                        "(Minecraft 26.3 and later). Reads the terrain past render distance from the world save; only",
+                        "chunks that were ever generated are known, so it stops where you have never been")
+                .define("fullRoutePreviewEnabled", true);
+
         spec.pop();
         spec.comment("XaeroNav auto-walk settings (Minecraft 26.3 and later)").push("autoWalk");
 
@@ -732,6 +739,14 @@ public final class XaeroNavConfig {
 
     public void setAutoWalkStopHealth(int value) {
         autoWalkStopHealth.set(value);
+    }
+
+    public boolean fullRoutePreviewEnabled() {
+        return fullRoutePreviewEnabled.get();
+    }
+
+    public void setFullRoutePreviewEnabled(boolean value) {
+        fullRoutePreviewEnabled.set(value);
     }
 
     public boolean hudEnabled() {

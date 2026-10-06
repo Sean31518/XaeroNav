@@ -976,7 +976,8 @@ public final class PathfindingState {
                 view.coarseRouteWaypoints(),
                 route.points(),
                 FlightProgress.INSTANCE.segmentFor(route) + 1,
-                dash);
+                dash,
+                airborne ? RoutePreview.NONE : FullRoutePlanner.INSTANCE.preview());
     }
 
     /** Whether we're gliding with an elytra. While gliding no path is computed; only a straight (dotted) line to the goal is shown. */

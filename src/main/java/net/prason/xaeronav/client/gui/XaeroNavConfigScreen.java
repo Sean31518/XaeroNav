@@ -240,6 +240,12 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
                         cfg.goalMarkerEnabled(), cfg::setGoalMarkerEnabled));
                 addBig.accept(boolOption("gui.xaeronav.config.danger_dashed_enabled",
                         cfg.dangerDashedEnabled(), cfg::setDangerDashedEnabled));
+                if (AutoWalk.SUPPORTED) {
+                    // The save is read on 26.3+ only (SavedChunks)
+                    addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.full_route_preview",
+                            "gui.xaeronav.config.full_route_preview.tooltip",
+                            cfg.fullRoutePreviewEnabled(), cfg::setFullRoutePreviewEnabled));
+                }
                 break;
             case ADVANCED:
                 addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.strict_limits",

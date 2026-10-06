@@ -118,6 +118,8 @@
   "gui.xaeronav.config.straight_line_enabled": "Show dotted line for unsearched sections",
   "gui.xaeronav.config.goal_marker_enabled": "Pin the destination on Xaero's maps",
   "gui.xaeronav.config.danger_dashed_enabled": "Dash dangerous sections of the line",
+  "gui.xaeronav.config.full_route_preview": "Plan and show the whole route (singleplayer)",
+  "gui.xaeronav.config.full_route_preview.tooltip": "Reads the terrain past render distance from your world save and draws the whole route on the map. Only places you have been are known.",
   "hud.xaeronav.hud_on": "XaeroNav: guidance HUD on",
   "hud.xaeronav.hud_off": "XaeroNav: guidance HUD off",
   "hud.xaeronav.autowalk.on": "XaeroNav: auto-walk on (move or turn to take over)",

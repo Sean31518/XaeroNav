@@ -101,7 +101,7 @@ public final class ChunkView implements CellSource {
      */
     private static final float FALL_DAMAGE_HEALTH_FRACTION = 3.0f;
 
-    private final Long2ObjectMap<LevelChunk> chunks;
+    private final Long2ObjectMap<ChunkColumn> chunks;
     private final int totalChunksInBounds;
     private final SearchBounds bounds;
     /** Hotbar copied on the main thread. Needed to compute dig costs on a worker thread. */
@@ -140,10 +140,10 @@ public final class ChunkView implements CellSource {
 
     // Pathfinding block lookups are strongly localized within a single chunk, so just remembering the previous chunk
     // skips the hash lookup for most accesses. null (unloaded) is remembered as-is too, to avoid looking it up again.
-    private LevelChunk cachedChunk;
+    private ChunkColumn cachedChunk;
     private long cachedChunkKey = ChunkPos.INVALID_CHUNK_POS;
 
-    private ChunkView(Long2ObjectMap<LevelChunk> chunks, int totalChunksInBounds, SearchBounds bounds,
+    private ChunkView(Long2ObjectMap<ChunkColumn> chunks, int totalChunksInBounds, SearchBounds bounds,
                       ItemStack[] hotbar, int[] hotbarEfficiency, MovementOptions options, boolean canPlaceBlocks,
                       int placedBlockBudget, int maxFallDamagePoints, int fatalFallBlocks,
                       boolean canMlgWaterBucket, boolean boatAvailable, boolean ridingBoat,
@@ -227,20 +227,35 @@ public final class ChunkView implements CellSource {
 
     /** Main thread only. Collects only references to loaded chunks and a copy of the hotbar. */
     public static ChunkView capture(Level level, Player player, SearchBounds bounds, MovementOptions options) {
+        return capture(level, player, bounds, options, null);
+    }
+
+    /**
+     * Like {@link #capture(Level, Player, SearchBounds, MovementOptions)}, but chunks the client hasn't loaded are
+     * taken from {@code saved} where it has them (chunks read back from the singleplayer save). Loaded chunks always
+     * win: they hold the live state, the save may be minutes old.
+     */
+    public static ChunkView capture(Level level, Player player, SearchBounds bounds, MovementOptions options,
+                                    @Nullable SavedColumns saved) {
         int minChunkX = bounds.minX() >> 4;
         int maxChunkX = bounds.maxX() >> 4;
         int minChunkZ = bounds.minZ() >> 4;
         int maxChunkZ = bounds.maxZ() >> 4;
 
-        Long2ObjectOpenHashMap<LevelChunk> chunks =
-                new Long2ObjectOpenHashMap<>((maxChunkX - minChunkX + 1) * (maxChunkZ - minChunkZ + 1));
+        Long2ObjectOpenHashMap<ChunkColumn> chunks =
+                new Long2ObjectOpenHashMap<>(Math.min(1 << 16, (maxChunkX - minChunkX + 1) * (maxChunkZ - minChunkZ + 1)));
         for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
             for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
                 // Unloaded chunks cannot be read at all. By not picking them up here, routes are naturally
                 // cut off at the edge of the loaded area (they are treated as impassable cells).
                 LevelChunk chunk = level.getChunkSource().getChunkNow(chunkX, chunkZ);
                 if (chunk != null) {
-                    chunks.put(GameCompat.chunkKey(chunkX, chunkZ), chunk);
+                    chunks.put(GameCompat.chunkKey(chunkX, chunkZ), ChunkColumn.loaded(chunk));
+                } else if (saved != null) {
+                    ChunkColumn column = saved.column(chunkX, chunkZ);
+                    if (column != null) {
+                        chunks.put(GameCompat.chunkKey(chunkX, chunkZ), column);
+                    }
                 }
             }
         }
@@ -591,11 +606,11 @@ public final class ChunkView implements CellSource {
      */
     @Override
     public int openSkyY(int x, int z) {
-        LevelChunk chunk = chunkAt(x >> 4, z >> 4);
+        ChunkColumn chunk = chunkAt(x >> 4, z >> 4);
         if (chunk == null) {
             return Integer.MAX_VALUE;
         }
-        return chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z) + 1;
+        return chunk.motionBlockingHeight(x, z) + 1;
     }
 
     /**
@@ -659,21 +674,21 @@ public final class ChunkView implements CellSource {
         if (y < minBuildHeight || y >= maxBuildHeight) {
             return null;
         }
-        LevelChunk chunk = chunkAt(x >> 4, z >> 4);
+        ChunkColumn chunk = chunkAt(x >> 4, z >> 4);
         if (chunk == null) {
             return null;
         }
-        LevelChunkSection section = chunk.getSections()[(y >> 4) - minSection];
+        LevelChunkSection section = chunk.section((y >> 4) - minSection);
         // Up to 1.17, empty sections are held as null (from 1.18 on, a section is always present even if empty)
         return section == null ? Blocks.AIR.defaultBlockState() : section.getBlockState(x & 15, y & 15, z & 15);
     }
 
-    private LevelChunk chunkAt(int chunkX, int chunkZ) {
+    private ChunkColumn chunkAt(int chunkX, int chunkZ) {
         long key = GameCompat.chunkKey(chunkX, chunkZ);
         if (key == cachedChunkKey) {
             return cachedChunk;
         }
-        LevelChunk chunk = chunks.get(key);
+        ChunkColumn chunk = chunks.get(key);
         cachedChunkKey = key;
         cachedChunk = chunk;
         return chunk;

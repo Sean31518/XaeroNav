@@ -97,12 +97,19 @@ public final class MapPathOverlay {
      */
     public record Snapshot(PathResult ground, BlockPos goal, boolean straightLine, boolean goalMarker,
                             BlockPos playerPos, List<BlockPos> coarseWaypoints, List<Vec3> flightRoute,
-                            int flightRouteFrom, List<Vec3> flightDash) {
+                            int flightRouteFrom, List<Vec3> flightDash, RoutePreview fullRoute) {
 
         public Snapshot {
             coarseWaypoints = List.copyOf(coarseWaypoints);
             flightRoute = List.copyOf(flightRoute);
             flightDash = List.copyOf(flightDash);
+        }
+
+        public Snapshot(PathResult ground, BlockPos goal, boolean straightLine, boolean goalMarker,
+                        BlockPos playerPos, List<BlockPos> coarseWaypoints, List<Vec3> flightRoute,
+                        int flightRouteFrom, List<Vec3> flightDash) {
+            this(ground, goal, straightLine, goalMarker, playerPos, coarseWaypoints, flightRoute, flightRouteFrom,
+                    flightDash, RoutePreview.NONE);
         }
 
         public boolean isEmpty() {
@@ -136,6 +143,31 @@ public final class MapPathOverlay {
             }
         }
 
+        // The whole route planned ahead (singleplayer), from where the detailed route ends. It replaces the
+        // long-distance dotted line up to where it reaches; past that the dotted lines carry on from its end
+        RoutePreview full = snapshot.fullRoute();
+        int tailX = dots != null && dots.count > 0 ? dots.x[dots.count - 1] : snapshot.playerPos().getX();
+        int tailZ = dots != null && dots.count > 0 ? dots.z[dots.count - 1] : snapshot.playerPos().getZ();
+        boolean fullRouteDrawn = false;
+        if (!full.isEmpty() && snapshot.flightRoute().isEmpty()) {
+            List<BlockPos> points = full.points();
+            for (int i = full.nearestIndex(tailX, tailZ); i < points.size(); i++) {
+                BlockPos point = points.get(i);
+                sink.dot(point.getX(), point.getZ(), PathColors.FULL_ROUTE[0], PathColors.FULL_ROUTE[1],
+                        PathColors.FULL_ROUTE[2]);
+            }
+            BlockPos end = points.get(points.size() - 1);
+            tailX = end.getX();
+            tailZ = end.getZ();
+            fullRouteDrawn = true;
+            if (full.complete()) {
+                if (snapshot.goal() != null && snapshot.goalMarker()) {
+                    drawGoalMarker(sink, snapshot.goal(), pixelsPerBlock);
+                }
+                return;
+            }
+        }
+
         // Connect the long-distance route's intermediate waypoints first. The dotted line to the destination (below)
         // continues from here, so "a dotted line along the coarse route" and "a straight line to the destination" don't
         // appear at the same time pointing in conflicting directions
@@ -148,9 +180,9 @@ public final class MapPathOverlay {
         if (!coarseWaypoints.isEmpty()) {
             int previousX;
             int previousZ;
-            if (dots != null && dots.count > 0) {
-                previousX = dots.x[dots.count - 1];
-                previousZ = dots.z[dots.count - 1];
+            if (fullRouteDrawn || dots != null && dots.count > 0) {
+                previousX = tailX;
+                previousZ = tailZ;
             } else {
                 previousX = snapshot.playerPos().getX();
                 previousZ = snapshot.playerPos().getZ();
@@ -201,6 +233,9 @@ public final class MapPathOverlay {
             } else if (lastCoarseWaypoint != null) {
                 fromX = lastCoarseWaypoint.getX();
                 fromZ = lastCoarseWaypoint.getZ();
+            } else if (fullRouteDrawn) {
+                fromX = tailX;
+                fromZ = tailZ;
             } else if (dots != null && dots.count > 0) {
                 fromX = dots.x[dots.count - 1];
                 fromZ = dots.z[dots.count - 1];

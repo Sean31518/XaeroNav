@@ -31,6 +31,11 @@ final class GoalEta {
      * @param waypoints intermediate targets of the long-distance route not yet passed ({@link PathfindingState.NavigationView#coarseRouteWaypoints})
      */
     double ticks(BlockPos from, BlockPos goal, List<BlockPos> waypoints) {
+        // A whole route planned on real blocks beats every estimate: it's the same search the live route uses
+        RoutePreview full = FullRoutePlanner.INSTANCE.preview();
+        if (full.complete() && full.points().get(full.points().size() - 1).distSqr(goal) <= 9.0) {
+            return full.ticksFrom(from.getX(), from.getZ());
+        }
         WindowField field = PathfindingState.INSTANCE.guideForDisplay(goal);
         double scale = PathfindingState.INSTANCE.guideFarScaleForDisplay();
         if (from.equals(cachedFrom) && goal.equals(cachedGoal) && field == cachedField && scale == cachedScale
