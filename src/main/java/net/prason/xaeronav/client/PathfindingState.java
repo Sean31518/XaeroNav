@@ -1437,7 +1437,8 @@ public final class PathfindingState {
         if (guided && mc.player != null) {
             // A path planned with the nav graph doesn't use layer-1 waypoints. A filled-in map only changes estimates outside the window and the HUD's dotted line,
             // so don't replan the path: that would redraw the line on every loading step (detours are caught by reviewing against the rebuilt guide)
-            freshRouteInBackground(mc.player.blockPosition(), currentGoal, ChunkView.boatAvailable(mc.player), true);
+            freshRouteInBackground(mc.player.blockPosition(), currentGoal,
+                    XaeroNavConfig.INSTANCE.boatsEnabled() && ChunkView.boatAvailable(mc.player), true);
         } else {
             recalculate("map loading progressed");
         }
@@ -1789,7 +1790,7 @@ public final class PathfindingState {
 
         BlockPos start = player.blockPosition();
         lastStart = start;
-        boolean boatAvailable = ChunkView.boatAvailable(player);
+        boolean boatAvailable = XaeroNavConfig.INSTANCE.boatsEnabled() && ChunkView.boatAvailable(player);
 
         int surfaceY = surfaceReferenceY(level, start);
         boolean climbing = shouldClimbToSurface(level, start, currentGoal, surfaceY);
@@ -2850,7 +2851,7 @@ public final class PathfindingState {
                                        boolean ceilingDimension) {
         long coarseLap = TickLaps.start();
         CoarseAttempt attempt = solveCoarseRoute(readCoarseMapFor(start, currentGoal), start, currentGoal,
-                boatAvailable);
+                boatAvailable, XaeroNavConfig.INSTANCE.swimmingEnabled());
         TickLaps.add("long-range route", coarseLap);
         // What was just planned synchronously is newer than the request being solved in the background
         solvingCoarse = null;
@@ -2872,7 +2873,10 @@ public final class PathfindingState {
         TickLaps.add("long-range route map read", readLap);
         CoarseSolve solve = new CoarseSolve(currentGoal);
         solvingCoarse = solve;
-        CompletableFuture.supplyAsync(() -> solveCoarseRoute(read, start, currentGoal, boatAvailable), coarseExecutor)
+        // Read the setting here on the main thread; the solve itself runs on coarseExecutor
+        boolean swimmingEnabled = XaeroNavConfig.INSTANCE.swimmingEnabled();
+        CompletableFuture.supplyAsync(() -> solveCoarseRoute(read, start, currentGoal, boatAvailable, swimmingEnabled),
+                        coarseExecutor)
                 .whenComplete((attempt, error) -> onMainThread.accept(() -> {
                     if (solvingCoarse != solve) {
                         return;
@@ -3250,12 +3254,12 @@ public final class PathfindingState {
      * as floors, and the ladder is no longer needed.
      */
     private static CoarseAttempt solveCoarseRoute(CoarseRead read, BlockPos start, BlockPos goal,
-                                                  boolean boatAvailable) {
+                                                  boolean boatAvailable, boolean swimmingEnabled) {
         CoarseMap map = read.map();
         if (map == null) {
             return new CoarseAttempt(new CoarseRouter.Route(List.of(), false), 0);
         }
-        CoarseRouter.Route avoided = CoarseRouter.findRoute(map, start, goal, boatAvailable,
+        CoarseRouter.Route avoided = CoarseRouter.findRoute(map, start, goal, boatAvailable, swimmingEnabled,
                 CoarseRouter.BridgePolicy.AVOID);
         if (avoided.reachedGoal()) {
             return new CoarseAttempt(avoided, read.pendingRegions());
@@ -3267,14 +3271,14 @@ public final class PathfindingState {
         // yet this jumped straight from AVOID to BRIDGE. In the End, AVOID fails on the void at every island crossing,
         // so it <b>always ran with BRIDGE</b>, and in the Nether too, merely "not being able to avoid void or lava patches"
         // also opened routes cutting straight across lava seas
-        CoarseRouter.Route allowed = CoarseRouter.findRoute(map, start, goal, boatAvailable,
+        CoarseRouter.Route allowed = CoarseRouter.findRoute(map, start, goal, boatAvailable, swimmingEnabled,
                 CoarseRouter.BridgePolicy.ALLOW);
         if (allowed.reachedGoal()) {
             LOGGER.info("XaeroNav: No road avoiding void/lava patches found; switched to a long-range route through them");
             return new CoarseAttempt(allowed, read.pendingRegions());
         }
 
-        CoarseRouter.Route bridged = CoarseRouter.findRoute(map, start, goal, boatAvailable,
+        CoarseRouter.Route bridged = CoarseRouter.findRoute(map, start, goal, boatAvailable, swimmingEnabled,
                 CoarseRouter.BridgePolicy.BRIDGE);
         if (bridged.reachedGoal()) {
             LOGGER.info("XaeroNav: No road avoiding lava found; switched to a long-range route bridging across it");

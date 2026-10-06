@@ -554,7 +554,10 @@ public final class PathfindingExecutor {
         // nodes with 0 steps)
         CoarseRouter.BridgePolicy bridgePolicy = view.lavaBridgingEnabled()
                 ? CoarseRouter.BridgePolicy.BRIDGE : CoarseRouter.BridgePolicy.ALLOW;
-        CoarseRouter.Route route = CoarseRouter.findRoute(coarseMap, start, goal, false, bridgePolicy);
+        // Water stays crossable at the swimming price if either swimming or a boat can do it (the boat price isn't
+        // used here, as before); only when neither can does the leg split steer around it
+        CoarseRouter.Route route = CoarseRouter.findRoute(coarseMap, start, goal, false,
+                view.swimmingEnabled() || view.boatAvailable(), bridgePolicy);
         // The worst failure is "route found" while the coarse map is empty (all-NO_DATA cells are passable,
         // so a straight line ignoring lava can be drawn). Without logging the known cell count, you can't
         // tell whether "the leg split is bad" or "the terrain isn't visible at all".
@@ -961,7 +964,7 @@ public final class PathfindingExecutor {
         }
         // The original path isn't marked up, so its total cost is the true price as-is
         double before = totalCost(result);
-        double after = trueCost(attempt, scale);
+        double after = trueCost(attempt, scale, view.routeProfile().placementCostScale());
         // Take it if "it got cheaper" or "placements dropped at about the same price". Allowing the latter is the
         // heart of thrift, and the max purchase price is THRIFT_MAX_COST_INCREASE (0 = as before for redos not aiming at thrift)
         boolean worthIt = after < before || placements(attempt) < placements(result);
@@ -998,11 +1001,15 @@ public final class PathfindingExecutor {
      * {@code SUBMERGED_TRAVEL_PENALTY} to the whole edge cost). <b>The error leans to the safe side</b>: the
      * redone path's estimate comes out higher than reality, so it never tips toward over-accepting.
      *
+     * <p>"True" here means the route profile's prices ({@code RouteProfile#placementCostScale}): the original path
+     * was found with that markup already in it, so only the thrift markup on top of it is reverted.
+     *
      * @param placementScale the placement cost multiplier used by the search that found the path. 1.0 passes through
+     * @param profileScale   the route profile's placement multiplier both searches were run with
      */
-    private static double trueCost(PathResult result, double placementScale) {
+    private static double trueCost(PathResult result, double placementScale, double profileScale) {
         return totalCost(result)
-                - (placementScale - 1.0) * ActionCosts.PLACE_BLOCK_AIM_TICKS * placements(result);
+                - (placementScale - 1.0) * profileScale * ActionCosts.PLACE_BLOCK_AIM_TICKS * placements(result);
     }
 
     private static double totalCost(PathResult result) {

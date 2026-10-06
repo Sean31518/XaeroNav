@@ -8,6 +8,7 @@ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 
 import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
 /**
  * A {@link CellSource} for tests. Lets terrain be written as text.
@@ -112,6 +113,10 @@ public final class FakeCells implements CellSource {
     private boolean boatAvailable;
     /** Default is false. Only tests that want to start while riding set it explicitly. */
     private boolean ridingBoat;
+    /** BALANCED to match the config default. */
+    private RouteProfile routeProfile = RouteProfile.BALANCED;
+    /** true to match the config default. */
+    private boolean swimmingEnabled = true;
     /** Default for unwritten coordinates. Making it empty (passableEmpty) means only rows with floors written become terrain. */
     private long fill = air();
     /**
@@ -260,6 +265,16 @@ public final class FakeCells implements CellSource {
     /** Start the search while riding. Also set {@link #boatAvailable}. */
     public FakeCells ridingBoat(boolean value) {
         this.ridingBoat = value;
+        return this;
+    }
+
+    public FakeCells routeProfile(RouteProfile value) {
+        this.routeProfile = value;
+        return this;
+    }
+
+    public FakeCells swimmingEnabled(boolean value) {
+        this.swimmingEnabled = value;
         return this;
     }
 
@@ -445,6 +460,16 @@ public final class FakeCells implements CellSource {
     @Override
     public boolean ridingBoat() {
         return ridingBoat;
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return routeProfile;
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return swimmingEnabled;
     }
 
     /**

@@ -31,6 +31,13 @@ public interface NavConfigSpec {
     StringListValue defineStringList(String path, List<String> defaultValue,
             Supplier<String> newElement, Predicate<Object> elementValidator);
 
+    /**
+     * An entry holding one constant of {@code E}, stored by name. Unknown names fall back to the default, and names
+     * are matched ignoring case (both as {@code ModConfigSpec}'s {@code NAME_IGNORECASE}). Like there, an
+     * {@code Allowed Values: ...} line is appended to the comment.
+     */
+    <E extends Enum<E>> EnumValue<E> defineEnum(String path, E defaultValue);
+
     interface BoolValue {
         boolean get();
 
@@ -49,5 +56,11 @@ public interface NavConfigSpec {
 
     interface StringListValue {
         List<? extends String> get();
+    }
+
+    interface EnumValue<E extends Enum<E>> {
+        E get();
+
+        void set(E value);
     }
 }

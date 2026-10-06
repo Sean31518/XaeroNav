@@ -102,8 +102,10 @@ public final class CorridorLegSolver {
 
         SearchBounds bounds = new SearchBounds(minBlockX, resolvedFrom.getY() - VERTICAL_MARGIN_BLOCKS, minBlockZ,
                 maxBlockX, resolvedFrom.getY() + VERTICAL_MARGIN_BLOCKS, maxBlockZ);
+        // Swimming here also stands in for boats (layer 2 has no boat moves), so water is closed only when both are off
         CellSource view = new SurfaceCellSource(grid, bounds, XaeroNavConfig.INSTANCE.jumpGapEnabled(),
-                XaeroNavConfig.INSTANCE.maxSubmergedTicks());
+                XaeroNavConfig.INSTANCE.maxSubmergedTicks(),
+                XaeroNavConfig.INSTANCE.swimmingEnabled() || XaeroNavConfig.INSTANCE.boatsEnabled());
         return new PreparedLeg(view, resolvedFrom, resolvedTo, pendingRegions);
     }
 

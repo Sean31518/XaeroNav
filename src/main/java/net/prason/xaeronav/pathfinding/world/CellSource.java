@@ -1,5 +1,7 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
+
 /**
  * Every query the search makes to the world.
  *
@@ -211,6 +213,31 @@ public interface CellSource {
      */
     default boolean ridingBoat() {
         return false;
+    }
+
+    /**
+     * What the route is optimised for ({@link MovementOptions#routeProfile()}). The move generators read their
+     * risk / placement / dig surcharges from it instead of the {@code ActionCosts} base constants.
+     *
+     * <p>The default is {@link RouteProfile#BALANCED} (exactly the base constants) so that implementations without
+     * settings (the tests' terrain sources) keep today's prices. Wrappers must forward it.
+     */
+    default RouteProfile routeProfile() {
+        return RouteProfile.BALANCED;
+    }
+
+    /**
+     * Whether routes may enter water to swim or wade ({@link MovementOptions#swimmingEnabled()}).
+     *
+     * <p>Even when false, moves <b>out of</b> water stay allowed: a player who starts in water, or ends up there,
+     * must be able to get back to land. Only stepping, falling or swimming from a dry cell into water is cut, at
+     * move generation itself like the other limits (a heavy price would just burn expanded nodes around the shore).
+     * When the exact destination is itself a water cell, the search swims as usual so the goal stays reachable.
+     *
+     * <p>Boats are governed separately by {@link #boatAvailable()}.
+     */
+    default boolean swimmingEnabled() {
+        return true;
     }
 
     /**

@@ -268,7 +268,8 @@ public final class XaeroNavCommands {
         }
 
         BlockPos start = player.blockPosition();
-        boolean boatAvailable = ChunkView.boatAvailable(player);
+        boolean boatAvailable = XaeroNavConfig.INSTANCE.boatsEnabled() && ChunkView.boatAvailable(player);
+        boolean swimmingEnabled = XaeroNavConfig.INSTANCE.swimmingEnabled();
         CoarseMap map = readCoarseMapOrFail(out, start, goal);
         if (map == null) {
             return 0;
@@ -279,7 +280,8 @@ public final class XaeroNavCommands {
         long startNanos = System.nanoTime();
         DIAGNOSTIC.submit(generation,
                 // Diagnostic commands show the default weighting as-is (the lava ladder is a PathfindingState concern)
-                cancelled -> CoarseRouter.findRoute(map, start, goal, boatAvailable, CoarseRouter.BridgePolicy.ALLOW),
+                cancelled -> CoarseRouter.findRoute(map, start, goal, boatAvailable, swimmingEnabled,
+                        CoarseRouter.BridgePolicy.ALLOW),
                 (route, error) -> {
                     if (error != null) {
                         XaeroNav.LOGGER.error("XaeroNav: Layer 1 search for diagnostic command failed", error);

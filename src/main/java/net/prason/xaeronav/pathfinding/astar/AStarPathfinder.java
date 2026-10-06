@@ -11,6 +11,7 @@ import org.jspecify.annotations.Nullable;
 
 import net.minecraft.core.BlockPos;
 import net.prason.xaeronav.pathfinding.cost.ActionCosts;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.util.MonotonicTime;
@@ -116,6 +117,27 @@ public final class AStarPathfinder {
     private static final int[] DIAGONAL_DZ = {1, -1, 1, -1};
 
     final CellSource view;
+
+    /**
+     * What this search optimises for ({@link CellSource#routeProfile()}). The move generators take their risk
+     * surcharges from here rather than from the {@link ActionCosts} base constants. Read once: it is constant
+     * during the search, and the generators would otherwise go through {@link MemoCells} for it on every edge.
+     */
+    final RouteProfile profile;
+
+    /** {@link CellSource#swimmingEnabled()}. See {@link #entersWater}. */
+    private final boolean swimmingEnabled;
+
+    /**
+     * Whether this search refuses moves into water ({@link #entersWater}). Off whenever {@link #swimmingEnabled} is on,
+     * and also when the exact destination itself is a water cell: the user asked to go into the water there, and
+     * refusing every entry would leave only a partial path ending on the shore (followed by a pointless round of
+     * the relaxation ladder). Decided per search, since one pathfinder may run {@link #exhaust} or a search.
+     */
+    private boolean waterEntryBlocked;
+
+    /** Extra ticks per dug cell from the profile ({@link RouteProfile#digSurchargeTicks()}). 0 for most profiles. */
+    private final double digSurchargeTicks;
     private final int maxExpandedNodes;
     private final long timeLimitMillis;
     private final double heuristicWeight;
@@ -161,6 +183,7 @@ public final class AStarPathfinder {
         goalY = Integer.MIN_VALUE / 2;
         this.goalZ = goalZ;
         lineTieBreak = false;
+        waterEntryBlocked = !swimmingEnabled;
         for (int i = 0; i < count; i++) {
             long seed = seeds[i];
             PathNode node = node(BlockPos.getX(seed), BlockPos.getY(seed), BlockPos.getZ(seed), false);
@@ -252,6 +275,9 @@ public final class AStarPathfinder {
      *
      * <p>Marking up is the safe direction: it only raises the real cost, so both {@link Heuristic} and
      * the {@link CostToGo} guide remain lower bounds.
+     *
+     * <p>The route profile's factor ({@link RouteProfile#placementCostScale()}, never below 1.0) is folded in on top,
+     * for the same reasons: uniform for the whole search, and only ever a markup.
      */
     final double placementCostTicks;
 
@@ -445,7 +471,11 @@ public final class AStarPathfinder {
     public AStarPathfinder(CellSource view, SearchLimits limits, CostToGo costToGo, Tolerances tolerances,
                             double placementCostScale) {
         RunCaps caps = tolerances.caps();
-        this.placementCostTicks = ActionCosts.PLACE_BLOCK_AIM_TICKS * placementCostScale;
+        this.profile = view.routeProfile();
+        this.swimmingEnabled = view.swimmingEnabled();
+        this.digSurchargeTicks = profile.digSurchargeTicks();
+        this.placementCostTicks = ActionCosts.PLACE_BLOCK_AIM_TICKS * placementCostScale
+                * profile.placementCostScale();
         this.maxBridgeRun = caps.maxBridgeRunBlocks();
         this.maxLavaBridgeRun = caps.effectiveLavaBridgeRun();
         this.maxVoidBridgeRun = caps.effectiveVoidBridgeRun();
@@ -566,6 +596,8 @@ public final class AStarPathfinder {
         this.goalZ = goal.getZ();
         this.carried = carried;
         this.goalRadius = goalRadius;
+        this.waterEntryBlocked = !swimmingEnabled
+                && !(goalRadius <= 0 && CellData.water(view.cell(goalX, goalY, goalZ)));
         return runSearch(start, cancelled);
     }
 
@@ -582,6 +614,7 @@ public final class AStarPathfinder {
     public PathResult searchToSurface(BlockPos start, int surfaceY, BooleanSupplier cancelled) {
         this.surfaceGoal = true;
         this.surfaceY = surfaceY;
+        this.waterEntryBlocked = !swimmingEnabled;
         return runSearch(start, cancelled);
     }
 
@@ -1131,7 +1164,7 @@ public final class AStarPathfinder {
                 }
             }
         }
-        return arrival.edgeHazard == 2 ? ActionCosts.EDGE_HAZARD_PENALTY_TICKS : 0.0;
+        return arrival.edgeHazard == 2 ? profile.edgeHazardPenaltyTicks() : 0.0;
     }
 
     /** Whether slipping to {@code (x, y, z)} at foot height is fatal (entering lava, or falling into the void or a lethal drop). */
@@ -1181,6 +1214,10 @@ public final class AStarPathfinder {
 
     void relax(PathNode from, int x, int y, int z, double edgeCost, MoveKind kind, int bridgeRun,
                boolean boating) {
+        // Cut before the edge is reported, so the nav graph doesn't learn water entries the search never makes
+        if (waterEntryBlocked && !boating && entersWater(from, x, y, z)) {
+            return;
+        }
         if (from.boating && !boating) {
             edgeCost += ActionCosts.BOAT_STOW_TICKS;
         }
@@ -1233,7 +1270,7 @@ public final class AStarPathfinder {
         // is meaningless unless it's the time actually taken
         boolean surfacing = y > from.y && Math.abs(x - from.x) + Math.abs(z - from.z) <= 1;
         double tentativeCost = from.cost
-                + (submerged && !surfacing ? edgeCost * ActionCosts.SUBMERGED_TRAVEL_PENALTY : edgeCost)
+                + (submerged && !surfacing ? edgeCost * profile.submergedTravelPenalty() : edgeCost)
                 + edgeHazardPenalty(kind, x, y, z);
         if (neighbor.cost - tentativeCost <= MIN_IMPROVEMENT) {
             return;
@@ -1267,6 +1304,23 @@ public final class AStarPathfinder {
                 bestSoFar[free] = neighbor;
             }
         }
+    }
+
+    /**
+     * Whether this move takes the player from a dry cell (or a boat) into water. Refused while
+     * {@link #waterEntryBlocked}.
+     *
+     * <p>Only <b>entering</b> water is refused: stepping, falling or swimming into a water cell from a cell that isn't
+     * water. Moves from water to water stay allowed, otherwise a player who starts in a lake (or is dropped there by
+     * an earlier leg) could never get out, and the search would fail outright instead of guiding to the shore.
+     * Boating moves never get here, and getting out of a boat onto land isn't entering water; only dropping from a
+     * boat into the water to swim on counts.
+     */
+    private boolean entersWater(PathNode from, int x, int y, int z) {
+        if (!CellData.water(view.cell(x, y, z))) {
+            return false;
+        }
+        return from.boating || !CellData.water(view.cell(from.x, from.y, from.z));
     }
 
     /**
@@ -1360,7 +1414,8 @@ public final class AStarPathfinder {
             // Doors are opened, not broken. They aren't counted as dug cells either
             return ActionCosts.OPEN_DOOR_OVERHEAD_TICKS;
         }
-        double ticks = CellData.digTicks(cell);
+        // The profile's surcharge rides on every dug cell, like DIG_OVERHEAD_TICKS itself (0 unless RESOURCE_SAVING)
+        double ticks = CellData.digTicks(cell) + digSurchargeTicks;
         // Undiggable cells (digging forbidden, negative hardness) are also used to cut off falling-block chains, so they aren't collected
         if (cells != null && !Double.isInfinite(ticks)) {
             // Ascend's ceiling digging may point at the same cell as the falling-block chain when the overhead is sand or gravel

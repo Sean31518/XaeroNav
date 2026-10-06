@@ -59,6 +59,17 @@ public final class CoarseRouter {
             ActionCosts.PADDLE_ONE_BLOCK / ActionCosts.SPRINT_ONE_BLOCK;
 
     /**
+     * Water-surface multiplier when neither swimming nor a boat is allowed. Layer 3 then refuses to enter water at all
+     * ({@code CellSource#swimmingEnabled}), so a long-range route across a lake would point at a waypoint the detail
+     * search can't reach.
+     *
+     * <p><b>A heavy price rather than a wall</b>, for the same reason as {@link #UNKNOWN_MULTIPLIER}: a WATER chunk is
+     * only "mostly water" and often has a dry strip along a coast or a river bank, and an island destination should
+     * still get a route instead of none. At 8x a lake is crossed only if going around is more than 8 times as long.
+     */
+    private static final double NO_SWIM_WATER_MULTIPLIER = 8.0;
+
+    /**
      * Multiplier for passing through cells missing from the map. Treating them as impassable means no
      * route ever reaches a destination beyond unvisited land. Treating them like land, on the other
      * hand, abandons known detours to charge straight into the unknown. Make it heavy enough that "a
@@ -298,6 +309,16 @@ public final class CoarseRouter {
 
     public static Route findRoute(CoarseMap map, BlockPos start, BlockPos goal, boolean boatAvailable,
                                    BridgePolicy bridgePolicy) {
+        return findRoute(map, start, goal, boatAvailable, true, bridgePolicy);
+    }
+
+    /**
+     * @param boatAvailable   whether a boat may be used (carried <b>and</b> allowed by the settings)
+     * @param swimmingEnabled whether swimming is allowed. When both this and {@code boatAvailable} are false, water is
+     *                        priced at {@link #NO_SWIM_WATER_MULTIPLIER}
+     */
+    public static Route findRoute(CoarseMap map, BlockPos start, BlockPos goal, boolean boatAvailable,
+                                   boolean swimmingEnabled, BridgePolicy bridgePolicy) {
         int startX = start.getX() >> 4;
         int startZ = start.getZ() >> 4;
         int goalX = goal.getX() >> 4;
@@ -305,7 +326,8 @@ public final class CoarseRouter {
         if (!map.containsChunk(startX, startZ) || !map.containsChunk(goalX, goalZ)) {
             return new Route(List.of(), false);
         }
-        double waterMultiplier = boatAvailable ? BOAT_MULTIPLIER : WATER_MULTIPLIER;
+        double waterMultiplier = boatAvailable ? BOAT_MULTIPLIER
+                : swimmingEnabled ? WATER_MULTIPLIER : NO_SWIM_WATER_MULTIPLIER;
         double unknownMultiplier = calibratedUnknownMultiplier(map, bridgePolicy);
 
         int cells = map.chunksX() * map.chunksZ();

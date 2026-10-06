@@ -5,6 +5,7 @@ import java.util.Arrays;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 
 import net.minecraft.core.BlockPos;
+import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 import net.prason.xaeronav.pathfinding.world.SearchBounds;
 
@@ -191,6 +192,16 @@ final class MemoCells implements CellSource {
     @Override
     public boolean ridingBoat() {
         return source.ridingBoat();
+    }
+
+    @Override
+    public RouteProfile routeProfile() {
+        return source.routeProfile();
+    }
+
+    @Override
+    public boolean swimmingEnabled() {
+        return source.swimmingEnabled();
     }
 
     @Override

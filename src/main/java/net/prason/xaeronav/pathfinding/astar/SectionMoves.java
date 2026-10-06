@@ -5,7 +5,6 @@ import java.util.function.BooleanSupplier;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 
 import net.minecraft.core.BlockPos;
-import net.prason.xaeronav.pathfinding.cost.ActionCosts;
 import net.prason.xaeronav.pathfinding.world.CellData;
 import net.prason.xaeronav.pathfinding.world.CellSource;
 
@@ -69,7 +68,7 @@ public final class SectionMoves {
             boolean surfacing = ty > fy && Math.abs(tx - fx) + Math.abs(tz - fz) <= 1;
             boolean submerged = !surfacing && CellData.water(cells.cell(tx, ty + 1, tz));
             sink.edge(BlockPos.asLong(fx, fy, fz), BlockPos.asLong(tx, ty, tz),
-                    (float) ((submerged ? edgeCost * ActionCosts.SUBMERGED_TRAVEL_PENALTY : edgeCost)
+                    (float) ((submerged ? edgeCost * closure.profile.submergedTravelPenalty() : edgeCost)
                             + closure.edgeHazardPenalty(kind, tx, ty, tz)));
         });
         return closure.exhaust(seeds.elements(), seeds.size(), goalX, goalZ, cancelled) >= 0;
