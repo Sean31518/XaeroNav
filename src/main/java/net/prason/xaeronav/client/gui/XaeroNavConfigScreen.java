@@ -1,24 +1,29 @@
 package net.prason.xaeronav.client.gui;
 
 //? if >=1.19.3 {
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+
+import org.jspecify.annotations.Nullable;
 
 import com.mojang.serialization.Codec;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.OptionInstance;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 //? if >=1.21 {
 import net.minecraft.client.gui.screens.options.OptionsSubScreen;
 //?} else {
-/*import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.OptionsList;
+/*import net.minecraft.client.gui.components.OptionsList;
 import net.minecraft.client.gui.screens.OptionsSubScreen;
 import net.minecraft.network.chat.CommonComponents;
 *///?}
 import net.minecraft.network.chat.Component;
+import net.prason.xaeronav.client.AutoWalk;
+import net.prason.xaeronav.client.ClientCompat;
 import net.prason.xaeronav.config.XaeroNavConfig;
 import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 //?} else {
@@ -38,7 +43,11 @@ import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 *///?}
 
 /**
- * Settings screen listing the toggle items of {@link XaeroNavConfig}, plus the route profile.
+ * Settings screen for {@link XaeroNavConfig}.
+ *
+ * <p>From 1.21 on it is split into pages: the first page holds the route profile (the setting changed most) and one
+ * button per {@link Category}; each category opens its own page. A single list of every switch had grown past twenty
+ * items, with route, terrain, travel and display settings interleaved. Older versions keep the single list.
  *
  * <p>Numeric parameters such as search range, deviation threshold and surface height, and the extra list of no-dig blocks, aren't here.
  * They're rarely touched, and editing the TOML directly is enough.
@@ -55,18 +64,82 @@ import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 //? if >=1.19.3 {
 public final class XaeroNavConfigScreen extends OptionsSubScreen {
 
+    /** The pages of the settings screen, in the order their buttons appear. */
+    public enum Category {
+        /** Where the route may go: digging and placing blocks. */
+        TERRAIN("gui.xaeronav.config.category.terrain"),
+        /** How you get there: swimming, boats, jumps, falls, flying. */
+        TRAVEL("gui.xaeronav.config.category.travel"),
+        /** Auto-walk, only where it exists. */
+        AUTO_WALK("gui.xaeronav.config.category.auto_walk"),
+        /** What is drawn on screen and on the map. */
+        DISPLAY("gui.xaeronav.config.category.display"),
+        /** Search behaviour most people never touch. */
+        ADVANCED("gui.xaeronav.config.category.advanced");
+
+        private final String titleKey;
+
+        Category(String titleKey) {
+            this.titleKey = titleKey;
+        }
+
+        public String titleKey() {
+            return titleKey;
+        }
+
+        /** Whether this page is offered at all. */
+        public boolean available() {
+            return this != AUTO_WALK || AutoWalk.SUPPORTED;
+        }
+    }
+
     //? if <1.21 {
     /*private OptionsList list;
     *///?}
 
+    /** The page shown; {@code null} for the first page. */
+    private final @Nullable Category category;
+
     public XaeroNavConfigScreen(Screen parent) {
-        super(parent, Minecraft.getInstance().options, Component.translatable("gui.xaeronav.config.title"));
+        this(parent, null);
+    }
+
+    private XaeroNavConfigScreen(Screen parent, @Nullable Category category) {
+        super(parent, Minecraft.getInstance().options, Component.translatable(
+                category == null ? "gui.xaeronav.config.title" : category.titleKey()));
+        this.category = category;
     }
 
     //? if >=1.21 {
     @Override
     protected void addOptions() {
-        addAllOptions(XaeroNavConfig.INSTANCE, this.list::addBig);
+        if (category != null) {
+            addCategoryOptions(XaeroNavConfig.INSTANCE, category, this.list::addBig);
+            return;
+        }
+        XaeroNavConfig cfg = XaeroNavConfig.INSTANCE;
+        this.list.addBig(routeProfileOption(cfg.routeProfile(), cfg::setRouteProfile));
+        // Category buttons two per row; the labels are short enough for two columns even in Japanese
+        List<Button> buttons = new ArrayList<>();
+        for (Category page : Category.values()) {
+            if (page.available()) {
+                buttons.add(Button.builder(Component.translatable(page.titleKey()), button -> openPage(page)).build());
+            }
+        }
+        for (int i = 0; i < buttons.size(); i += 2) {
+            if (i + 1 < buttons.size()) {
+                this.list.addSmall(buttons.get(i), buttons.get(i + 1));
+            } else {
+                this.list.addSmall(buttons.get(i), null);
+            }
+        }
+    }
+
+    /** Opens a category page. What was changed here so far is kept and saved first, so the page starts from it. */
+    private void openPage(Category page) {
+        this.list.applyUnsavedChanges();
+        XaeroNavConfig.save();
+        ClientCompat.setScreen(Minecraft.getInstance(), new XaeroNavConfigScreen(this, page));
     }
     //?} else if >=1.20.5 {
     /*// In 1.20.5 OptionsSubScreen gained a header and footer layout (including the Done button).
@@ -100,46 +173,78 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
     }
     *///?}
 
-    // Japanese labels are long and get cut off in two columns (addSmall), so all items are laid out in one column (addBig).
-    // Only how it's called (what this.list.addBig refers to) differs by version, so the list itself lives in one place.
-    // cfg is a parameter for tests (XaeroNavConfigScreenTest); production just passes XaeroNavConfig.INSTANCE.
-    // It's public because the test that builds a loaded XaeroNavConfig via NightConfigStore lives in the config package
+    /**
+     * Every option on every page, in page order (the route profile first). Used by the single-list screen of older
+     * versions and by tests.
+     *
+     * <p>cfg is a parameter for tests (XaeroNavConfigScreenOptionsTest); production just passes XaeroNavConfig.INSTANCE.
+     * It's public because the test that builds a loaded XaeroNavConfig via NightConfigStore lives in the config package.
+     */
     public static void addAllOptions(XaeroNavConfig cfg, Consumer<OptionInstance<?>> addBig) {
         addBig.accept(routeProfileOption(cfg.routeProfile(), cfg::setRouteProfile));
-        addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.digging_enabled",
-                "gui.xaeronav.config.digging_enabled.tooltip", cfg.diggingEnabled(), cfg::setDiggingEnabled));
-        addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.bridging_enabled",
-                "gui.xaeronav.config.bridging_enabled.tooltip", cfg.bridgingEnabled(), cfg::setBridgingEnabled));
-        addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.lava_bridging_enabled",
-                "gui.xaeronav.config.lava_bridging_enabled.tooltip",
-                cfg.lavaBridgingEnabled(), cfg::setLavaBridgingEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.block_budget_enabled",
-                cfg.blockBudgetEnabled(), cfg::setBlockBudgetEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.jump_gap_enabled",
-                cfg.jumpGapEnabled(), cfg::setJumpGapEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.swimming_enabled",
-                cfg.swimmingEnabled(), cfg::setSwimmingEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.boats_enabled",
-                cfg.boatsEnabled(), cfg::setBoatsEnabled));
-        addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.fall_damage_tolerance_enabled",
-                "gui.xaeronav.config.fall_damage_tolerance_enabled.tooltip",
-                cfg.fallDamageToleranceEnabled(), cfg::setFallDamageToleranceEnabled));
-        addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.strict_limits",
-                "gui.xaeronav.config.strict_limits.tooltip", cfg.strictLimits(), cfg::setStrictLimits));
-        addBig.accept(boolOption("gui.xaeronav.config.deep_look_ahead_enabled",
-                cfg.deepLookAheadEnabled(), cfg::setDeepLookAheadEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.flight_routing_enabled",
-                cfg.flightRoutingEnabled(), cfg::setFlightRoutingEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.flight_clearance",
-                cfg.flightClearanceDetourBlocks() > 0, cfg::setFlightClearanceEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.hud_enabled",
-                cfg.hudEnabled(), cfg::setHudEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.straight_line_enabled",
-                cfg.straightLineEnabled(), cfg::setStraightLineEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.goal_marker_enabled",
-                cfg.goalMarkerEnabled(), cfg::setGoalMarkerEnabled));
-        addBig.accept(boolOption("gui.xaeronav.config.danger_dashed_enabled",
-                cfg.dangerDashedEnabled(), cfg::setDangerDashedEnabled));
+        for (Category page : Category.values()) {
+            if (page.available()) {
+                addCategoryOptions(cfg, page, addBig);
+            }
+        }
+    }
+
+    // Japanese labels are long and get cut off in two columns (addSmall), so all items are laid out in one column (addBig).
+    public static void addCategoryOptions(XaeroNavConfig cfg, Category page, Consumer<OptionInstance<?>> addBig) {
+        switch (page) {
+            case TERRAIN:
+                addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.digging_enabled",
+                        "gui.xaeronav.config.digging_enabled.tooltip", cfg.diggingEnabled(), cfg::setDiggingEnabled));
+                addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.bridging_enabled",
+                        "gui.xaeronav.config.bridging_enabled.tooltip", cfg.bridgingEnabled(), cfg::setBridgingEnabled));
+                addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.lava_bridging_enabled",
+                        "gui.xaeronav.config.lava_bridging_enabled.tooltip",
+                        cfg.lavaBridgingEnabled(), cfg::setLavaBridgingEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.block_budget_enabled",
+                        cfg.blockBudgetEnabled(), cfg::setBlockBudgetEnabled));
+                break;
+            case TRAVEL:
+                addBig.accept(boolOption("gui.xaeronav.config.swimming_enabled",
+                        cfg.swimmingEnabled(), cfg::setSwimmingEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.boats_enabled",
+                        cfg.boatsEnabled(), cfg::setBoatsEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.jump_gap_enabled",
+                        cfg.jumpGapEnabled(), cfg::setJumpGapEnabled));
+                addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.fall_damage_tolerance_enabled",
+                        "gui.xaeronav.config.fall_damage_tolerance_enabled.tooltip",
+                        cfg.fallDamageToleranceEnabled(), cfg::setFallDamageToleranceEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.flight_routing_enabled",
+                        cfg.flightRoutingEnabled(), cfg::setFlightRoutingEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.flight_clearance",
+                        cfg.flightClearanceDetourBlocks() > 0, cfg::setFlightClearanceEnabled));
+                break;
+            case AUTO_WALK:
+                addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.auto_walk_on_servers",
+                        "gui.xaeronav.config.auto_walk_on_servers.tooltip",
+                        cfg.autoWalkOnServers(), cfg::setAutoWalkOnServers));
+                addBig.accept(boolOption("gui.xaeronav.config.auto_walk_sprint",
+                        cfg.autoWalkSprint(), cfg::setAutoWalkSprint));
+                addBig.accept(stopHealthOption(cfg.autoWalkStopHealth(), cfg::setAutoWalkStopHealth));
+                break;
+            case DISPLAY:
+                addBig.accept(boolOption("gui.xaeronav.config.hud_enabled",
+                        cfg.hudEnabled(), cfg::setHudEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.straight_line_enabled",
+                        cfg.straightLineEnabled(), cfg::setStraightLineEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.goal_marker_enabled",
+                        cfg.goalMarkerEnabled(), cfg::setGoalMarkerEnabled));
+                addBig.accept(boolOption("gui.xaeronav.config.danger_dashed_enabled",
+                        cfg.dangerDashedEnabled(), cfg::setDangerDashedEnabled));
+                break;
+            case ADVANCED:
+                addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.strict_limits",
+                        "gui.xaeronav.config.strict_limits.tooltip", cfg.strictLimits(), cfg::setStrictLimits));
+                addBig.accept(boolOption("gui.xaeronav.config.deep_look_ahead_enabled",
+                        cfg.deepLookAheadEnabled(), cfg::setDeepLookAheadEnabled));
+                break;
+            default:
+                break;
+        }
     }
 
     /** Cycles through the profiles; the tooltip explains the one currently selected. */
@@ -150,6 +255,18 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
                 (caption, value) -> Component.translatable(profileKey(value)),
                 new OptionInstance.Enum<>(List.of(values), Codec.INT.xmap(i -> values[i], RouteProfile::ordinal)),
                 initial, setter::accept);
+    }
+
+    /** Slider in half-hearts; 0 reads "never". */
+    private static OptionInstance<Integer> stopHealthOption(int initial, Consumer<Integer> setter) {
+        return new OptionInstance<>("gui.xaeronav.config.auto_walk_stop_health",
+                OptionInstance.cachedConstantTooltip(
+                        Component.translatable("gui.xaeronav.config.auto_walk_stop_health.tooltip")),
+                (caption, value) -> caption.copy().append(": ").append(value == 0
+                        ? Component.translatable("gui.xaeronav.config.auto_walk_stop_health.never")
+                        : Component.translatable("gui.xaeronav.config.auto_walk_stop_health.value",
+                                value % 2 == 0 ? Integer.toString(value / 2) : value / 2 + ".5")),
+                new OptionInstance.IntRange(0, 20), initial, setter::accept);
     }
 
     private static OptionInstance<Boolean> boolOption(String key, boolean initial, Consumer<Boolean> setter) {
