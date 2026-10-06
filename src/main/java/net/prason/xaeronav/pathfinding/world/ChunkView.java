@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import org.jspecify.annotations.Nullable;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -115,6 +116,7 @@ public final class ChunkView implements CellSource {
     private final boolean canMlgWaterBucket;
     private final boolean boatAvailable;
     private final boolean ridingBoat;
+    private final @Nullable Mount mount;
     private final double minDescentTicksPerBlock;
 
     /**
@@ -145,7 +147,7 @@ public final class ChunkView implements CellSource {
                       ItemStack[] hotbar, int[] hotbarEfficiency, MovementOptions options, boolean canPlaceBlocks,
                       int placedBlockBudget, int maxFallDamagePoints, int fatalFallBlocks,
                       boolean canMlgWaterBucket, boolean boatAvailable, boolean ridingBoat,
-                      boolean deepFallPossible, double minDescentTicksPerBlock, int minBuildHeight,
+                      @Nullable Mount mount, boolean deepFallPossible, double minDescentTicksPerBlock, int minBuildHeight,
                       int maxBuildHeight, int minSection, boolean cacheCells) {
         this.deepFallPossible = deepFallPossible;
         this.chunks = chunks;
@@ -161,6 +163,7 @@ public final class ChunkView implements CellSource {
         this.canMlgWaterBucket = canMlgWaterBucket;
         this.boatAvailable = boatAvailable;
         this.ridingBoat = ridingBoat;
+        this.mount = mount;
         this.minDescentTicksPerBlock = minDescentTicksPerBlock;
         this.minBuildHeight = minBuildHeight;
         this.maxBuildHeight = maxBuildHeight;
@@ -188,6 +191,24 @@ public final class ChunkView implements CellSource {
     /** Whether you are currently riding a boat. */
     public static boolean ridingBoat(Player player) {
         return player.getVehicle() instanceof Boat;
+    }
+
+    /**
+     * The horse-like animal (horse, donkey, mule, camel...) the player is riding and steering, or {@code null}.
+     * "Steering" means the player is its controlling passenger, which vanilla only grants on a saddled, tamed one;
+     * a horse that merely carries you around can't be routed.
+     *
+     * <p>Mounts are a Minecraft 26.3+ feature; older versions always plan on foot.
+     */
+    public static @Nullable Mount ridingMount(Player player) {
+        //? if >=26.3 {
+        /*if (player.getVehicle() instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse
+                && horse.getControllingPassenger() == player) {
+            return Mount.of(horse.getBbWidth(), horse.getBbHeight(), horse.maxUpStep(),
+                    horse.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED));
+        }
+        *///?}
+        return null;
     }
 
     /**
@@ -289,6 +310,7 @@ public final class ChunkView implements CellSource {
         // the physical starting state (paddling on to the shore is cheaper than getting out mid-water)
         boolean boatAvailable = options.boatUsable(boatAvailable(player));
         boolean ridingBoat = ridingBoat(player);
+        Mount mount = options.mountsEnabled() ? ridingMount(player) : null;
 
         // The lower bound of the descent heuristic is set by the largest drop that can actually be generated.
         // FALL_TO_WATER is generated only when there is water at the landing spot, and ultraWarm dimensions (the Nether)
@@ -317,7 +339,7 @@ public final class ChunkView implements CellSource {
         return new ChunkView(chunks, totalChunksInBounds, bounds, hotbar, hotbarEfficiency, options,
                 canPlaceBlocks, placedBlockBudget,
                 maxFallDamagePoints, fatalFallBlocks, canMlgWaterBucket, boatAvailable, ridingBoat,
-                deepFallPossible, minDescentTicksPerBlock, GameCompat.minBuildHeight(level),
+                mount, deepFallPossible, minDescentTicksPerBlock, GameCompat.minBuildHeight(level),
                 GameCompat.maxBuildHeight(level), GameCompat.minSection(level), true);
     }
 
@@ -374,7 +396,7 @@ public final class ChunkView implements CellSource {
         }
         return new ChunkView(chunks, totalChunksInBounds, bounds, copiedHotbar, hotbarEfficiency.clone(),
                 options, canPlaceBlocks, placedBlockBudget, maxFallDamagePoints, fatalFallBlocks,
-                canMlgWaterBucket, boatAvailable, ridingBoat, deepFallPossible, minDescentTicksPerBlock,
+                canMlgWaterBucket, boatAvailable, ridingBoat, mount, deepFallPossible, minDescentTicksPerBlock,
                 minBuildHeight, maxBuildHeight, minSection, true);
     }
 
@@ -393,7 +415,7 @@ public final class ChunkView implements CellSource {
         }
         return new ChunkView(chunks, totalChunksInBounds, bounds, copiedHotbar, hotbarEfficiency.clone(),
                 options, canPlaceBlocks, placedBlockBudget, maxFallDamagePoints, fatalFallBlocks,
-                canMlgWaterBucket, boatAvailable, ridingBoat, deepFallPossible, minDescentTicksPerBlock,
+                canMlgWaterBucket, boatAvailable, ridingBoat, mount, deepFallPossible, minDescentTicksPerBlock,
                 minBuildHeight, maxBuildHeight, minSection, false);
     }
 
@@ -408,7 +430,7 @@ public final class ChunkView implements CellSource {
     public ChunkView withoutDigging() {
         return new ChunkView(chunks, totalChunksInBounds, bounds, hotbar, hotbarEfficiency,
                 options.withoutDigging(), canPlaceBlocks, placedBlockBudget, maxFallDamagePoints, fatalFallBlocks,
-                canMlgWaterBucket, boatAvailable, ridingBoat, deepFallPossible, minDescentTicksPerBlock,
+                canMlgWaterBucket, boatAvailable, ridingBoat, mount, deepFallPossible, minDescentTicksPerBlock,
                 minBuildHeight, maxBuildHeight, minSection, true);
     }
 
@@ -516,6 +538,11 @@ public final class ChunkView implements CellSource {
     @Override
     public boolean boatAvailable() {
         return boatAvailable;
+    }
+
+    @Override
+    public @Nullable Mount mount() {
+        return mount;
     }
 
     @Override

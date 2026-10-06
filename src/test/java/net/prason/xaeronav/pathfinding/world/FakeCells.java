@@ -113,6 +113,7 @@ public final class FakeCells implements CellSource {
     private boolean boatAvailable;
     /** Default is false. Only tests that want to start while riding set it explicitly. */
     private boolean ridingBoat;
+    private Mount mount;
     /** BALANCED to match the config default. */
     private RouteProfile routeProfile = RouteProfile.BALANCED;
     /** true to match the config default. */
@@ -259,6 +260,12 @@ public final class FakeCells implements CellSource {
 
     public FakeCells boatAvailable(boolean value) {
         this.boatAvailable = value;
+        return this;
+    }
+
+    /** Start the search riding this animal ({@code null} = on foot). */
+    public FakeCells mount(Mount value) {
+        this.mount = value;
         return this;
     }
 
@@ -460,6 +467,11 @@ public final class FakeCells implements CellSource {
     @Override
     public boolean ridingBoat() {
         return ridingBoat;
+    }
+
+    @Override
+    public Mount mount() {
+        return mount;
     }
 
     @Override

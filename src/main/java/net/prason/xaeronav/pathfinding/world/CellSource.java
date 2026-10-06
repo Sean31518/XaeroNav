@@ -1,5 +1,7 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import org.jspecify.annotations.Nullable;
+
 import net.prason.xaeronav.pathfinding.cost.RouteProfile;
 
 /**
@@ -213,6 +215,15 @@ public interface CellSource {
      */
     default boolean ridingBoat() {
         return false;
+    }
+
+    /**
+     * The animal the player is riding and steering, or {@code null} on foot (or with mounts turned off,
+     * {@link MovementOptions#mountsEnabled()}). The search then starts mounted and plans for the animal's size, step
+     * height and speed until it dismounts.
+     */
+    default @Nullable Mount mount() {
+        return null;
     }
 
     /**

@@ -104,7 +104,7 @@ class TravelModeTest {
     /** Options with only the two travel switches varied. */
     private static MovementOptions options(boolean swimmingEnabled, boolean boatsEnabled) {
         return new MovementOptions(true, true, true, true, 96, 30, 96, 250, false, true, true, 0, false,
-                RouteProfile.BALANCED, swimmingEnabled, boatsEnabled);
+                RouteProfile.BALANCED, swimmingEnabled, boatsEnabled, true);
     }
 
     /**

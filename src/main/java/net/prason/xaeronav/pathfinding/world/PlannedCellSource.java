@@ -1,5 +1,6 @@
 package net.prason.xaeronav.pathfinding.world;
 
+import org.jspecify.annotations.Nullable;
 import java.util.List;
 
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
@@ -153,6 +154,11 @@ public final class PlannedCellSource implements CellSource {
     @Override
     public boolean ridingBoat() {
         return source.ridingBoat();
+    }
+
+    @Override
+    public @Nullable Mount mount() {
+        return source.mount();
     }
 
     @Override

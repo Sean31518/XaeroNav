@@ -50,6 +50,7 @@ public final class XaeroNavConfig {
     private final NavConfigSpec.EnumValue<RouteProfile> routeProfile;
     private final NavConfigSpec.BoolValue swimmingEnabled;
     private final NavConfigSpec.BoolValue boatsEnabled;
+    private final NavConfigSpec.BoolValue mountsEnabled;
     private final NavConfigSpec.BoolValue diggingEnabled;
     private final NavConfigSpec.BoolValue bridgingEnabled;
     private final NavConfigSpec.BoolValue jumpGapEnabled;
@@ -165,6 +166,12 @@ public final class XaeroNavConfig {
                         "Launching and stowing the boat takes time, so it only pays off on longer stretches of water (about 28 blocks or more)",
                         "If false, a boat in your inventory is ignored")
                 .define("boatsEnabled", true);
+
+        mountsEnabled = spec
+                .comment("While riding a horse, donkey, mule or camel, plan the route for the animal (Minecraft 26.3 and later)",
+                        "It needs more room than you on foot, steps up one block, does not swim and is faster; the route",
+                        "only gets off where the animal cannot go on. If false, routes are planned on foot even while riding")
+                .define("mountsEnabled", true);
 
         avoidRiskyJumps = spec
                 .comment("Avoid jumps over the bottomless void (the End's abyss) and over drops that would kill you at your",
@@ -459,6 +466,14 @@ public final class XaeroNavConfig {
         return boatsEnabled.get();
     }
 
+    public boolean mountsEnabled() {
+        return mountsEnabled.get();
+    }
+
+    public void setMountsEnabled(boolean value) {
+        mountsEnabled.set(value);
+    }
+
     public void setBoatsEnabled(boolean value) {
         boatsEnabled.set(value);
     }
@@ -656,7 +671,8 @@ public final class XaeroNavConfig {
         MovementOptions configured = new MovementOptions(diggingEnabled(), bridgingEnabled(), jumpGapEnabled(),
                 lavaBridgingEnabled(), maxBridgeRunBlocks(), maxLavaBridgeRunBlocks(), maxVoidBridgeRunBlocks(),
                 maxSubmergedTicks(), fallDamageToleranceEnabled(), avoidRiskyJumps(), blockBudgetEnabled(),
-                blockBudgetReserve(), strictLimits(), routeProfile(), swimmingEnabled(), boatsEnabled());
+                blockBudgetReserve(), strictLimits(), routeProfile(), swimmingEnabled(), boatsEnabled(),
+                mountsEnabled());
         return autoWalkRouting ? configured.forAutoWalk() : configured;
     }
 

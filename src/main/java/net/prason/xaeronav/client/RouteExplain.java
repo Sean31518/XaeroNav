@@ -225,6 +225,8 @@ final class RouteExplain {
             case SWIM -> "swim";
             case BOAT -> "boat";
             case CLIMB -> "ladder";
+            case RIDE -> "ride";
+            case DISMOUNT -> "dismount";
         };
     }
 

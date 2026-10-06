@@ -261,6 +261,43 @@ class AutoWalkSteerTest {
                 AutoWalkSteer.steer(boatRouteX(10), 0, standingAt(0.5, 0.5, -90.0F), true).stop());
     }
 
+    private static AutoWalkSteer.Player onHorse(double x, double z, float yaw) {
+        return new AutoWalkSteer.Player(x, Y, z, yaw, true, false, false, false, true);
+    }
+
+    /** A ridden route along +X that gets off at {@code offAt} and walks on. */
+    private static List<PathStep> rideThenWalk(int offAt, int length) {
+        List<PathStep> steps = new ArrayList<>();
+        steps.add(walk(0, Y, 0));
+        for (int x = 1; x < offAt; x++) {
+            steps.add(step(x, Y, 0, MovementType.RIDE, PathRisk.NONE));
+        }
+        steps.add(step(offAt - 1, Y, 0, MovementType.DISMOUNT, PathRisk.NONE));
+        for (int x = offAt; x < length; x++) {
+            steps.add(walk(x, Y, 0));
+        }
+        return steps;
+    }
+
+    @Test
+    void ridesAlongWithoutJumpingOrSprinting() {
+        AutoWalkSteer.Command command = AutoWalkSteer.steer(rideThenWalk(20, 30), 3, onHorse(3.5, 0.5, -90.0F), true);
+
+        assertEquals(AutoWalkSteer.Stop.NONE, command.stop());
+        assertTrue(command.forward());
+        assertFalse(command.jump(), "the horse steps up on its own; jump would charge a leap");
+        assertFalse(command.sprint());
+        assertEquals(-90.0F, command.yaw(), 1.0e-3F, "the horse follows the rider's view");
+    }
+
+    @Test
+    void stopsWhereTheRouteGetsOff() {
+        List<PathStep> steps = rideThenWalk(10, 20);
+
+        assertEquals(AutoWalkSteer.Stop.NONE, AutoWalkSteer.steer(steps, 2, onHorse(2.5, 0.5, -90.0F), true).stop());
+        assertEquals(AutoWalkSteer.Stop.DISMOUNT, AutoWalkSteer.steer(steps, 7, onHorse(7.5, 0.5, -90.0F), true).stop());
+    }
+
     @Test
     void wrapsYawTheShortWayRound() {
         assertEquals(10.0F, AutoWalkSteer.turnTowards(170.0F, -180.0F) - 170.0F, 1.0e-3F);

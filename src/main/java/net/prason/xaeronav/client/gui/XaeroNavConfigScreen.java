@@ -208,6 +208,11 @@ public final class XaeroNavConfigScreen extends OptionsSubScreen {
                         cfg.swimmingEnabled(), cfg::setSwimmingEnabled));
                 addBig.accept(boolOption("gui.xaeronav.config.boats_enabled",
                         cfg.boatsEnabled(), cfg::setBoatsEnabled));
+                if (AutoWalk.SUPPORTED) {
+                    // Mounts are read from the game on 26.3+ only (ChunkView#ridingMount)
+                    addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.mounts_enabled",
+                            "gui.xaeronav.config.mounts_enabled.tooltip", cfg.mountsEnabled(), cfg::setMountsEnabled));
+                }
                 addBig.accept(boolOption("gui.xaeronav.config.jump_gap_enabled",
                         cfg.jumpGapEnabled(), cfg::setJumpGapEnabled));
                 addBig.accept(boolOptionWithTooltip("gui.xaeronav.config.fall_damage_tolerance_enabled",

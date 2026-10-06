@@ -44,7 +44,11 @@ enum MoveKind {
     FALL_DAMAGE(MovementType.FALL_DAMAGE),
     /** A fall beyond the safe height, made harmless by placing a water bucket just before landing. */
     FALL_MLG(MovementType.FALL_MLG),
-    JUMP(MovementType.JUMP);
+    JUMP(MovementType.JUMP),
+    RIDE(MovementType.RIDE),
+    RIDE_ASCEND(MovementType.RIDE),
+    RIDE_DESCEND(MovementType.RIDE),
+    DISMOUNT(MovementType.DISMOUNT);
 
     private final MovementType movementType;
 

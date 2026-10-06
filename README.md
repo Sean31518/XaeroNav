@@ -236,6 +236,7 @@ With a destination set, the auto-walk key steers along the route and holds forwa
 (walking, stepping up, ladders). While it is on, the route is planned for that: it avoids swimming, placing blocks
 (bridges, pillars), gap jumps and falls that hurt, and is planned again when you switch auto-walk on or off.
 In a boat it steers the boat across the water and stops at the shore, where you get out and pick the boat up.
+On a horse, donkey, mule or camel it steers the animal and stops where the route continues on foot.
 It stops and tells you why when:
 
 - the next few steps need you: digging, launching a boat, or flying
@@ -304,6 +305,7 @@ Other markings:
 | `jumpGapEnabled` | `true` | Allow jumping gaps up to 3 blocks wide |
 | `swimmingEnabled` | `true` | Allow routes to swim or wade. When `false`, routes go around water (or take a boat); you can still swim out of water you are already in, and a destination in water is still reached |
 | `boatsEnabled` | `true` | Allow crossing water by boat when you carry one. When `false`, a boat in your inventory is ignored |
+| `mountsEnabled` | `true` | Minecraft 26.3+. While riding a horse, donkey, mule or camel, plan the route for the animal: it needs wider gaps and more headroom, steps up one block, stays out of water and is faster. The route only gets off (and continues on foot) where the animal can't go on |
 | `avoidRiskyJumps` | `true` | Avoid jumps over the void or a fatal drop (opened only when no way around exists at all) |
 | `blockBudgetEnabled` | `true` | Cap the total blocks a route may place at how many you carry (lifted when no route fits, with a shortage warning; never applied in creative) |
 | `blockBudgetReserve` | `0` | Blocks held back from that budget |
